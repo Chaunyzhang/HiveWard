@@ -1861,6 +1861,71 @@ describe("BlueprintWorker", () => {
     });
   });
 
+  it("fails an agent-driven manager when it completes after a failure-like slot output", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const builder = {
+      ...createAgentNode("builder", "Builder"),
+      parentId: "builder-slot"
+    };
+    const blueprint = createBlueprint(
+      [
+        {
+          id: "manager",
+          type: "manager",
+          runtimeId: "openclaw",
+          position: { x: 80, y: 120 },
+          config: {
+            label: "Manager",
+            openclawAgentId: "main",
+            agentName: "manager",
+            portCount: 1,
+            maxHandoffs: 3,
+            tools: []
+          }
+        },
+        {
+          id: "builder-slot",
+          type: "manager_slot",
+          position: { x: 420, y: 120 },
+          config: {
+            label: "Builder Slot",
+            managerNodeId: "manager",
+            slot: 1
+          }
+        },
+        builder
+      ],
+      [
+        { id: "manager-to-slot", source: "manager", target: "builder-slot", sourceHandle: "manager-out-1", targetHandle: "manager-slot-in", condition: "success" },
+        { id: "slot-to-manager", source: "builder-slot", target: "manager", sourceHandle: "manager-slot-out", targetHandle: "manager-in-1", condition: "success" },
+        { id: "slot-to-builder", source: "builder-slot", target: "builder", sourceHandle: "manager-slot-inner-out", condition: "success" },
+        { id: "builder-to-slot", source: "builder", target: "builder-slot", targetHandle: "manager-slot-inner-in", condition: "success" }
+      ]
+    );
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-manager-1"),
+      createStartedAgentTask("task-builder"),
+      createStartedAgentTask("task-manager-2")
+    ], [
+      createCompletedAgentTask("task-manager-1", "succeeded", JSON.stringify({ status: "continue", nextSlot: 1, reason: "build artifact" })),
+      createCompletedAgentTask("task-builder", "succeeded", JSON.stringify({ status: "failed", generatedHtmlFilePath: null, reason: "read-only sandbox" })),
+      createCompletedAgentTask("task-manager-2", "succeeded", JSON.stringify({ status: "complete", reason: "No artifact was generated." }))
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const view = await waitForRunTerminal(store, run.id);
+
+    expect(view?.run.status).toBe("failed");
+    const managerRun = view?.nodeRuns.find((nodeRun) => nodeRun.nodeId === "manager");
+    expect(managerRun?.status).toBe("failed");
+    expect(managerRun?.error).toBe("No artifact was generated.");
+    expect(view?.nodeRuns.find((nodeRun) => nodeRun.nodeId === "builder-slot")?.output).toEqual(expect.stringContaining("\"status\":\"failed\""));
+  });
+
   it("lets the active manager chaos blueprint choose a scrambled news-to-html route", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
     const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));

@@ -3394,7 +3394,7 @@ function createNodeTraceIssue(
     depth,
     node,
     nodeRun,
-    issueStatus: toIssueStatus(nodeRun.status),
+    issueStatus: toIssueStatus(nodeRun.status, nodeRun.output),
     statusLabel: statusLabelForNodeRun(nodeRun.status, t),
     outputPreview: summarizeOutput(nodeRun.output, t),
     events: activeRun.events.filter((event) => event.nodeRunId === nodeRun.id)
@@ -3432,8 +3432,9 @@ function createPendingSlotBoundaryIssue(node: BlueprintNode, index: number, kind
   };
 }
 
-function toIssueStatus(status?: BlueprintNodeRunStatus): TraceIssueStatus {
+function toIssueStatus(status?: BlueprintNodeRunStatus, output?: unknown): TraceIssueStatus {
   if (status === "queued" || status === "running" || status === "waiting_approval") return "in_progress";
+  if (isFailureLikeOutput(output)) return "failed";
   if (status === "succeeded" || status === "skipped") return "completed";
   if (status === "failed" || status === "cancelled") return "failed";
   return "pending";
@@ -3441,6 +3442,7 @@ function toIssueStatus(status?: BlueprintNodeRunStatus): TraceIssueStatus {
 
 function toSlotOutputIssueStatus(nodeRun: BlueprintNodeRun): TraceIssueStatus {
   if (nodeRun.status === "failed" || nodeRun.status === "cancelled") return "failed";
+  if (isFailureLikeOutput(nodeRun.output)) return "failed";
   if (nodeRun.output !== undefined || nodeRun.status === "succeeded" || nodeRun.status === "skipped") return "completed";
   if (nodeRun.status === "queued" || nodeRun.status === "running" || nodeRun.status === "waiting_approval") return "in_progress";
   return "pending";
@@ -3481,7 +3483,9 @@ function summarizeOutput(output: unknown, t: Messages): string {
     .filter(Boolean)
     .slice(0, 2);
   if (!previewLines.length) return t.trace.noOutput;
-  return previewLines.map((line) => (line.length > 120 ? `${line.slice(0, 117)}...` : line)).join("\n");
+  return previewLines
+    .map((line) => (line.length > 120 ? `${line.slice(0, 117)}...` : line).replaceAll("`", ""))
+    .join("\n");
 }
 
 function toTracePreviewLine(line: string): string {
@@ -3803,18 +3807,122 @@ function companyMonogram(company: Pick<CompanyOverview, "logoLabel" | "name">): 
 }
 
 function formatOutput(output: unknown): string {
+  let parsedOutput: unknown = output;
+  let formatted: string;
+
   if (typeof output === "string") {
     const trimmed = output.trim();
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
       try {
-        return JSON.stringify(JSON.parse(trimmed), null, 2);
+        parsedOutput = JSON.parse(trimmed) as unknown;
+        formatted = JSON.stringify(parsedOutput, null, 2);
+        return appendReadableLocalPaths(formatted, parsedOutput);
       } catch {
-        return output;
+        formatted = output;
+        return appendReadableLocalPaths(formatted, output);
       }
     }
-    return output;
+    formatted = output;
+    return appendReadableLocalPaths(formatted, output);
   }
-  return JSON.stringify(output, null, 2);
+  formatted = JSON.stringify(output, null, 2);
+  return appendReadableLocalPaths(formatted, parsedOutput);
+}
+
+function appendReadableLocalPaths(formatted: string, source: unknown): string {
+  const paths = collectLocalFilePaths(source);
+  if (paths.length === 0) return formatted;
+
+  const pathLines = paths.flatMap((pathValue) => [
+    `- Local path: \`${pathValue}\``,
+    `  File URL: \`${localPathToFileUrl(pathValue)}\``
+  ]);
+  return [
+    "Paths mentioned by output:",
+    ...pathLines,
+    "",
+    "```json",
+    formatted,
+    "```"
+  ].join("\n");
+}
+
+function collectLocalFilePaths(value: unknown): string[] {
+  const paths = new Set<string>();
+  collectLocalFilePathsFromValue(value, paths, 0);
+  return [...paths].slice(0, 8);
+}
+
+function collectLocalFilePathsFromValue(value: unknown, paths: Set<string>, depth: number): void {
+  if (depth > 5 || paths.size >= 8) return;
+  if (typeof value === "string") {
+    const localPath = normalizeLocalFilePath(value);
+    if (localPath) paths.add(localPath);
+    const parsed = readOutputValue(value);
+    if (parsed !== undefined && parsed !== value) {
+      collectLocalFilePathsFromValue(parsed, paths, depth + 1);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectLocalFilePathsFromValue(item, paths, depth + 1);
+    }
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const item of Object.values(value)) {
+    collectLocalFilePathsFromValue(item, paths, depth + 1);
+  }
+}
+
+function normalizeLocalFilePath(value: string): string | undefined {
+  const trimmed = value.trim().replace(/^file:\/\/\//i, "").replaceAll("/", "\\");
+  if (!/^[a-z]:\\/i.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function localPathToFileUrl(pathValue: string): string {
+  return `file:///${pathValue.replaceAll("\\", "/")}`;
+}
+
+function isFailureLikeOutput(output: unknown): boolean {
+  const record = readOutputRecord(output);
+  const status = typeof record?.status === "string" ? record.status.toLowerCase() : undefined;
+  return Boolean(status && ["fail", "failed", "needs_revision", "needs-revision", "retry", "rework", "blocked", "reject", "rejected"].includes(status));
+}
+
+function readOutputRecord(output: unknown): Record<string, unknown> | undefined {
+  const value = readOutputValue(output);
+  return isRecord(value) ? value : undefined;
+}
+
+function readOutputValue(output: unknown): unknown {
+  if (isRecord(output) || Array.isArray(output)) return output;
+  if (typeof output !== "string") return undefined;
+
+  const trimmed = output.trim();
+  if (!trimmed) return undefined;
+
+  const candidates = [trimmed];
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate) as unknown;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function addDays(value: Date, days: number): Date {

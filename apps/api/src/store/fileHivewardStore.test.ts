@@ -114,6 +114,43 @@ describe("FileHivewardStore blueprint workspaces", () => {
     });
   });
 
+  it("reflects workspace-write node permissions in the local bundle manifest", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
+    const store = new FileHivewardStore(join(dir, "hiveward-store.json"));
+    await store.init();
+    const now = new Date().toISOString();
+    const blueprint = createBlankBlueprint({
+      id: "artifact-blueprint",
+      companyId: "company-hiveward-studio",
+      now,
+      name: "Artifact Blueprint"
+    });
+
+    await store.saveBlueprint({
+      ...blueprint,
+      nodes: [
+        {
+          id: "writer",
+          type: "agent",
+          runtimeId: "codex",
+          position: { x: 0, y: 0 },
+          config: {
+            label: "Writer",
+            agentName: "writer",
+            prompt: "Write an HTML artifact.",
+            permissionProfile: "workspace_write",
+            tools: []
+          }
+        }
+      ]
+    });
+
+    const manifest = JSON.parse(readFileSync(join(dir, "blueprint-workspaces", blueprint.id, "manifest.json"), "utf8")) as {
+      permissions?: string[];
+    };
+    expect(manifest.permissions).toEqual(["read_only", "workspace_write"]);
+  });
+
   it("creates bundle skeletons for imported blueprints without changing JSON-only package behavior", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
     const store = new FileHivewardStore(join(dir, "hiveward-store.json"));

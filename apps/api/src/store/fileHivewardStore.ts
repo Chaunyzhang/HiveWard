@@ -2002,6 +2002,9 @@ function buildBlueprintEntryMarkdown(blueprint: BlueprintDefinition): string {
 
 function buildBlueprintWorkspaceManifest(blueprint: BlueprintDefinition): Record<string, unknown> {
   const description = blueprint.description?.trim() || `Use when running the ${blueprint.name || blueprint.id} blueprint.`;
+  const permissions = blueprintRequiresWorkspaceWrite(blueprint)
+    ? ["read_only", "workspace_write"]
+    : ["read_only"];
   return {
     schema: "hiveward.blueprint-bundle/v1",
     kind: "blueprint_exposure",
@@ -2016,7 +2019,7 @@ function buildBlueprintWorkspaceManifest(blueprint: BlueprintDefinition): Record
     inputs: [],
     outputs: [],
     runModes: ["draft", "approval_required"],
-    permissions: ["read_only"],
+    permissions,
     sideEffects: [],
     requiredResources: {
       skills: [],
@@ -2029,6 +2032,13 @@ function buildBlueprintWorkspaceManifest(blueprint: BlueprintDefinition): Record
     createdAt: blueprint.createdAt,
     updatedAt: blueprint.updatedAt
   };
+}
+
+function blueprintRequiresWorkspaceWrite(blueprint: BlueprintDefinition): boolean {
+  return blueprint.nodes.some((node) => {
+    const config = node.config as { permissionProfile?: unknown };
+    return config.permissionProfile === "workspace_write";
+  });
 }
 
 function mergeBlueprintWorkspaceManifest(

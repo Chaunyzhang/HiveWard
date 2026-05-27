@@ -687,6 +687,12 @@ export class BlueprintWorker {
         }
         managerDecision = managerDecisionResult.decision;
         if (managerDecision.status === "complete" || managerDecision.nextSlot === undefined) {
+          const failedTrace = findFailureLikeManagerTraceItem(trace);
+          if (failedTrace) {
+            const error = managerDecision.reason ?? failedTrace.error ?? `${failedTrace.nodeLabel} returned a failure output.`;
+            await this.failNode(nodeRunWithInput, error);
+            return true;
+          }
           await this.completeNode(nodeRunWithInput, {
             status: "completed",
             reason: managerDecision.reason ?? "manager_completed",
@@ -1316,6 +1322,12 @@ export class BlueprintWorker {
 
         managerDecision = managerDecisionResult.decision;
         if (managerDecision.status === "complete" || managerDecision.nextSlot === undefined) {
+          const failedTrace = findFailureLikeManagerTraceItem(trace);
+          if (failedTrace) {
+            const error = managerDecision.reason ?? failedTrace.error ?? `${failedTrace.nodeLabel} returned a failure output.`;
+            await this.failNode(nodeRunWithInput, error);
+            return this.syntheticAgentResult(nodeRun.id, "failed", undefined, error);
+          }
           const output = {
             status: "completed",
             reason: managerDecision.reason ?? "manager_completed",
@@ -2640,6 +2652,20 @@ function isManagerCompletionEnvelope(output: unknown): boolean {
   if (!record) return false;
   const status = readString(record.status)?.toLowerCase();
   return status === "completed" && Array.isArray(record.trace);
+}
+
+function findFailureLikeManagerTraceItem(trace: ManagerTraceItem[]): ManagerTraceItem | undefined {
+  const latestByNode = new Map<string, ManagerTraceItem>();
+  for (const item of trace) {
+    latestByNode.set(item.nodeId, item);
+  }
+  return [...latestByNode.values()].find((item) => item.status !== "succeeded" || isFailureLikeOutput(item.output));
+}
+
+function isFailureLikeOutput(output: unknown): boolean {
+  const record = readOutputRecord(output);
+  const status = readString(record?.status)?.toLowerCase();
+  return Boolean(status && ["fail", "failed", "needs_revision", "needs-revision", "retry", "rework", "blocked", "reject", "rejected"].includes(status));
 }
 
 function isHarnessSummaryMode(config: SummaryNodeConfig): boolean {
