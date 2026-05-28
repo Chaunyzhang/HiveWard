@@ -30,6 +30,7 @@ export interface AgentSdkChatStreamInput {
   idempotencyKey: string;
   timeoutMs?: number;
   skillIds?: HarnessSkillId[];
+  profileId?: string;
 }
 
 export interface AgentSdkTaskRecord {

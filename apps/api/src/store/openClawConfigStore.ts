@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -673,10 +673,37 @@ async function resolveOpenClawCliEntry(): Promise<string> {
       timeout: 15_000
     });
     const root = stdout.trim();
-    const candidate = path.join(root, "openclaw", "openclaw.mjs");
-    await access(candidate);
-    return candidate;
+    const candidate = await resolveOpenClawCliEntryInNpmRoot(root);
+    if (candidate) return candidate;
   } catch {
     throw new Error("OpenClaw CLI entry could not be resolved.");
   }
+  throw new Error("OpenClaw CLI entry could not be resolved.");
+}
+
+async function resolveOpenClawCliEntryInNpmRoot(root: string): Promise<string | undefined> {
+  const standardCandidate = path.join(root, "openclaw", "openclaw.mjs");
+  try {
+    await access(standardCandidate);
+    return standardCandidate;
+  } catch {
+    // Some OpenClaw update flows leave the runnable package in a staged
+    // .openclaw-* directory while the visible openclaw folder lacks openclaw.mjs.
+  }
+
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    for (const entry of entries.filter((item) => item.isDirectory() && item.name.startsWith(".openclaw-")).sort((left, right) => left.name.localeCompare(right.name))) {
+      const stagedCandidate = path.join(root, entry.name, "openclaw.mjs");
+      try {
+        await access(stagedCandidate);
+        return stagedCandidate;
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }

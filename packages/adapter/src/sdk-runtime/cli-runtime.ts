@@ -78,8 +78,9 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
     try {
       const prompt = buildSdkChatPrompt(input.message, input.attachments);
       const streamParser = createCliStreamParser(this.harnessId);
+      const profileId = this.harnessId === "hermes" ? normalizeHermesProfileId(input.profileId) : undefined;
       const result = await this.runCliCommand({
-        command: this.config.command,
+        command: profileId ? profileId : this.config.command,
         args: buildCliChatArgs(this.harnessId, {
           prompt,
           workingDirectory: this.options.workspaceRoot,
@@ -227,8 +228,9 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
 
       const permissionProfile = normalizePermissionProfile(input.permissionProfile);
       const prompt = buildPromptEnvelope(input);
+      const profileId = this.harnessId === "hermes" ? normalizeHermesProfileId(input.profileId) : undefined;
       const result = await this.runCliCommand({
-        command: this.config.command,
+        command: profileId ? profileId : this.config.command,
         args: buildCliTaskArgs(this.harnessId, {
           prompt,
           workingDirectory,
@@ -469,6 +471,12 @@ function modelArgs(flag: string, modelId: string | undefined): string[] {
 
 function skillArgs(skillIds: string[] | undefined): string[] {
   return (skillIds ?? []).flatMap((skillId) => ["-s", skillId]);
+}
+
+function normalizeHermesProfileId(profileId: string | undefined): string | undefined {
+  const trimmed = profileId?.trim();
+  if (!trimmed || trimmed === "default") return undefined;
+  return /^[A-Za-z0-9._-]+$/.test(trimmed) ? trimmed : undefined;
 }
 
 function runCliCommandWithSpawn(input: CliCommandInput): Promise<CliCommandResult> {

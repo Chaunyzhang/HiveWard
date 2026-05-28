@@ -1020,7 +1020,7 @@ describe("agent SDK runtime", () => {
         sessionKey: "hermes-session-existing",
         message: "Hello",
         attachments: [],
-        modelId: "nous/hermes-4",
+        modelId: "hermes-env-default",
         permissionMode: "full_access",
         idempotencyKey: "chat-hermes-1",
         skillIds: ["hiveward-leader"]
@@ -1037,7 +1037,7 @@ describe("agent SDK runtime", () => {
       "hermes-session-existing",
       "chat",
       "--model",
-      "nous/hermes-4",
+      "hermes-env-default",
       "--yolo",
       "-s",
       "hiveward-leader",
@@ -1055,6 +1055,47 @@ describe("agent SDK runtime", () => {
         output: "hello from hermes"
       })
     ]);
+  });
+
+  it("runs Hermes tasks through the selected profile alias", async () => {
+    const workspace = createWorkspace();
+    const calls: CliCommandInput[] = [];
+    const runtime = new CliAgentSdkRuntime(
+      new AgentSdkTaskRegistry(2),
+      { defaultTimeoutMs: 60_000, workspaceRoot: workspace },
+      "hermes",
+      fakeCliRunner(calls, { stdout: "{\"ok\":true}\n" })
+    );
+
+    const started = await runtime.startTask(
+      createStartInput({
+        source: "hermes",
+        workingDirectory: workspace,
+        modelId: "inherit",
+        profileId: "hermes-profile-alpha",
+        permissionProfile: "workspace_write",
+        skillIds: ["hiveward-leader"],
+        outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }
+      })
+    );
+    const result = await runtime.waitForTask({
+      nodeRunId: "node-run-1",
+      taskId: started.taskId,
+      runId: started.runId,
+      sessionKey: started.sessionKey,
+      source: "hermes"
+    });
+
+    expect(calls[0]).toMatchObject({
+      command: "hermes-profile-alpha",
+      cwd: workspace
+    });
+    expect(calls[0]?.args.slice(0, 4)).toEqual(["chat", "--yolo", "-s", "hiveward-leader"]);
+    expect(calls[0]?.args.at(-2)).toBe("-q");
+    expect(calls[0]?.args.at(-1)).toContain("You are executing one Hiveward blueprint node.");
+    expect(result.status).toBe("succeeded");
+    expect(result.source).toBe("hermes");
+    expect(result.output).toBe("{\"ok\":true}");
   });
 });
 

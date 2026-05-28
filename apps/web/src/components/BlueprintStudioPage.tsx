@@ -2307,6 +2307,7 @@ function NodeConfigForm({
     const isSdkProvider = runtimeId === "claude" || runtimeId === "codex";
     const modelSelectValue = resolveBlueprintModelSelectValue(config.modelId);
     const runtimeModelOptions = buildBlueprintRuntimeModelOptions(runtimeId, models, harnessStatuses);
+    const profileOptions = buildHermesProfileOptions(runtimeId, harnessStatuses, t);
     const agentOptions = configuredAgents ?? [];
     const approvalEnabled = config.approval?.enabled === true;
     const sendEnabled = runtimeId === "openclaw" && config.send?.enabled === true;
@@ -2365,6 +2366,17 @@ function NodeConfigForm({
               />
             )}
           </label>
+          {runtimeId === "hermes" && (
+            <label>
+              <span>{t.fields.profile}</span>
+              <BlueprintSelect
+                value={config.profileId ?? ""}
+                options={profileOptions}
+                ariaLabel={t.fields.profile}
+                onChange={(value) => onPatchConfig({ profileId: value || undefined })}
+              />
+            </label>
+          )}
           <label className="field-span-full">
             <span>{t.fields.systemPrompt}</span>
             <textarea
@@ -2490,6 +2502,7 @@ function NodeConfigForm({
     const isSdkProvider = runtimeId === "claude" || runtimeId === "codex";
     const modelSelectValue = resolveBlueprintModelSelectValue(config.modelId);
     const runtimeModelOptions = buildBlueprintRuntimeModelOptions(runtimeId, models, harnessStatuses);
+    const profileOptions = buildHermesProfileOptions(runtimeId, harnessStatuses, t);
     const agentOptions = configuredAgents ?? [];
     const runtimeOptions: BlueprintSelectOption[] = buildAgentHarnessOptions();
     const modelOptions: BlueprintSelectOption[] = buildBlueprintModelSelectOptions({
@@ -2530,6 +2543,17 @@ function NodeConfigForm({
             />
           )}
         </label>
+        {runtimeId === "hermes" && (
+          <label>
+            <span>{t.fields.profile}</span>
+            <BlueprintSelect
+              value={config.profileId ?? ""}
+              options={profileOptions}
+              ariaLabel={t.fields.profile}
+              onChange={(value) => onPatchConfig({ profileId: value || undefined })}
+            />
+          </label>
+        )}
         <AgentSkillField
           className="field-span-full"
           selectedSkills={config.skillIds ?? []}
@@ -2626,6 +2650,7 @@ function NodeConfigForm({
     const runtimeId = config.runtimeId ?? "openclaw";
     const modelSelectValue = resolveBlueprintModelSelectValue(config.modelId);
     const runtimeModelOptions = buildBlueprintRuntimeModelOptions(runtimeId, models, harnessStatuses);
+    const profileOptions = buildHermesProfileOptions(runtimeId, harnessStatuses, t);
     const modeOptions: BlueprintSelectOption[] = [
       { value: "structured_merge", label: t.options.structuredMerge },
       { value: "harness_summary", label: t.options.harnessSummary }
@@ -2646,7 +2671,7 @@ function NodeConfigForm({
       );
     };
     const switchRuntime = (nextRuntimeId: AgentRuntimeId) => {
-      onPatchConfig({ runtimeId: nextRuntimeId, modelId: undefined });
+      onPatchConfig({ runtimeId: nextRuntimeId, modelId: undefined, profileId: nextRuntimeId === "hermes" ? config.profileId : undefined });
     };
     return (
       <div className="config-form node-modal-form">
@@ -2687,6 +2712,17 @@ function NodeConfigForm({
                 />
               )}
             </label>
+            {runtimeId === "hermes" && (
+              <label>
+                <span>{t.fields.profile}</span>
+                <BlueprintSelect
+                  value={config.profileId ?? ""}
+                  options={profileOptions}
+                  ariaLabel={t.fields.profile}
+                  onChange={(value) => onPatchConfig({ profileId: value || undefined })}
+                />
+              </label>
+            )}
             <label className="field-span-full">
               <span>{t.fields.prompt}</span>
               <textarea rows={8} value={config.prompt ?? ""} onChange={(event) => onPatchConfig({ prompt: event.target.value || undefined })} />
@@ -2877,16 +2913,35 @@ function buildRuntimeConfigPatch(
   if (runtimeId === "openclaw") {
     return {
       ...patch,
-      openclawAgentId: config.openclawAgentId ?? agentOptions[0]?.id ?? "main"
+      openclawAgentId: config.openclawAgentId ?? agentOptions[0]?.id ?? "main",
+      profileId: undefined
     };
   }
   return {
     ...patch,
     openclawAgentId: undefined,
     send: undefined,
+    profileId: runtimeId === "hermes" ? config.profileId : undefined,
     permissionProfile: resolveRuntimePermissionProfile(runtimeId, harnessPermissionModes, config.permissionProfile ?? "read_only"),
     timeoutMs: config.timeoutMs ?? 600000
   };
+}
+
+function buildHermesProfileOptions(
+  runtimeId: AgentRuntimeId,
+  harnessStatuses: HarnessStatus[] | undefined,
+  t: Messages
+): BlueprintSelectOption[] {
+  if (runtimeId !== "hermes") return [];
+  const profiles = harnessStatuses?.find((status) => status.id === "hermes")?.profiles ?? [];
+  return [
+    { value: "", label: t.common.defaultOption },
+    ...profiles.map((profile) => ({
+      value: profile.alias ?? profile.id,
+      label: profile.alias ? `${profile.label} (${profile.alias})` : profile.label,
+      badgeLabel: profile.isDefault ? t.common.defaultOption : undefined
+    }))
+  ];
 }
 
 function buildBlueprintRuntimeModelOptions(
