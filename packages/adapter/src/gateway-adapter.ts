@@ -669,7 +669,7 @@ function formatUpstreamItem(value: unknown, index: number): string[] {
   for (const key of ["nodeId", "nodeRunId", "status"]) {
     if (value[key] !== undefined) lines.push(`- ${key}: ${formatInlineValue(value[key])}`);
   }
-  const ref = formatRuntimeRef(value.runtimeRef ?? value.openclawRef);
+  const ref = formatRuntimeRef(value.runtimeRef);
   if (ref) lines.push(`- runtimeRef: ${ref}`);
   lines.push("输出:");
   lines.push(formatOutputBlock(value.output));

@@ -347,7 +347,6 @@ export interface BlueprintRun {
   totalOutputTokens: number;
   totalCostUsd: number;
   runtimeRefs: RuntimeObjectRef[];
-  openclawRefs?: RuntimeObjectRef[];
 }
 
 export interface BlueprintNodeRun {
@@ -367,7 +366,6 @@ export interface BlueprintNodeRun {
   error?: string;
   usage?: RuntimeUsageFact;
   runtimeRef?: RuntimeObjectRef;
-  openclawRef?: RuntimeObjectRef;
 }
 
 export interface BlueprintNodeEvent {
@@ -388,7 +386,6 @@ export interface BlueprintNodeEvent {
   message: string;
   createdAt: string;
   runtimeRef?: RuntimeObjectRef;
-  openclawRef?: RuntimeObjectRef;
 }
 
 export interface BlueprintRunView {
@@ -453,7 +450,6 @@ export interface FinalRunResultCandidate {
   output: unknown;
   endedAt?: string;
   runtimeRef?: RuntimeObjectRef;
-  openclawRef?: RuntimeObjectRef;
 }
 
 export interface FinalRunNodeContext {
@@ -469,7 +465,6 @@ export interface FinalRunNodeContext {
   error?: string;
   endedAt?: string;
   runtimeRef?: RuntimeObjectRef;
-  openclawRef?: RuntimeObjectRef;
 }
 
 export interface FinalRunResult {
@@ -659,16 +654,16 @@ function toFinalRunNodeContext(nodeRun: BlueprintNodeRun): FinalRunNodeContext {
   };
 }
 
-export function readBlueprintNodeRunRuntimeRef(nodeRun: Pick<BlueprintNodeRun, "runtimeRef" | "openclawRef">): RuntimeObjectRef | undefined {
-  return nodeRun.runtimeRef ?? nodeRun.openclawRef;
+export function readBlueprintNodeRunRuntimeRef(nodeRun: Pick<BlueprintNodeRun, "runtimeRef">): RuntimeObjectRef | undefined {
+  return nodeRun.runtimeRef;
 }
 
-export function readBlueprintNodeEventRuntimeRef(event: Pick<BlueprintNodeEvent, "runtimeRef" | "openclawRef">): RuntimeObjectRef | undefined {
-  return event.runtimeRef ?? event.openclawRef;
+export function readBlueprintNodeEventRuntimeRef(event: Pick<BlueprintNodeEvent, "runtimeRef">): RuntimeObjectRef | undefined {
+  return event.runtimeRef;
 }
 
-export function readBlueprintRunRuntimeRefs(run: Pick<BlueprintRun, "runtimeRefs" | "openclawRefs">): RuntimeObjectRef[] {
-  return run.runtimeRefs ?? run.openclawRefs ?? [];
+export function readBlueprintRunRuntimeRefs(run: Pick<BlueprintRun, "runtimeRefs">): RuntimeObjectRef[] {
+  return run.runtimeRefs;
 }
 
 function resolveFinalRunResultState(
