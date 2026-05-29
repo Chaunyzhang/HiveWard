@@ -52,6 +52,60 @@ describe("FileHivewardStore blueprint node sanitization", () => {
       }
     ]);
   });
+
+  it("normalizes legacy OpenClaw refs into runtime refs when reading run archives", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
+    const storePath = join(dir, "hiveward-store.json");
+    const store = new FileHivewardStore(storePath);
+    await store.init();
+
+    const now = new Date().toISOString();
+    const blueprint = await store.saveBlueprint(createDirtyBlueprint(now));
+    const run = await store.createBlueprintRun(blueprint, "tester");
+    const legacyRuntimeRef = {
+      source: "codex",
+      sourceId: "codex-task-1",
+      sourceUpdatedAt: now,
+      taskId: "codex-task-1",
+      runId: "codex-run-1",
+      sessionKey: "codex-session-1"
+    };
+    const archivePath = join(dir, "runs", `${run.id}.json`);
+    const archive = JSON.parse(readFileSync(archivePath, "utf8")) as {
+      run: Record<string, unknown>;
+      nodeRuns: Array<Record<string, unknown>>;
+      events: Array<Record<string, unknown>>;
+    };
+    delete archive.run.runtimeRefs;
+    delete archive.run.openclawRefs;
+    archive.nodeRuns = [
+      {
+        ...createNodeRun(run.id, blueprint.id, "draft", "agent", "succeeded"),
+        openclawRef: legacyRuntimeRef
+      }
+    ];
+    archive.events = [
+      {
+        id: "event-draft",
+        blueprintRunId: run.id,
+        nodeRunId: "node-run-draft",
+        type: "node.run.completed",
+        message: "Draft completed.",
+        createdAt: now,
+        openclawRef: legacyRuntimeRef
+      }
+    ];
+    writeFileSync(archivePath, JSON.stringify(archive, null, 2));
+
+    const view = await store.getRunView(run.id);
+
+    expect(view?.run.runtimeRefs).toEqual([expect.objectContaining({ source: "codex", runId: "codex-run-1" })]);
+    expect(view?.run).not.toHaveProperty("openclawRefs");
+    expect(view?.nodeRuns[0]?.runtimeRef).toMatchObject({ source: "codex", sessionKey: "codex-session-1" });
+    expect(view?.nodeRuns[0]).not.toHaveProperty("openclawRef");
+    expect(view?.events[0]?.runtimeRef).toMatchObject({ source: "codex", taskId: "codex-task-1" });
+    expect(view?.events[0]).not.toHaveProperty("openclawRef");
+  });
 });
 
 describe("FileHivewardStore blueprint workspaces", () => {

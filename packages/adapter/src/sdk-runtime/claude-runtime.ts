@@ -9,7 +9,7 @@ import {
 import type {
   AgentTaskResult,
   ChatStreamEvent,
-  OpenClawUsageFact,
+  RuntimeUsageFact,
   StartAgentTaskInput,
   StartedAgentTaskResult,
   WaitForAgentTaskInput
@@ -411,7 +411,7 @@ function normalizeClaudeModel(modelId: string | undefined): string | undefined {
   return !trimmed || trimmed === "inherit" ? undefined : trimmed;
 }
 
-function mapClaudeUsage(input: { modelId?: string }, result: SDKResultMessage): OpenClawUsageFact {
+function mapClaudeUsage(input: { modelId?: string }, result: SDKResultMessage): RuntimeUsageFact {
   const modelUsageEntries = Object.entries(result.modelUsage);
   const inputTokens = modelUsageEntries.reduce(
     (sum, [, usage]) => sum + usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens,

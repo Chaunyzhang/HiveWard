@@ -259,7 +259,7 @@ describe("gateway adapter transcript extraction", () => {
             nodeRunId: "node-run-1",
             status: "succeeded",
             output: "# Brief\n\nFull upstream content.",
-            openclawRef: {
+            runtimeRef: {
               source: "openclaw",
               sourceId: "task-1",
               sourceUpdatedAt: "2026-05-21T00:00:00.000Z",

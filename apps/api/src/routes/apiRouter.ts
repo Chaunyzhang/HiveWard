@@ -43,7 +43,7 @@ import type {
   OpenClawConfiguredAgent,
   OpenClawConfiguredChannel,
   OpenClawConfigState,
-  OpenClawObjectSource,
+  RuntimeObjectSource,
   OpenClawVersionInfo,
   ManagerNodeConfig,
   SummaryNodeConfig,
@@ -1061,7 +1061,7 @@ export function createApiRouter({ store, openClawConfigStore, adapter, worker, a
       res.status(502).json({
         error: {
           code: "chat_session_unavailable",
-          message: error instanceof Error ? error.message : "OpenClaw chat session creation is unavailable."
+          message: error instanceof Error ? error.message : "Native chat session creation is unavailable."
         }
       });
     }
@@ -1087,7 +1087,7 @@ export function createApiRouter({ store, openClawConfigStore, adapter, worker, a
       res.status(502).json({
         error: {
           code: "chat_session_title_unavailable",
-          message: error instanceof Error ? error.message : "OpenClaw chat session title update is unavailable."
+          message: error instanceof Error ? error.message : "Native chat session title update is unavailable."
         }
       });
     }
@@ -1099,7 +1099,7 @@ export function createApiRouter({ store, openClawConfigStore, adapter, worker, a
       res.status(400).json({
         error: {
           code: "chat_history_session_required",
-          message: "Chat history requires an OpenClaw sessionKey."
+          message: "Chat history requires a native sessionKey."
         }
       });
       return;
@@ -1112,7 +1112,7 @@ export function createApiRouter({ store, openClawConfigStore, adapter, worker, a
       res.status(502).json({
         error: {
           code: "chat_history_unavailable",
-          message: error instanceof Error ? error.message : "OpenClaw chat history is unavailable."
+          message: error instanceof Error ? error.message : "Native chat history is unavailable."
         }
       });
     }
@@ -1819,11 +1819,11 @@ async function streamHivewardChatSession({
   const isClosed = () => res.writableEnded || res.destroyed;
   let doneEvent: ChatDoneEvent | undefined;
   let streamedOutput = "";
-  let openclawAcceptedAtMs: number | undefined;
-  let openclawFirstDeltaAtMs: number | undefined;
+  let runtimeAcceptedAtMs: number | undefined;
+  let runtimeFirstDeltaAtMs: number | undefined;
   let nativeSessionKey = requestBody.nativeSessionKey ?? "";
   const attemptedNativeResume = Boolean(nativeSessionKey) && !shouldRebuildFromHivewardHistory;
-  const openclawStartedAtMs = Date.now();
+  const runtimeStartedAtMs = Date.now();
 
   try {
     if (requestBody.harnessId === "openclaw" && !nativeSessionKey) {
@@ -1858,14 +1858,14 @@ async function streamHivewardChatSession({
       },
       (event) => {
         if (event.type === "started") {
-          openclawAcceptedAtMs ??= Date.now();
+          runtimeAcceptedAtMs ??= Date.now();
         }
         if (event.type === "done") {
           doneEvent = event;
           return;
         }
         if (event.type === "delta") {
-          openclawFirstDeltaAtMs ??= Date.now();
+          runtimeFirstDeltaAtMs ??= Date.now();
           streamedOutput = event.replace ? event.text : `${streamedOutput}${event.text}`;
         }
         writeChatStreamEvent(res, event, isClosed);
@@ -1886,7 +1886,7 @@ async function streamHivewardChatSession({
     return;
   }
 
-  const openclawFinishedAtMs = Date.now();
+  const runtimeFinishedAtMs = Date.now();
   const postprocessStartedAtMs = Date.now();
   if (!doneEvent) {
     const message = "Chat request completed without a final runtime event.";
@@ -1939,12 +1939,12 @@ async function streamHivewardChatSession({
   const finalEventWithTimings = withChatStreamTimings(
     finalDoneEvent,
     requestStartedAtMs,
-    openclawStartedAtMs,
-    openclawFinishedAtMs,
+    runtimeStartedAtMs,
+    runtimeFinishedAtMs,
     postprocessStartedAtMs,
     inboxSubmissionMs,
-    openclawAcceptedAtMs,
-    openclawFirstDeltaAtMs
+    runtimeAcceptedAtMs,
+    runtimeFirstDeltaAtMs
   );
   const runtimeRef = toChatRuntimeRef(finalEventWithTimings);
   const nativeMissing = attemptedNativeResume && finalEventWithTimings.status === "failed" && isNativeResumeFailure(finalEventWithTimings.error);
@@ -2304,8 +2304,8 @@ function buildChatInboxSubmissionFailureOutput(output: string, block: string, er
 const hivewardPlatformContext = [
   "System context:",
   "HiveWard is a local company operations console for building business workflows, company structure, blueprints, task cards, notes, runtime status views, and local UI metadata.",
-  "In Chat, HiveWard is only the user interface and dispatch channel. OpenClaw owns runtime execution, agents, tools, skills, sessions, transcripts, reasoning, and usage facts.",
-  "Use OpenClaw-native tools and skills when they are available. If the user asks to create or change HiveWard blueprints, workflows, company structure, or visual assets, help turn the request into concrete platform actions and use real runtime tools/APIs when required.",
+  "In Chat, HiveWard is only the user interface and dispatch channel. The selected harness owns runtime execution, agents, tools, skills, sessions, transcripts, reasoning, and usage facts.",
+  "Use harness-native tools and skills when they are available. If the user asks to create or change HiveWard blueprints, workflows, company structure, or visual assets, help turn the request into concrete platform actions and use real runtime tools/APIs when required.",
   "Do not claim stored HiveWard data, blueprints, files, or external deliveries changed unless an actual tool or API performed that change."
 ].join("\n");
 
@@ -2399,24 +2399,24 @@ function writeChatStreamEvent(
 function withChatStreamTimings<T extends ChatDoneEvent>(
   event: T,
   requestStartedAtMs: number,
-  openclawStartedAtMs: number,
-  openclawFinishedAtMs: number,
+  runtimeStartedAtMs: number,
+  runtimeFinishedAtMs: number,
   postprocessStartedAtMs: number,
   inboxSubmissionMs: number | undefined,
-  openclawAcceptedAtMs: number | undefined,
-  openclawFirstDeltaAtMs: number | undefined
+  runtimeAcceptedAtMs: number | undefined,
+  runtimeFirstDeltaAtMs: number | undefined
 ): T {
   const completedAtMs = Date.now();
   return {
     ...event,
     timings: {
       totalMs: Math.max(0, completedAtMs - requestStartedAtMs),
-      hivewardPreprocessMs: Math.max(0, openclawStartedAtMs - requestStartedAtMs),
-      openclawMs: Math.max(0, openclawFinishedAtMs - openclawStartedAtMs),
+      hivewardPreprocessMs: Math.max(0, runtimeStartedAtMs - requestStartedAtMs),
+      runtimeMs: Math.max(0, runtimeFinishedAtMs - runtimeStartedAtMs),
       hivewardPostprocessMs: Math.max(0, completedAtMs - postprocessStartedAtMs),
       inboxSubmissionMs,
-      openclawAcceptedMs: openclawAcceptedAtMs === undefined ? undefined : Math.max(0, openclawAcceptedAtMs - openclawStartedAtMs),
-      openclawFirstDeltaMs: openclawFirstDeltaAtMs === undefined ? undefined : Math.max(0, openclawFirstDeltaAtMs - openclawStartedAtMs)
+      runtimeAcceptedMs: runtimeAcceptedAtMs === undefined ? undefined : Math.max(0, runtimeAcceptedAtMs - runtimeStartedAtMs),
+      runtimeFirstDeltaMs: runtimeFirstDeltaAtMs === undefined ? undefined : Math.max(0, runtimeFirstDeltaAtMs - runtimeStartedAtMs)
     }
   };
 }
@@ -2464,7 +2464,7 @@ function isNativeResumeFailure(message: string | undefined): boolean {
   );
 }
 
-function sourceForChatHarness(harnessId: HarnessId): OpenClawObjectSource {
+function sourceForChatHarness(harnessId: HarnessId): RuntimeObjectSource {
   if (harnessId === "claudeCode") return "claude";
   return harnessId;
 }

@@ -88,7 +88,8 @@ const maxUploadFiles = 6;
 const composerMinHeightPx = 42;
 const composerMaxHeightPx = 132;
 const newSessionViewOptionValue = "__new_session_view__";
-const nativeSessionOptionPrefix = "__native_openclaw_session__:";
+const nativeSessionOptionPrefix = "__native_harness_session__:";
+const legacyNativeSessionOptionPrefix = "__native_openclaw_session__:";
 const newBlueprintOptionValue = "__new_blueprint__";
 
 export function ChatPage({
@@ -1449,10 +1450,13 @@ function formatChatRuntimeStatusTitle(status: ChatRuntimeStatusView, copy: Retur
 
 function formatRuntimeTimings(timings: ChatStreamTimings, source: string, copy: ReturnType<typeof chatCopy>): string {
   const hivewardMs = timings.hivewardPreprocessMs + timings.hivewardPostprocessMs;
+  const runtimeMs = timings.runtimeMs ?? timings.openclawMs ?? 0;
+  const runtimeAcceptedMs = timings.runtimeAcceptedMs ?? timings.openclawAcceptedMs;
+  const runtimeFirstDeltaMs = timings.runtimeFirstDeltaMs ?? timings.openclawFirstDeltaMs;
   const harnessDetails = [
-    `${formatHarnessLabel(source)} ${formatDurationMs(timings.openclawMs)}`,
-    timings.openclawAcceptedMs === undefined ? undefined : `${copy.timingAccepted} ${formatDurationMs(timings.openclawAcceptedMs)}`,
-    timings.openclawFirstDeltaMs === undefined ? undefined : `${copy.timingFirstToken} ${formatDurationMs(timings.openclawFirstDeltaMs)}`
+    `${formatHarnessLabel(source)} ${formatDurationMs(runtimeMs)}`,
+    runtimeAcceptedMs === undefined ? undefined : `${copy.timingAccepted} ${formatDurationMs(runtimeAcceptedMs)}`,
+    runtimeFirstDeltaMs === undefined ? undefined : `${copy.timingFirstToken} ${formatDurationMs(runtimeFirstDeltaMs)}`
   ].filter((item): item is string => Boolean(item));
   return `${copy.timingTotal} ${formatDurationMs(timings.totalMs)} · ${harnessDetails.join(" / ")} · ${copy.timingHiveward} ${formatDurationMs(hivewardMs)}`;
 }
@@ -1494,7 +1498,9 @@ function decorateHivewardMessage(message: HivewardChatMessage, copy: ReturnType<
 }
 
 function readNativeSessionOptionValue(value: string): string | undefined {
-  return value.startsWith(nativeSessionOptionPrefix) ? value.slice(nativeSessionOptionPrefix.length) : undefined;
+  if (value.startsWith(nativeSessionOptionPrefix)) return value.slice(nativeSessionOptionPrefix.length);
+  if (value.startsWith(legacyNativeSessionOptionPrefix)) return value.slice(legacyNativeSessionOptionPrefix.length);
+  return undefined;
 }
 
 function readAgentIdFromSessionKey(sessionKey: string): string | undefined {
@@ -1923,7 +1929,7 @@ function chatCopy(language: Language) {
       emptyBody: "\u5f53\u524d\u89c6\u56fe\u8fd8\u6ca1\u6709\u6d88\u606f\u3002",
       you: "\u4f60",
       youAvatar: "\u4f60",
-      assistant: "OpenClaw",
+      assistant: "Harness",
       streaming: "\u8f93\u51fa\u4e2d",
       failed: "\u5931\u8d25",
       waiting: (harnessLabel: string) => `\u7b49\u5f85 ${harnessLabel} \u8fd4\u56de...`,
@@ -1942,7 +1948,6 @@ function chatCopy(language: Language) {
       runtimeQueued: "\u6392\u961f\u4e2d",
       runtimeRunning: "\u8fd0\u884c\u4e2d",
       timingTotal: "\u603b\u8017\u65f6",
-      timingOpenClaw: "OpenClaw",
       timingHiveward: "Hiveward",
       timingAccepted: "\u63a5\u53d7",
       timingFirstToken: "\u9996\u6bb5",
@@ -2025,7 +2030,7 @@ function chatCopy(language: Language) {
     emptyBody: "This session has no messages yet.",
     you: "You",
     youAvatar: "You",
-    assistant: "OpenClaw",
+    assistant: "Harness",
     streaming: "Streaming",
     failed: "Failed",
     waiting: (harnessLabel: string) => `Waiting for ${harnessLabel}...`,
@@ -2044,7 +2049,6 @@ function chatCopy(language: Language) {
     runtimeQueued: "queued",
     runtimeRunning: "running",
     timingTotal: "Total",
-    timingOpenClaw: "OpenClaw",
     timingHiveward: "Hiveward",
     timingAccepted: "accepted",
     timingFirstToken: "first chunk",

@@ -1,4 +1,4 @@
-import type { AgentTaskResult, OpenClawExecutionStatus, OpenClawUsageFact, WaitForAgentTaskInput } from "@hiveward/shared";
+import type { AgentTaskResult, RuntimeExecutionStatus, RuntimeUsageFact, WaitForAgentTaskInput } from "@hiveward/shared";
 import type { AgentSdkTaskRecord } from "./types";
 
 export class AgentSdkTaskRegistry {
@@ -70,10 +70,10 @@ export function createTerminalTaskResult({
   runId: string;
   sessionKey: string;
   source: AgentTaskResult["source"];
-  status: OpenClawExecutionStatus;
+  status: RuntimeExecutionStatus;
   error?: string;
   output?: string;
-  usage?: OpenClawUsageFact;
+  usage?: RuntimeUsageFact;
   updatedAt?: string;
 }): AgentTaskResult {
   return {

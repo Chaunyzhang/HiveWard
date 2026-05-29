@@ -1,11 +1,11 @@
 import { nanoid } from "nanoid";
 import type {
-  OpenClawAgent,
-  OpenClawChannel,
-  OpenClawModel,
-  OpenClawSessionSummary,
-  OpenClawTaskSummary,
-  OpenClawTool,
+  RuntimeAgent,
+  RuntimeChannel,
+  RuntimeModel,
+  RuntimeSessionSummary,
+  RuntimeTaskSummary,
+  RuntimeTool,
   RuntimeOverview,
   ChatHistoryMessage,
   ChatAttachment,
@@ -14,7 +14,7 @@ import type {
   ChatThinkingEffort,
   HarnessId,
   HarnessSkillId,
-  OpenClawObjectSource,
+  RuntimeObjectSource,
   SendChannelInput,
   SendChannelResult,
   AgentTaskResult,
@@ -27,12 +27,12 @@ import { resolveGatewayAdapterConfig } from "./gateway-config";
 import { createAgentSdkRuntime, isAgentSdkProvider, readAgentSdkRuntimeOptions, type AgentSdkRuntime } from "./sdk-runtime";
 
 export interface RuntimeAdapter {
-  listModels(): Promise<OpenClawModel[]>;
-  listAgents(): Promise<OpenClawAgent[]>;
-  listTools(): Promise<OpenClawTool[]>;
-  listChannels(): Promise<OpenClawChannel[]>;
-  listSessions(): Promise<OpenClawSessionSummary[]>;
-  listTasks(): Promise<OpenClawTaskSummary[]>;
+  listModels(): Promise<RuntimeModel[]>;
+  listAgents(): Promise<RuntimeAgent[]>;
+  listTools(): Promise<RuntimeTool[]>;
+  listChannels(): Promise<RuntimeChannel[]>;
+  listSessions(): Promise<RuntimeSessionSummary[]>;
+  listTasks(): Promise<RuntimeTaskSummary[]>;
   getRuntimeOverview(): Promise<RuntimeOverview>;
   getSessionMessages(sessionKey: string): Promise<ChatHistoryMessage[]>;
   createChatSession(input: RuntimeChatSessionInput): Promise<RuntimeChatSessionResult>;
@@ -66,7 +66,7 @@ export interface RuntimeChatSessionTitleResult {
 
 export interface RuntimeChatStreamInput {
   sessionKey: string;
-  source?: OpenClawObjectSource;
+  source?: RuntimeObjectSource;
   message: string;
   attachments: ChatAttachment[];
   modelId?: string;
@@ -80,7 +80,7 @@ export interface RuntimeChatStreamInput {
 export class MockRuntimeAdapter implements RuntimeAdapter {
   private readonly agentResults = new Map<string, AgentTaskResult>();
 
-  async listModels(): Promise<OpenClawModel[]> {
+  async listModels(): Promise<RuntimeModel[]> {
     return [
       {
         id: "gpt-5.4",
@@ -101,7 +101,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
       {
         id: "local-reviewer",
         label: "Local Reviewer",
-        provider: "OpenClaw Local",
+        provider: "Mock Local",
         supportsTools: false,
         contextWindow: 64000,
         thinkingLevels: ["off"]
@@ -109,7 +109,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
     ];
   }
 
-  async listAgents(): Promise<OpenClawAgent[]> {
+  async listAgents(): Promise<RuntimeAgent[]> {
     return [
       {
         id: "main",
@@ -120,7 +120,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
     ];
   }
 
-  async listTools(): Promise<OpenClawTool[]> {
+  async listTools(): Promise<RuntimeTool[]> {
     return [
       {
         id: "repo.search",
@@ -131,19 +131,19 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
       {
         id: "repo.test",
         label: "Repo Test",
-        description: "Run scoped verification commands through OpenClaw runtime.",
+        description: "Run scoped verification commands through the selected harness runtime.",
         category: "verification"
       },
       {
         id: "channel.send",
         label: "Channel Send",
-        description: "Send delivery messages through configured OpenClaw channels.",
+        description: "Send delivery messages through configured runtime channels.",
         category: "communication"
       }
     ];
   }
 
-  async listChannels(): Promise<OpenClawChannel[]> {
+  async listChannels(): Promise<RuntimeChannel[]> {
     return [
       { id: "slack", label: "Slack", status: "available" },
       { id: "discord", label: "Discord", status: "not_configured" },
@@ -151,7 +151,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
     ];
   }
 
-  async listSessions(): Promise<OpenClawSessionSummary[]> {
+  async listSessions(): Promise<RuntimeSessionSummary[]> {
     const now = new Date().toISOString();
     return [
       { id: "session-demo-1", title: "Delivery planning console", updatedAt: now },
@@ -159,7 +159,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
     ];
   }
 
-  async listTasks(): Promise<OpenClawTaskSummary[]> {
+  async listTasks(): Promise<RuntimeTaskSummary[]> {
     const now = new Date().toISOString();
     return [
       { id: "task-demo-1", title: "Requirements Agent", status: "succeeded", updatedAt: now },
@@ -178,7 +178,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
       {
         id: `${sessionKey}:user-demo`,
         role: "user",
-        content: "Mock OpenClaw session history.",
+        content: "Mock runtime session history.",
         createdAt: now
       },
       {
@@ -194,7 +194,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
     const agentId = input.agentId?.trim() || "main";
     return {
       sessionKey: `agent:${agentId}:chat-${nanoid(8)}`,
-      title: "New OpenClaw chat"
+      title: "New runtime chat"
     };
   }
 
@@ -218,9 +218,10 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
       status: "running",
       updatedAt: now
     });
+    const adapterLabel = source === "openclaw" ? "runtime" : formatSourceLabel(source);
     onEvent({
       type: "delta",
-      text: `main completed through ${formatSourceLabel(source)} adapter. Prompt boundary stayed outside Hiveward runtime.`
+      text: `main completed through ${adapterLabel} adapter. Prompt boundary stayed outside Hiveward runtime.`
     });
     onEvent({
       type: "done",
@@ -229,7 +230,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
       sessionKey: input.sessionKey,
       source,
       status: "succeeded",
-      output: `main completed through ${formatSourceLabel(source)} adapter. Prompt boundary stayed outside Hiveward runtime.`,
+      output: `main completed through ${adapterLabel} adapter. Prompt boundary stayed outside Hiveward runtime.`,
       updatedAt: now
     });
   }
@@ -248,7 +249,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
       sessionKey: `oc-session-${input.blueprintRunId}`,
       source: "openclaw",
       status: "succeeded",
-      output: `${input.agentName} completed through OpenClaw adapter. Prompt boundary stayed outside Hiveward runtime.`,
+      output: `${input.agentName} completed through runtime adapter. Prompt boundary stayed outside Hiveward runtime.`,
       error: undefined,
       usage: {
         id: `usage-${nanoid(8)}`,
@@ -274,7 +275,7 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
   async waitForAgentTask(input: WaitForAgentTaskInput): Promise<AgentTaskResult> {
     const result = this.agentResults.get(input.taskId);
     if (!result) {
-      throw new Error(`Mock OpenClaw task not found: ${input.taskId}`);
+      throw new Error(`Mock runtime task not found: ${input.taskId}`);
     }
     return result;
   }
@@ -298,27 +299,27 @@ export class SdkRoutingRuntimeAdapter implements RuntimeAdapter {
     private readonly sdkRuntime: AgentSdkRuntime
   ) {}
 
-  listModels(): Promise<OpenClawModel[]> {
+  listModels(): Promise<RuntimeModel[]> {
     return this.baseAdapter.listModels();
   }
 
-  listAgents(): Promise<OpenClawAgent[]> {
+  listAgents(): Promise<RuntimeAgent[]> {
     return this.baseAdapter.listAgents();
   }
 
-  listTools(): Promise<OpenClawTool[]> {
+  listTools(): Promise<RuntimeTool[]> {
     return this.baseAdapter.listTools();
   }
 
-  listChannels(): Promise<OpenClawChannel[]> {
+  listChannels(): Promise<RuntimeChannel[]> {
     return this.baseAdapter.listChannels();
   }
 
-  listSessions(): Promise<OpenClawSessionSummary[]> {
+  listSessions(): Promise<RuntimeSessionSummary[]> {
     return this.baseAdapter.listSessions();
   }
 
-  listTasks(): Promise<OpenClawTaskSummary[]> {
+  listTasks(): Promise<RuntimeTaskSummary[]> {
     return this.baseAdapter.listTasks();
   }
 
@@ -385,7 +386,7 @@ export { GatewayRequestError, GatewaySession } from "./gateway-client";
 export { resolveGatewayAdapterConfig, type GatewayAdapterConfig } from "./gateway-config";
 export { createAgentSdkRuntime, isAgentSdkProvider } from "./sdk-runtime";
 
-function formatSourceLabel(source: HarnessId | OpenClawObjectSource): string {
+function formatSourceLabel(source: HarnessId | RuntimeObjectSource): string {
   if (source === "codex") return "Codex";
   if (source === "claude" || source === "claudeCode") return "Claude Code";
   if (source === "google") return "Google CLI Beta";

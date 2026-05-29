@@ -1,16 +1,18 @@
 import type { CatalogSnapshot } from "./catalog";
 import type { CompanyOverview } from "./company";
 import type {
-  OpenClawExecutionStatus,
   OpenClawConfigState,
   OpenClawModelUsageSummary,
-  OpenClawObjectSource,
-  OpenClawSessionSummary,
-  ChatThinkingEffort,
-  OpenClawTaskSummary,
-  OpenClawUsageFact,
   OpenClawVersionInfo
 } from "./openclaw";
+import type {
+  ChatThinkingEffort,
+  RuntimeExecutionStatus,
+  RuntimeObjectSource,
+  RuntimeSessionSummary,
+  RuntimeTaskSummary,
+  RuntimeUsageFact
+} from "./runtime";
 import type { AgentRuntimeId, PortableBlueprintPackage, BlueprintDefinition, BlueprintRunSummary, BlueprintRunView } from "./blueprint";
 import type { PendingApprovalItem, InboxItem, WorkspaceDashboard } from "./workspace";
 import type { ApprovalDecision, ApprovalRequest, ManagerMail } from "./lifecycle";
@@ -466,11 +468,11 @@ export interface ChatRuntimeRef {
   taskId: string;
   runId: string;
   sessionKey: string;
-  source: OpenClawObjectSource;
+  source: RuntimeObjectSource;
   status: string;
   updatedAt: string;
   error?: string;
-  usage?: OpenClawUsageFact;
+  usage?: RuntimeUsageFact;
   timings?: ChatStreamTimings;
 }
 
@@ -583,9 +585,12 @@ export interface ChatSessionMessagesResponse {
 export interface ChatStreamTimings {
   totalMs: number;
   hivewardPreprocessMs: number;
-  openclawMs: number;
+  runtimeMs: number;
   hivewardPostprocessMs: number;
   inboxSubmissionMs?: number;
+  runtimeAcceptedMs?: number;
+  runtimeFirstDeltaMs?: number;
+  openclawMs?: number;
   openclawAcceptedMs?: number;
   openclawFirstDeltaMs?: number;
 }
@@ -596,8 +601,8 @@ export type ChatStreamEvent =
       taskId: string;
       runId: string;
       sessionKey: string;
-      source: OpenClawObjectSource;
-      status: OpenClawExecutionStatus;
+      source: RuntimeObjectSource;
+      status: RuntimeExecutionStatus;
       updatedAt: string;
     }
   | {
@@ -607,7 +612,7 @@ export type ChatStreamEvent =
     }
   | {
       type: "runtime_state";
-      source: OpenClawObjectSource;
+      source: RuntimeObjectSource;
       phase: "thinking" | "tool" | "command";
       label: string;
     }
@@ -616,11 +621,11 @@ export type ChatStreamEvent =
       taskId: string;
       runId: string;
       sessionKey: string;
-      source: OpenClawObjectSource;
-      status: OpenClawExecutionStatus;
+      source: RuntimeObjectSource;
+      status: RuntimeExecutionStatus;
       output?: string;
       error?: string;
-      usage?: OpenClawUsageFact;
+      usage?: RuntimeUsageFact;
       timings?: ChatStreamTimings;
       updatedAt: string;
     }
@@ -798,8 +803,8 @@ export interface CreateOpenClawChannelRequest {
 }
 
 export interface RuntimeOverview {
-  sessions: OpenClawSessionSummary[];
-  tasks: OpenClawTaskSummary[];
+  sessions: RuntimeSessionSummary[];
+  tasks: RuntimeTaskSummary[];
 }
 
 export interface RuntimeOverviewResponse {

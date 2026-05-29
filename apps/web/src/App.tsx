@@ -3354,7 +3354,7 @@ function hivewardHomeCopy(language: Language): HivewardHomeCopy {
           items: [
             "节点：Agent、Manager、并行 Slot、汇总、审批和交付步骤。",
             "连线：成功路径、失败路径、执行顺序和回滚路线。",
-            "运行记录：每个执行步骤的状态、输入、输出、OpenClaw 引用、成本和时间证据。"
+            "运行记录：每个执行步骤的状态、输入、输出、运行时引用、成本和时间证据。"
           ]
         },
         {
@@ -3434,7 +3434,7 @@ function hivewardHomeCopy(language: Language): HivewardHomeCopy {
         items: [
           "Nodes: agents, managers, parallel lanes, summaries, approvals, and delivery steps.",
           "Edges: success paths, failure paths, sequencing, and rollback routes.",
-          "Run records: node status, inputs, outputs, OpenClaw references, cost, and timing evidence."
+          "Run records: node status, inputs, outputs, runtime references, cost, and timing evidence."
         ]
       },
       {

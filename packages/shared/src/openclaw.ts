@@ -1,52 +1,27 @@
-export type AgentSdkProvider = "claude" | "codex" | "google" | "cursor" | "opencode" | "hermes";
-export type AgentPermissionProfile = "read_only" | "workspace_write";
-export type OpenClawObjectSource = "openclaw" | AgentSdkProvider;
-export type RuntimeFilesystemPolicy = "read_only" | "workspace_write";
-export type RuntimeNetworkPolicy = "disabled" | "enabled";
-export type RuntimeWebSearchPolicy = "disabled" | "live";
+import type {
+  ChatThinkingEffort,
+  RuntimeAgent,
+  RuntimeChannel,
+  RuntimeExecutionStatus,
+  RuntimeModel,
+  RuntimeObjectRef,
+  RuntimeObjectSource,
+  RuntimeSessionSummary,
+  RuntimeTaskSummary,
+  RuntimeTool,
+  RuntimeUsageFact
+} from "./runtime";
 
-export interface OpenClawObjectRef {
-  source: OpenClawObjectSource;
-  sourceId: string;
-  sourceUpdatedAt: string;
-  taskId?: string;
-  runId?: string;
-  sessionKey?: string;
-  messageId?: string;
-  usageRef?: string;
-}
-
-export type ChatThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "adaptive" | "xhigh" | "max";
-
-export interface OpenClawModel {
-  id: string;
-  label: string;
-  provider: string;
-  supportsTools: boolean;
-  contextWindow?: number;
-  thinkingLevels?: ChatThinkingEffort[];
-}
-
-export interface OpenClawTool {
-  id: string;
-  label: string;
-  description: string;
-  category: string;
-}
-
-export interface OpenClawChannel {
-  id: string;
-  label: string;
-  status: "available" | "not_configured" | "disabled";
-}
-
-export interface OpenClawAgent {
-  id: string;
-  label: string;
-  workspace?: string;
-  runtimeId?: string;
-  modelId?: string;
-}
+export type OpenClawObjectSource = RuntimeObjectSource;
+export type OpenClawObjectRef = RuntimeObjectRef;
+export type OpenClawModel = RuntimeModel;
+export type OpenClawTool = RuntimeTool;
+export type OpenClawChannel = RuntimeChannel;
+export type OpenClawAgent = RuntimeAgent;
+export type OpenClawSessionSummary = RuntimeSessionSummary;
+export type OpenClawTaskSummary = RuntimeTaskSummary;
+export type OpenClawExecutionStatus = RuntimeExecutionStatus;
+export type OpenClawUsageFact = RuntimeUsageFact;
 
 export interface OpenClawConfiguredModel {
   id: string;
@@ -108,35 +83,6 @@ export interface OpenClawVersionInfo {
   error?: string;
 }
 
-export interface OpenClawSessionSummary {
-  id: string;
-  title: string;
-  updatedAt: string;
-}
-
-export interface OpenClawTaskSummary {
-  id: string;
-  title: string;
-  status: OpenClawExecutionStatus;
-  updatedAt: string;
-}
-
-export type OpenClawExecutionStatus =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "cancelled";
-
-export interface OpenClawUsageFact {
-  id: string;
-  modelId: string;
-  inputTokens: number;
-  outputTokens: number;
-  costUsd: number;
-  recordedAt: string;
-}
-
 export interface OpenClawModelUsageDay {
   date: string;
   modelId: string;
@@ -159,66 +105,4 @@ export interface OpenClawModelUsageSummary {
   totalTokens: number;
   costUsd: number;
   calls: number;
-}
-
-export interface StartAgentTaskInput {
-  blueprintRunId: string;
-  nodeRunId: string;
-  source: OpenClawObjectSource;
-  agentId?: string;
-  profileId?: string;
-  agentName: string;
-  prompt: string;
-  modelId?: string;
-  permissionProfile?: AgentPermissionProfile;
-  workingDirectory?: string;
-  timeoutMs?: number;
-  outputSchema?: Record<string, unknown>;
-  runtimeAccessPolicy?: {
-    filesystem: RuntimeFilesystemPolicy;
-    network: RuntimeNetworkPolicy;
-    webSearch: RuntimeWebSearchPolicy;
-  };
-  input: unknown;
-  skillIds?: string[];
-  tools: string[];
-}
-
-export interface StartedAgentTaskResult {
-  taskId: string;
-  runId: string;
-  sessionKey: string;
-  source: OpenClawObjectSource;
-  status: OpenClawExecutionStatus;
-  error?: string;
-  updatedAt: string;
-}
-
-export interface WaitForAgentTaskInput {
-  nodeRunId: string;
-  taskId: string;
-  runId: string;
-  sessionKey: string;
-  source: OpenClawObjectSource;
-  agentId?: string;
-  modelId?: string;
-}
-
-export interface AgentTaskResult extends StartedAgentTaskResult {
-  output?: unknown;
-  usage?: OpenClawUsageFact;
-}
-
-export interface SendChannelInput {
-  channelId: string;
-  target: string;
-  body: string;
-  blueprintRunId: string;
-  nodeRunId: string;
-}
-
-export interface SendChannelResult {
-  deliveryId: string;
-  status: "sent" | "failed";
-  updatedAt: string;
 }

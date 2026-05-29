@@ -1,4 +1,4 @@
-import type { OpenClawAgent, OpenClawChannel, OpenClawModel, OpenClawTool } from "./openclaw";
+import type { RuntimeAgent, RuntimeChannel, RuntimeModel, RuntimeTool } from "./runtime";
 
 export interface CatalogSnapshot {
   id: string;
@@ -6,10 +6,10 @@ export interface CatalogSnapshot {
   sourceUpdatedAt: string;
   refreshedAt: string;
   staleAfter: string;
-  models: OpenClawModel[];
-  agents: OpenClawAgent[];
-  tools: OpenClawTool[];
-  channels: OpenClawChannel[];
+  models: RuntimeModel[];
+  agents: RuntimeAgent[];
+  tools: RuntimeTool[];
+  channels: RuntimeChannel[];
 }
 
 export function isCatalogStale(snapshot: CatalogSnapshot, now = new Date()): boolean {

@@ -32,7 +32,7 @@ describe("RunsPage", () => {
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCostUsd: 0,
-        openclawRefs: []
+        runtimeRefs: []
       },
       nodeRuns: [
         {
@@ -233,7 +233,7 @@ describe("RunsPage", () => {
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCostUsd: 0,
-        openclawRefs: []
+        runtimeRefs: []
       },
       nodeRuns: [
         {
@@ -322,7 +322,7 @@ describe("RunsPage", () => {
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCostUsd: 0,
-        openclawRefs: []
+        runtimeRefs: []
       },
       nodeRuns: [
         {
@@ -412,7 +412,7 @@ describe("RunsPage", () => {
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCostUsd: 0,
-        openclawRefs: []
+        runtimeRefs: []
       },
       nodeRuns: [
         {
@@ -548,7 +548,7 @@ describe("RunsPage", () => {
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCostUsd: 0,
-        openclawRefs: []
+        runtimeRefs: []
       },
       nodeRuns: [],
       events: [
@@ -654,7 +654,7 @@ describe("RunsPage", () => {
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCostUsd: 0,
-        openclawRefs: []
+        runtimeRefs: []
       },
       nodeRuns: [
         {
@@ -745,7 +745,7 @@ describe("RunsPage", () => {
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCostUsd: 0,
-        openclawRefs: []
+        runtimeRefs: []
       },
       nodeRuns: [],
       events: [],

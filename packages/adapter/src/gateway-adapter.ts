@@ -1,12 +1,12 @@
 import type {
-  OpenClawAgent,
-  OpenClawChannel,
-  OpenClawModel,
-  OpenClawSessionSummary,
-  OpenClawTaskSummary,
-  OpenClawTool,
-  OpenClawUsageFact,
-  OpenClawExecutionStatus,
+  RuntimeAgent,
+  RuntimeChannel,
+  RuntimeModel,
+  RuntimeSessionSummary,
+  RuntimeTaskSummary,
+  RuntimeTool,
+  RuntimeUsageFact,
+  RuntimeExecutionStatus,
   RuntimeOverview,
   ChatHistoryMessage,
   ChatStreamEvent,
@@ -38,28 +38,28 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
 
   constructor(private readonly config: GatewayAdapterConfig) {}
 
-  async listModels(): Promise<OpenClawModel[]> {
+  async listModels(): Promise<RuntimeModel[]> {
     return this.withSession(async (session) => {
       const result = await session.request<{ models?: unknown[] }>("models.list", {});
       return (Array.isArray(result.models) ? result.models : []).map(mapModel).filter(isPresent);
     });
   }
 
-  async listAgents(): Promise<OpenClawAgent[]> {
+  async listAgents(): Promise<RuntimeAgent[]> {
     return this.withSession(async (session) => {
       const result = await session.request<{ agents?: unknown[]; defaultId?: unknown }>("agents.list", {});
       return (Array.isArray(result.agents) ? result.agents : []).map((agent) => mapAgent(agent, result.defaultId)).filter(isPresent);
     });
   }
 
-  async listTools(): Promise<OpenClawTool[]> {
+  async listTools(): Promise<RuntimeTool[]> {
     return this.withSession(async (session) => {
       const result = await session.request<{ groups?: unknown[] }>("tools.catalog", {});
       return (Array.isArray(result.groups) ? result.groups : []).flatMap((group) => mapToolGroup(group));
     });
   }
 
-  async listChannels(): Promise<OpenClawChannel[]> {
+  async listChannels(): Promise<RuntimeChannel[]> {
     return this.withSession(async (session) => {
       const result = await session.request<Record<string, unknown>>("channels.status", {});
       const meta = Array.isArray(result.channelMeta) ? result.channelMeta : [];
@@ -77,12 +77,12 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
     });
   }
 
-  async listSessions(): Promise<OpenClawSessionSummary[]> {
+  async listSessions(): Promise<RuntimeSessionSummary[]> {
     const sessions = await this.listSessionRecords();
     return sessions.map(mapSession).filter(isPresent);
   }
 
-  async listTasks(): Promise<OpenClawTaskSummary[]> {
+  async listTasks(): Promise<RuntimeTaskSummary[]> {
     const sessions = await this.listSessionRecords();
     return sessions.map(mapSessionTask).filter(isPresent);
   }
@@ -152,7 +152,7 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
     let activeRunId = requestedRunId;
     const startedAt = new Date().toISOString();
     let output = "";
-    let lastUsage: OpenClawUsageFact | undefined;
+    let lastUsage: RuntimeUsageFact | undefined;
 
     await this.patchChatSession(session, input);
 
@@ -557,7 +557,7 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
   private async readTerminalSession(
     session: GatewaySession,
     sessionKey: string,
-  ): Promise<{ status: Exclude<OpenClawExecutionStatus, "queued" | "running">; updatedAt: string } | undefined> {
+  ): Promise<{ status: Exclude<RuntimeExecutionStatus, "queued" | "running">; updatedAt: string } | undefined> {
     const result = await session.request<{ sessions?: unknown[] }>("sessions.list", {
       limit: 20,
       includeGlobal: true,
@@ -669,8 +669,8 @@ function formatUpstreamItem(value: unknown, index: number): string[] {
   for (const key of ["nodeId", "nodeRunId", "status"]) {
     if (value[key] !== undefined) lines.push(`- ${key}: ${formatInlineValue(value[key])}`);
   }
-  const ref = formatOpenClawRef(value.openclawRef);
-  if (ref) lines.push(`- openclawRef: ${ref}`);
+  const ref = formatRuntimeRef(value.runtimeRef ?? value.openclawRef);
+  if (ref) lines.push(`- runtimeRef: ${ref}`);
   lines.push("输出:");
   lines.push(formatOutputBlock(value.output));
   return lines;
@@ -694,7 +694,7 @@ function formatPreviousResult(value: unknown, index: number): string[] {
   return lines;
 }
 
-function formatOpenClawRef(value: unknown): string | undefined {
+function formatRuntimeRef(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   return ["taskId", "runId", "sessionKey"]
     .flatMap((key) => value[key] === undefined ? [] : [`${key}=${formatInlineValue(value[key])}`])
@@ -712,7 +712,7 @@ function formatInlineValue(value: unknown): string {
   return stringifyVisibleValue(value) ?? "";
 }
 
-function mapModel(value: unknown): OpenClawModel | undefined {
+function mapModel(value: unknown): RuntimeModel | undefined {
   if (!isRecord(value)) return undefined;
   const id = readString(value.id);
   const provider = readString(value.provider);
@@ -796,7 +796,7 @@ function normalizeThinkingLevel(value: string | undefined): ChatThinkingEffort |
   return undefined;
 }
 
-function mapAgent(value: unknown, defaultId: unknown): OpenClawAgent | undefined {
+function mapAgent(value: unknown, defaultId: unknown): RuntimeAgent | undefined {
   if (!isRecord(value)) return undefined;
   const id = readString(value.id);
   if (!id) return undefined;
@@ -813,14 +813,14 @@ function mapAgent(value: unknown, defaultId: unknown): OpenClawAgent | undefined
   };
 }
 
-function mapToolGroup(value: unknown): OpenClawTool[] {
+function mapToolGroup(value: unknown): RuntimeTool[] {
   if (!isRecord(value)) return [];
   const category = readString(value.label) ?? readString(value.id) ?? "tools";
   const tools = Array.isArray(value.tools) ? value.tools : [];
   return tools.map((tool) => mapTool(tool, category)).filter(isPresent);
 }
 
-function mapTool(value: unknown, category: string): OpenClawTool | undefined {
+function mapTool(value: unknown, category: string): RuntimeTool | undefined {
   if (!isRecord(value)) return undefined;
   const id = readString(value.id);
   if (!id) return undefined;
@@ -832,7 +832,7 @@ function mapTool(value: unknown, category: string): OpenClawTool | undefined {
   };
 }
 
-function mapChannelMeta(value: unknown): OpenClawChannel | undefined {
+function mapChannelMeta(value: unknown): RuntimeChannel | undefined {
   if (!isRecord(value)) return undefined;
   const id = readString(value.id);
   if (!id) return undefined;
@@ -843,7 +843,7 @@ function mapChannelMeta(value: unknown): OpenClawChannel | undefined {
   };
 }
 
-function mapSession(value: unknown): OpenClawSessionSummary | undefined {
+function mapSession(value: unknown): RuntimeSessionSummary | undefined {
   if (!isRecord(value)) return undefined;
   const id = readString(value.key) ?? readString(value.sessionId);
   if (!id) return undefined;
@@ -854,7 +854,7 @@ function mapSession(value: unknown): OpenClawSessionSummary | undefined {
   };
 }
 
-function mapSessionTask(value: unknown): OpenClawTaskSummary | undefined {
+function mapSessionTask(value: unknown): RuntimeTaskSummary | undefined {
   if (!isRecord(value)) return undefined;
   const id = readString(value.key) ?? readString(value.sessionId);
   if (!id) return undefined;
@@ -904,7 +904,7 @@ function mapGatewayChatEvent(
   fallbackRunId: string,
   fallbackSessionKey: string,
   currentOutput: string,
-  currentUsage: OpenClawUsageFact | undefined,
+  currentUsage: RuntimeUsageFact | undefined,
 ): ChatStreamEvent | undefined {
   if (!isRecord(payload)) return undefined;
   const eventRunId = readString(payload.runId) ?? readString(payload.taskId) ?? readString(payload.id);
@@ -1018,14 +1018,14 @@ async function readAgentTranscriptResult(
 interface TranscriptOutputCandidate {
   role?: string;
   text: string;
-  usage?: OpenClawUsageFact;
+  usage?: RuntimeUsageFact;
 }
 
 interface TranscriptReadResult {
   foundRequest: true;
   output?: string;
   error?: string;
-  usage?: OpenClawUsageFact;
+  usage?: RuntimeUsageFact;
 }
 
 export function readAgentTranscriptMessages(
@@ -1041,7 +1041,7 @@ export function readAgentTranscriptMessages(
   if (userIndex < 0) return undefined;
 
   let finalAssistantOutput: TranscriptOutputCandidate | undefined;
-  let latestUsage: OpenClawUsageFact | undefined;
+  let latestUsage: RuntimeUsageFact | undefined;
 
   for (const message of messages.slice(userIndex + 1)) {
     if (!isRecord(message)) continue;
@@ -1117,7 +1117,7 @@ function isMeaningfulTranscriptText(value: string): boolean {
   return Boolean(normalized && normalized.toLowerCase() !== "completed");
 }
 
-function readUsageFact(value: unknown, fallbackModelId?: string, fallbackId?: string): OpenClawUsageFact | undefined {
+function readUsageFact(value: unknown, fallbackModelId?: string, fallbackId?: string): RuntimeUsageFact | undefined {
   const candidate = findUsageRecord(value);
   if (!candidate) return undefined;
 
@@ -1222,14 +1222,14 @@ function readNumberFromRecord(value: Record<string, unknown>, keys: string[]): n
   return undefined;
 }
 
-function mapExecutionStatus(status: string | undefined): OpenClawTaskSummary["status"] {
+function mapExecutionStatus(status: string | undefined): RuntimeTaskSummary["status"] {
   if (status === "running" || status === "queued" || status === "failed" || status === "cancelled") {
     return status;
   }
   return "succeeded";
 }
 
-function mapGatewaySessionStatus(status: string | undefined): OpenClawExecutionStatus | undefined {
+function mapGatewaySessionStatus(status: string | undefined): RuntimeExecutionStatus | undefined {
   if (status === "queued" || status === "running" || status === "succeeded" || status === "failed" || status === "cancelled") {
     return status;
   }

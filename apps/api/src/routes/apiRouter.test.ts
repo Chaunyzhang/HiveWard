@@ -2315,7 +2315,7 @@ describe("apiRouter", () => {
     }
   });
 
-  it("streams OpenClaw chat responses through the runtime adapter", async () => {
+  it("streams native chat responses through the runtime adapter", async () => {
     const fixture = await createStoreFixture();
     const adapter = new TrackingAdapter();
     try {
@@ -2340,11 +2340,14 @@ describe("apiRouter", () => {
         expect(text).toContain("event: started");
         expect(text).toContain("event: delta");
         expect(text).toContain("event: done");
-        expect(text).toContain("main completed through OpenClaw adapter");
+        expect(text).toContain("main completed through runtime adapter");
         expect(adapter.lastStartInput).toBeUndefined();
         expect(adapter.lastChatStreamInput?.sessionKey).toBe("main");
         expect(adapter.lastChatStreamInput?.message).toContain("System context:");
         expect(adapter.lastChatStreamInput?.message).toContain("HiveWard is a local company operations console");
+        expect(adapter.lastChatStreamInput?.message).toContain("selected harness owns runtime execution");
+        expect(adapter.lastChatStreamInput?.message).not.toContain("OpenClaw owns runtime execution");
+        expect(adapter.lastChatStreamInput?.message).not.toContain("OpenClaw-native tools");
         expect(adapter.lastChatStreamInput?.message).toContain("HiveWard appointment:");
         expect(adapter.lastChatStreamInput?.message).toContain("Installed external skill:");
         expect(adapter.lastChatStreamInput?.message).toContain("hiveward-ceo");
@@ -3082,7 +3085,7 @@ describe("apiRouter", () => {
     }
   });
 
-  it("proxies OpenClaw native chat history by session key", async () => {
+  it("proxies native chat history by session key", async () => {
     const fixture = await createStoreFixture();
     try {
       await withApiServer(fixture.store, async (baseUrl) => {
@@ -3092,7 +3095,7 @@ describe("apiRouter", () => {
         expect(body.messages.length).toBeGreaterThan(0);
         expect(body.messages[0]).toMatchObject({
           role: "user",
-          content: "Mock OpenClaw session history."
+          content: "Mock runtime session history."
         });
       });
     } finally {
@@ -3112,7 +3115,7 @@ describe("apiRouter", () => {
         type: "blueprint_proposal",
         blueprintId: blueprint.id,
         title: "History synced blueprint package",
-        summary: "Created from a native OpenClaw history response.",
+        summary: "Created from a native runtime history response.",
         diffSummary: "Adds a history-synced blueprint package.",
         blueprintPackage: {
           schema: "hiveward.blueprint-package/v1",
@@ -3191,7 +3194,7 @@ describe("apiRouter", () => {
     }
   });
 
-  it("creates native OpenClaw chat sessions through the runtime adapter", async () => {
+  it("creates native chat sessions through the runtime adapter", async () => {
     const fixture = await createStoreFixture();
     const adapter = new TrackingAdapter();
     try {
@@ -3218,7 +3221,7 @@ describe("apiRouter", () => {
     }
   });
 
-  it("updates native OpenClaw chat session titles through the runtime adapter", async () => {
+  it("updates native chat session titles through the runtime adapter", async () => {
     const fixture = await createStoreFixture();
     const adapter = new TrackingAdapter();
     try {

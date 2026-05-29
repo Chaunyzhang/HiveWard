@@ -1,4 +1,4 @@
-import type { AgentPermissionProfile, OpenClawObjectRef, OpenClawObjectSource, OpenClawUsageFact } from "./openclaw";
+import type { AgentPermissionProfile, RuntimeObjectRef, RuntimeObjectSource, RuntimeUsageFact } from "./runtime";
 import { normalizeRuntimeAccessPolicy } from "./lifecycle";
 import type {
   ApprovalDecision,
@@ -182,7 +182,7 @@ export function isAgentBlueprintNode(node: BlueprintNode): node is BlueprintNode
   return node.type === "agent";
 }
 
-export function resolveAgentRuntimeSource(runtimeId: AgentRuntimeId): OpenClawObjectSource {
+export function resolveAgentRuntimeSource(runtimeId: AgentRuntimeId): RuntimeObjectSource {
   return runtimeId;
 }
 
@@ -346,7 +346,8 @@ export interface BlueprintRun {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCostUsd: number;
-  openclawRefs: OpenClawObjectRef[];
+  runtimeRefs: RuntimeObjectRef[];
+  openclawRefs?: RuntimeObjectRef[];
 }
 
 export interface BlueprintNodeRun {
@@ -364,8 +365,9 @@ export interface BlueprintNodeRun {
   input?: unknown;
   output?: unknown;
   error?: string;
-  usage?: OpenClawUsageFact;
-  openclawRef?: OpenClawObjectRef;
+  usage?: RuntimeUsageFact;
+  runtimeRef?: RuntimeObjectRef;
+  openclawRef?: RuntimeObjectRef;
 }
 
 export interface BlueprintNodeEvent {
@@ -385,7 +387,8 @@ export interface BlueprintNodeEvent {
     | "blueprint.run.failed";
   message: string;
   createdAt: string;
-  openclawRef?: OpenClawObjectRef;
+  runtimeRef?: RuntimeObjectRef;
+  openclawRef?: RuntimeObjectRef;
 }
 
 export interface BlueprintRunView {
@@ -449,7 +452,8 @@ export interface FinalRunResultCandidate {
   selectionReason: FinalRunResultSelectionReason;
   output: unknown;
   endedAt?: string;
-  openclawRef?: OpenClawObjectRef;
+  runtimeRef?: RuntimeObjectRef;
+  openclawRef?: RuntimeObjectRef;
 }
 
 export interface FinalRunNodeContext {
@@ -464,7 +468,8 @@ export interface FinalRunNodeContext {
   output?: unknown;
   error?: string;
   endedAt?: string;
-  openclawRef?: OpenClawObjectRef;
+  runtimeRef?: RuntimeObjectRef;
+  openclawRef?: RuntimeObjectRef;
 }
 
 export interface FinalRunResult {
@@ -633,7 +638,7 @@ function toFinalRunResultCandidate(
     selectionReason,
     output: candidate.nodeRun.output,
     endedAt: candidate.nodeRun.endedAt,
-    openclawRef: candidate.nodeRun.openclawRef
+    runtimeRef: readBlueprintNodeRunRuntimeRef(candidate.nodeRun)
   };
 }
 
@@ -650,8 +655,20 @@ function toFinalRunNodeContext(nodeRun: BlueprintNodeRun): FinalRunNodeContext {
     output: nodeRun.output,
     error: nodeRun.error,
     endedAt: nodeRun.endedAt,
-    openclawRef: nodeRun.openclawRef
+    runtimeRef: readBlueprintNodeRunRuntimeRef(nodeRun)
   };
+}
+
+export function readBlueprintNodeRunRuntimeRef(nodeRun: Pick<BlueprintNodeRun, "runtimeRef" | "openclawRef">): RuntimeObjectRef | undefined {
+  return nodeRun.runtimeRef ?? nodeRun.openclawRef;
+}
+
+export function readBlueprintNodeEventRuntimeRef(event: Pick<BlueprintNodeEvent, "runtimeRef" | "openclawRef">): RuntimeObjectRef | undefined {
+  return event.runtimeRef ?? event.openclawRef;
+}
+
+export function readBlueprintRunRuntimeRefs(run: Pick<BlueprintRun, "runtimeRefs" | "openclawRefs">): RuntimeObjectRef[] {
+  return run.runtimeRefs ?? run.openclawRefs ?? [];
 }
 
 function resolveFinalRunResultState(

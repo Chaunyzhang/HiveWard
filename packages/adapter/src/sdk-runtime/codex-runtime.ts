@@ -3,7 +3,7 @@ import { Codex, type ThreadEvent, type ThreadOptions, type TurnOptions, type Usa
 import type {
   AgentTaskResult,
   ChatStreamEvent,
-  OpenClawUsageFact,
+  RuntimeUsageFact,
   StartAgentTaskInput,
   StartedAgentTaskResult,
   WaitForAgentTaskInput
@@ -381,7 +381,7 @@ function requireConfiguredModel(modelId: string | undefined): void {
   }
 }
 
-function mapCodexUsage(input: { modelId?: string }, usage: Usage | null): OpenClawUsageFact {
+function mapCodexUsage(input: { modelId?: string }, usage: Usage | null): RuntimeUsageFact {
   return {
     id: `usage-${nanoid(10)}`,
     modelId: input.modelId ?? "codex",

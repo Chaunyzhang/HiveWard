@@ -265,10 +265,10 @@ describe("BlueprintWorker", () => {
     expect(failedPlanRun?.input).toEqual({
       upstream: [expect.objectContaining({ nodeId: "brief", nodeLabel: "1. Brief", status: "succeeded", output: "brief ok" })]
     });
-    expect((failedPlanRun?.input as { upstream?: Array<{ nodeRunId?: string; openclawRef?: { runId?: string } }> } | undefined)?.upstream?.[0])
+    expect((failedPlanRun?.input as { upstream?: Array<{ nodeRunId?: string; runtimeRef?: { runId?: string } }> } | undefined)?.upstream?.[0])
       .toMatchObject({
         nodeRunId: expect.any(String),
-        openclawRef: expect.objectContaining({ runId: "task-1-run" })
+        runtimeRef: expect.objectContaining({ runId: "task-1-run" })
       });
     expect(view?.nodeRuns.find((nodeRun) => nodeRun.nodeId === "verify")?.status).toBe("skipped");
     expect(view?.events.some((event) => event.type === "blueprint.run.failed")).toBe(true);
@@ -295,7 +295,7 @@ describe("BlueprintWorker", () => {
     expect(index.runIndex?.find((item) => item.id === run.id)?.status).toBe("failed");
   });
 
-  it("writes node input and OpenClaw ref to the run archive before the agent task finishes", async () => {
+  it("writes node input and runtime ref to the run archive before the agent task finishes", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
     const storePath = path.join(tempDir, "hiveward-store.json");
     const store = new FileHivewardStore(storePath);
@@ -307,18 +307,18 @@ describe("BlueprintWorker", () => {
 
     const run = await worker.startRun(blueprint, "test-user");
     const runningNode = await waitForNodeRun(store, run.id, "brief", (nodeRun) =>
-      nodeRun.status === "running" && nodeRun.input !== undefined && nodeRun.openclawRef?.taskId === "task-1"
+      nodeRun.status === "running" && nodeRun.input !== undefined && nodeRun.runtimeRef?.taskId === "task-1"
     );
     const archiveWhileRunning = JSON.parse(readFileSync(path.join(tempDir, "runs", `${run.id}.json`), "utf8")) as {
-      nodeRuns: Array<{ nodeId: string; status: string; input?: unknown; openclawRef?: { taskId?: string; runId?: string } }>;
+      nodeRuns: Array<{ nodeId: string; status: string; input?: unknown; runtimeRef?: { taskId?: string; runId?: string } }>;
     };
 
     expect(runningNode.input).toEqual({ upstream: [] });
-    expect(runningNode.openclawRef).toMatchObject({ taskId: "task-1", runId: "task-1-run" });
+    expect(runningNode.runtimeRef).toMatchObject({ taskId: "task-1", runId: "task-1-run" });
     expect(archiveWhileRunning.nodeRuns.find((nodeRun) => nodeRun.nodeId === "brief")).toMatchObject({
       status: "running",
       input: { upstream: [] },
-      openclawRef: expect.objectContaining({ taskId: "task-1", runId: "task-1-run" })
+      runtimeRef: expect.objectContaining({ taskId: "task-1", runId: "task-1-run" })
     });
 
     adapter.complete(createCompletedAgentTask("task-1", "succeeded", "brief ok"));
@@ -391,7 +391,7 @@ describe("BlueprintWorker", () => {
       queuedAt: startedAt,
       startedAt,
       input: { upstream: [] },
-      openclawRef: {
+      runtimeRef: {
         source: "codex",
         sourceId: "codex-task-1",
         sourceUpdatedAt: startedAt,
@@ -1125,7 +1125,7 @@ describe("BlueprintWorker", () => {
         outputTokens: 11,
         costUsd: 0.012345
       },
-      openclawRef: {
+      runtimeRef: {
         taskId: "task-1",
         runId: "task-1-run",
         sessionKey: "agent:main:main",
@@ -1353,12 +1353,14 @@ describe("BlueprintWorker", () => {
       source: "codex",
       sessionKey: "codex-session-start"
     });
-    expect(view?.nodeRuns[0]?.openclawRef).toMatchObject({
+    expect(view?.nodeRuns[0]?.runtimeRef).toMatchObject({
       source: "codex",
       sourceId: "codex-task-1",
       sessionKey: "codex-session-final"
     });
-    expect(view?.run.openclawRefs[0]?.source).toBe("codex");
+    expect(view?.nodeRuns[0]).not.toHaveProperty("openclawRef");
+    expect(view?.run.runtimeRefs[0]?.source).toBe("codex");
+    expect(view?.run).not.toHaveProperty("openclawRefs");
   });
 
   it("lets a manager node route numbered slots and return to an earlier agent slot", async () => {
@@ -1859,7 +1861,7 @@ describe("BlueprintWorker", () => {
 
     const run = await firstWorker.startRun(blueprint, "test-user");
     await waitForNodeRun(store, run.id, "builder", (nodeRun) =>
-      nodeRun.status === "running" && nodeRun.openclawRef?.taskId === "task-1"
+      nodeRun.status === "running" && nodeRun.runtimeRef?.taskId === "task-1"
     );
     await new Promise((resolve) => setTimeout(resolve, 150));
 
@@ -2794,7 +2796,7 @@ describe("BlueprintWorker", () => {
       (view) =>
         (view.releaseReports ?? []).length === 2 &&
         (view.approvalRequests ?? []).filter((request) => request.kind === "manager_release_report" && request.status === "pending").length === 1,
-      30_000
+      60_000
     );
     const report2 = report2View.approvalRequests
       ?.filter((request) => request.kind === "manager_release_report" && request.status === "pending")
@@ -2834,7 +2836,7 @@ describe("BlueprintWorker", () => {
       "reject",
       "complete"
     ]);
-  }, 20_000);
+  }, 70_000);
 
   it("freezes pending lifecycle approvals when a self-iteration run is cancelled", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));

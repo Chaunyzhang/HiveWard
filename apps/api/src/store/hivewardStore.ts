@@ -76,7 +76,7 @@ export type FailNodeRunInput = NodeRunTransitionInput & {
 export type CancelNodeRunInput = NodeRunTransitionInput & {
   endedAt?: string;
   reason: string;
-  openclawRef?: BlueprintNodeRun["openclawRef"];
+  runtimeRef?: BlueprintNodeRun["runtimeRef"];
 };
 
 export type PublishAgentOutputInput = NodeRunTransitionInput & {
@@ -86,7 +86,6 @@ export type PublishAgentOutputInput = NodeRunTransitionInput & {
   output: unknown;
   rawResult?: unknown;
   usage?: unknown;
-  openclawRef?: unknown;
   artifacts: Artifact[];
   humanReport?: AgentHumanReport;
   handoff?: AgentHandoff;
@@ -199,7 +198,7 @@ export interface HivewardStore {
   createQueuedNodeRun(nodeRun: BlueprintNodeRun): Promise<BlueprintNodeRun>;
   claimNodeRun(input: { nodeRunId: string; owner: string; leaseMs: number }): Promise<ClaimNodeRunResult>;
   renewNodeRunLease(input: { nodeRunId: string; owner: string; workerEpoch: number; leaseMs: number }): Promise<boolean>;
-  startNodeRun(input: NodeRunTransitionInput & { startedAt?: string; input?: unknown; openclawRef?: BlueprintNodeRun["openclawRef"] }): Promise<boolean>;
+  startNodeRun(input: NodeRunTransitionInput & { startedAt?: string; input?: unknown; runtimeRef?: BlueprintNodeRun["runtimeRef"] }): Promise<boolean>;
   completeNodeRun(input: CompleteNodeRunInput): Promise<boolean>;
   failNodeRun(input: FailNodeRunInput): Promise<boolean>;
   cancelNodeRun(input: CancelNodeRunInput): Promise<boolean>;
