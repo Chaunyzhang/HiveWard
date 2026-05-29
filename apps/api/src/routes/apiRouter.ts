@@ -1,7 +1,7 @@
 import { Router, type Response } from "express";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, constants, existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -3273,16 +3273,13 @@ function readHermesProfiles(): HarnessProfileOption[] {
         ...rootConfig,
         ...(profilePath ? readHermesProfileConfig(profilePath) : {})
       };
-      const merged = {
+      return {
         ...profile,
         modelId: profile.modelId ?? localConfig.modelId,
         provider: localConfig.provider,
         path: profilePath,
         workspace: localConfig.workspace
       };
-      if (profile.alias) return merged;
-      const alias = `hermes-${profile.id}`;
-      return commandExistsOnPath(alias) ? { ...merged, alias } : merged;
     });
   } catch {
     return [];
@@ -3483,12 +3480,16 @@ function parseHermesProfileList(output: string): HarnessProfileOption[] {
     profiles.push({
       id,
       label: id,
-      modelId: modelId && modelId !== "—" ? modelId : undefined,
-      alias: alias && alias !== "—" ? alias : undefined,
+      modelId: modelId && !isMissingHermesProfileCell(modelId) ? modelId : undefined,
+      alias: alias && !isMissingHermesProfileCell(alias) ? alias : undefined,
       isDefault: isDefault || undefined
     });
   }
   return profiles;
+}
+
+function isMissingHermesProfileCell(value: string): boolean {
+  return value === "-" || value === "—";
 }
 
 function detectCliVersion(command: string): { installed: boolean; version?: string; error?: string } {
@@ -3509,20 +3510,6 @@ function detectCliVersion(command: string): { installed: boolean; version?: stri
   } catch (error) {
     return { installed: false, error: error instanceof Error ? error.message : String(error) };
   }
-}
-
-function commandExistsOnPath(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  if (!/^[A-Za-z0-9._-]+$/.test(command)) return false;
-  const paths = (env.PATH ?? "").split(":").filter(Boolean);
-  for (const path of paths) {
-    try {
-      accessSync(join(path, command), constants.X_OK);
-      return true;
-    } catch {
-      continue;
-    }
-  }
-  return false;
 }
 
 function readdirSyncSafe(path: string): string[] {

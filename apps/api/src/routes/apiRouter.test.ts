@@ -863,6 +863,7 @@ describe("apiRouter", () => {
       "  printf '%s\\n' ' ───────────────    ───────────────────────────    ───────────    ───────────    ────────────────────'",
       "  printf '%s\\n' ' ◆ceo             hermes-primary-test            stopped      hw-ceo       —'",
       "  printf '%s\\n' '  architect       hermes-profile-model-test                      stopped      —            —'",
+      "  printf '%s\\n' '  researcher      hermes-research-model-test      stopped      -            —'",
       "  exit 0",
       "fi",
       "exit 1"
@@ -949,7 +950,8 @@ describe("apiRouter", () => {
         ]);
         expect(hermesStatus?.profiles).toEqual([
           { id: "ceo", label: "ceo", alias: "hw-ceo", modelId: "hermes-primary-test", isDefault: true },
-          { id: "architect", label: "architect", alias: "hermes-architect", modelId: "hermes-profile-model-test" }
+          { id: "architect", label: "architect", modelId: "hermes-profile-model-test" },
+          { id: "researcher", label: "researcher", modelId: "hermes-research-model-test" }
         ]);
       });
     } finally {

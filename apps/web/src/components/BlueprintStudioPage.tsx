@@ -117,6 +117,7 @@ import {
   buildAgentHarnessOptions,
   buildArchitectureRoleDetailRows,
   buildBlueprintModelSelectOptions,
+  buildHermesProfileSelectOptions,
   buildSummaryHarnessOptions,
   createBlueprintCanvasWorld,
   getBlueprintSelectOutsidePointerListenerOptions,
@@ -2932,16 +2933,13 @@ function buildHermesProfileOptions(
   harnessStatuses: HarnessStatus[] | undefined,
   t: Messages
 ): BlueprintSelectOption[] {
-  if (runtimeId !== "hermes") return [];
   const profiles = harnessStatuses?.find((status) => status.id === "hermes")?.profiles ?? [];
-  return [
-    { value: "", label: t.common.defaultOption },
-    ...profiles.map((profile) => ({
-      value: profile.alias ?? profile.id,
-      label: profile.alias ? `${profile.label} (${profile.alias})` : profile.label,
-      badgeLabel: profile.isDefault ? t.common.defaultOption : undefined
-    }))
-  ];
+  return buildHermesProfileSelectOptions({
+    runtimeId,
+    profiles,
+    defaultLabel: t.common.defaultOption,
+    defaultBadgeLabel: t.common.defaultOption
+  });
 }
 
 function buildBlueprintRuntimeModelOptions(

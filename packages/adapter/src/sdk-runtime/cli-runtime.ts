@@ -78,9 +78,13 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
     try {
       const prompt = buildSdkChatPrompt(input.message, input.attachments);
       const streamParser = createCliStreamParser(this.harnessId);
-      const profileId = this.harnessId === "hermes" ? normalizeHermesProfileId(input.profileId) : undefined;
+      const command = await this.resolveCommand({
+        profileId: input.profileId,
+        cwd: this.options.workspaceRoot,
+        signal: abortController.signal
+      });
       const result = await this.runCliCommand({
-        command: profileId ? profileId : this.config.command,
+        command,
         args: buildCliChatArgs(this.harnessId, {
           prompt,
           workingDirectory: this.options.workspaceRoot,
@@ -228,9 +232,13 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
 
       const permissionProfile = normalizePermissionProfile(input.permissionProfile);
       const prompt = buildPromptEnvelope(input);
-      const profileId = this.harnessId === "hermes" ? normalizeHermesProfileId(input.profileId) : undefined;
+      const command = await this.resolveCommand({
+        profileId: input.profileId,
+        cwd: workingDirectory,
+        signal: abortController.signal
+      });
       const result = await this.runCliCommand({
-        command: profileId ? profileId : this.config.command,
+        command,
         args: buildCliTaskArgs(this.harnessId, {
           prompt,
           workingDirectory,
@@ -313,6 +321,20 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
       source: this.harnessId,
       status: "cancelled",
       error: timedOut ? formatAgentSdkError("timeout", "Run exceeded timeoutMs.") : formatAgentSdkError("cancelled", "Run was cancelled.")
+    });
+  }
+
+  private async resolveCommand(input: { profileId?: string; cwd: string; signal: AbortSignal }): Promise<string> {
+    if (this.harnessId !== "hermes") return this.config.command;
+    const profileId = normalizeHermesProfileId(input.profileId);
+    if (!profileId) return this.config.command;
+    return resolveHermesProfileCommand({
+      profileId,
+      defaultCommand: this.config.command,
+      runCliCommand: this.runCliCommand,
+      cwd: input.cwd,
+      env: this.env,
+      signal: input.signal
     });
   }
 }
@@ -477,6 +499,63 @@ function normalizeHermesProfileId(profileId: string | undefined): string | undef
   const trimmed = profileId?.trim();
   if (!trimmed || trimmed === "default") return undefined;
   return /^[A-Za-z0-9._-]+$/.test(trimmed) ? trimmed : undefined;
+}
+
+type HermesProfileCommandOption = {
+  id: string;
+  alias?: string;
+};
+
+async function resolveHermesProfileCommand(input: {
+  profileId: string;
+  defaultCommand: string;
+  runCliCommand: RunCliCommand;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  signal: AbortSignal;
+}): Promise<string> {
+  const result = await input.runCliCommand({
+    command: input.defaultCommand,
+    args: ["profile", "list"],
+    cwd: input.cwd,
+    env: input.env,
+    signal: input.signal
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`Hermes profile list failed: ${formatCliFailure(result)}`);
+  }
+
+  const profiles = parseHermesProfileCommandOptions(result.stdout || result.stderr || "");
+  const profile = profiles.find((item) => item.id === input.profileId);
+  if (profile?.alias) return profile.alias;
+
+  throw new Error(
+    profile
+      ? `Hermes profile "${input.profileId}" does not have an executable alias. Create one before using it in HiveWard.`
+      : `Hermes profile "${input.profileId}" was not found.`
+  );
+}
+
+function parseHermesProfileCommandOptions(output: string): HermesProfileCommandOption[] {
+  const profiles: HermesProfileCommandOption[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("Profile") || line.startsWith("─")) continue;
+    const normalized = line.replace(/^◆\s*/, "").trim();
+    const [id, _modelId, _gateway, alias] = normalized.split(/\s+/);
+    if (!id || id === "Profile" || seen.has(id)) continue;
+    seen.add(id);
+    profiles.push({
+      id,
+      alias: alias && !isMissingHermesProfileCell(alias) ? alias : undefined
+    });
+  }
+  return profiles;
+}
+
+function isMissingHermesProfileCell(value: string): boolean {
+  return value === "-" || value === "—";
 }
 
 function runCliCommandWithSpawn(input: CliCommandInput): Promise<CliCommandResult> {
