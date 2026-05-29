@@ -18,6 +18,7 @@ import {
   ListChecks,
   MessageSquareText,
   Moon,
+  Plus,
   Puzzle,
   Radio,
   RefreshCw,
@@ -37,7 +38,10 @@ import type {
   ConfigureOpenClawChannelRequest,
   ConfigureOpenClawModelAuthRequest,
   DashboardWidgetType,
+  CreateHermesChannelRequest,
+  CreateHermesProfileRequest,
   HarnessId,
+  HermesConfigResponse,
   HarnessSkillInstallStatus,
   HarnessSkillStatusResponse,
   HarnessStatus,
@@ -91,6 +95,7 @@ import {
   CompanyPage,
   ConfiguredModelCard,
   HistoryPage,
+  IdentityTitle,
   ModelsPage,
   RunsPage,
   SkillsPage
@@ -115,7 +120,11 @@ const sidebarIcons = {
   googleConfig: Settings,
   cursorConfig: Settings,
   opencodeConfig: Settings,
-  hermesConfig: Settings
+  hermesConfig: Settings,
+  hermesModels: Database,
+  hermesAgents: Bot,
+  hermesSkills: Puzzle,
+  hermesChannels: Radio
 };
 
 const RUN_POLL_INTERVAL_MS = 2500;
@@ -196,6 +205,7 @@ export function App() {
   const [hivewardUpdateResult, setHivewardUpdateResult] = useState<ApplyHivewardUpdateResponse | undefined>();
   const [hivewardUpdateChecking, setHivewardUpdateChecking] = useState(false);
   const [harnessStatuses, setHarnessStatuses] = useState<HarnessStatus[]>([]);
+  const [hermesConfig, setHermesConfig] = useState<HermesConfigResponse | undefined>();
   const [claudeCodeModelConfig, setClaudeCodeModelConfig] = useState<ClaudeCodeModelConfig | undefined>();
   const [claudeCodeModelPresets, setClaudeCodeModelPresets] = useState<ClaudeCodeModelPreset[]>([]);
   const [claudeCodeSavedModelProfiles, setClaudeCodeSavedModelProfiles] = useState<ClaudeCodeSavedModelProfile[]>([]);
@@ -335,6 +345,7 @@ export function App() {
         nextOpenClawWizard,
         nextOpenClawModelUsage,
         nextHarnessStatuses,
+        nextHermesConfig,
         nextClaudeCodeModelResponse,
         nextHarnessSkillStatuses,
         nextRunSummaries,
@@ -351,6 +362,7 @@ export function App() {
         api.getOpenClawConfigWizard(),
         api.getOpenClawModelUsage().catch(() => []),
         api.getHarnessStatus().catch(() => []),
+        api.getHermesConfig().catch(() => undefined),
         api.getClaudeCodeModelConfig().catch(() => undefined),
         loadHarnessSkillStatuses(),
         api.listBlueprintRuns(),
@@ -379,6 +391,7 @@ export function App() {
       setOpenClawWizard(nextOpenClawWizard);
       setOpenClawModelUsage(nextOpenClawModelUsage);
       setHarnessStatuses(nextHarnessStatuses);
+      setHermesConfig(nextHermesConfig);
       setClaudeCodeModelConfig(nextClaudeCodeModelResponse?.config);
       setClaudeCodeModelPresets(nextClaudeCodeModelResponse?.presets ?? []);
       setClaudeCodeSavedModelProfiles(nextClaudeCodeModelResponse?.savedProfiles ?? []);
@@ -916,17 +929,41 @@ export function App() {
   const refreshHarnessStatus = useCallback(
     () =>
       withBusy("refreshHarnessStatus", async () => {
-        const [nextHarnessStatuses, nextClaudeCodeModelResponse, nextHarnessSkillStatuses] = await Promise.all([
+        const [nextHarnessStatuses, nextHermesConfig, nextClaudeCodeModelResponse, nextHarnessSkillStatuses] = await Promise.all([
           api.getHarnessStatus(),
+          api.getHermesConfig().catch(() => undefined),
           api.getClaudeCodeModelConfig().catch(() => undefined),
           loadHarnessSkillStatuses()
         ]);
         setHarnessStatuses(nextHarnessStatuses);
+        setHermesConfig(nextHermesConfig);
         setClaudeCodeModelConfig(nextClaudeCodeModelResponse?.config);
         setClaudeCodeModelPresets(nextClaudeCodeModelResponse?.presets ?? []);
         setClaudeCodeSavedModelProfiles(nextClaudeCodeModelResponse?.savedProfiles ?? []);
         setHarnessSkillStatuses(nextHarnessSkillStatuses);
       }),
+    [withBusy]
+  );
+
+  const addHermesProfile = useCallback(
+    (input: CreateHermesProfileRequest) => {
+      void withBusy("addHermesProfile", async () => {
+        const nextHermesConfig = await api.addHermesProfile(input);
+        const nextHarnessStatuses = await api.getHarnessStatus().catch(() => harnessStatuses);
+        setHermesConfig(nextHermesConfig);
+        setHarnessStatuses(nextHarnessStatuses);
+      });
+    },
+    [harnessStatuses, withBusy]
+  );
+
+  const addHermesChannel = useCallback(
+    (input: CreateHermesChannelRequest) => {
+      void withBusy("addHermesChannel", async () => {
+        const nextHermesConfig = await api.addHermesChannel(input);
+        setHermesConfig(nextHermesConfig);
+      });
+    },
     [withBusy]
   );
 
@@ -1772,6 +1809,60 @@ export function App() {
         />
       );
     }
+    if (section === "hermesModels") {
+      return (
+        <HermesModelsPage
+          title={t.pages.hermesModels?.title ?? "Hermes Models"}
+          description={t.pages.hermesModels?.description ?? ""}
+          status={hermesHarnessStatus}
+          language={language}
+          busy={busyAction === "refreshHarnessStatus"}
+          onRefresh={refreshHarnessStatus}
+        />
+      );
+    }
+    if (section === "hermesAgents") {
+      return (
+        <HermesAgentsPage
+          title={t.pages.hermesAgents?.title ?? "Hermes Agents"}
+          description={t.pages.hermesAgents?.description ?? ""}
+          config={hermesConfig}
+          status={hermesHarnessStatus}
+          language={language}
+          busy={busyAction === "addHermesProfile"}
+          refreshBusy={busyAction === "refreshHarnessStatus"}
+          onRefresh={refreshHarnessStatus}
+          onAddProfile={addHermesProfile}
+        />
+      );
+    }
+    if (section === "hermesSkills") {
+      return (
+        <HarnessSkillsPage
+          title={t.pages.hermesSkills?.title ?? "Hermes Skills"}
+          description={t.pages.hermesSkills?.description ?? ""}
+          language={language}
+          skillStatus={harnessSkillStatuses.hermes}
+          hermesSkills={hermesConfig?.skills}
+          busy={installingHermesSkills}
+          onInstallSkills={() => installHarnessSkills("hermes")}
+        />
+      );
+    }
+    if (section === "hermesChannels") {
+      return (
+        <HermesChannelsPage
+          title={t.pages.hermesChannels?.title ?? "Hermes Channels"}
+          description={t.pages.hermesChannels?.description ?? ""}
+          config={hermesConfig}
+          language={language}
+          busy={busyAction === "addHermesChannel"}
+          refreshBusy={busyAction === "refreshHarnessStatus"}
+          onRefresh={refreshHarnessStatus}
+          onAddChannel={addHermesChannel}
+        />
+      );
+    }
     if (section === "schedule") {
       return (
         <HistoryPage
@@ -2560,6 +2651,308 @@ function ClaudeCodeModelsPage({
         </div>
       </section>
     </>
+  );
+}
+
+function HermesModelsPage({
+  title,
+  description,
+  status,
+  language,
+  busy,
+  onRefresh
+}: {
+  title: string;
+  description: string;
+  status?: HarnessStatus;
+  language: Language;
+  busy: boolean;
+  onRefresh: () => void;
+}) {
+  const copy = language === "zh-CN"
+    ? { refresh: "\u91cd\u65b0\u68c0\u67e5", refreshing: "\u68c0\u67e5\u4e2d", empty: "\u5c1a\u672a\u89e3\u6790\u5230 Hermes \u6a21\u578b\u3002", usage: "\u7528\u91cf", calls: "\u8c03\u7528", tokens: "Token", cost: "\u8d39\u7528", recent7d: "\u6700\u8fd1 7 \u5929", defaultOption: "\u9ed8\u8ba4" }
+    : { refresh: "Refresh", refreshing: "Checking", empty: "No Hermes models have been resolved.", usage: "Usage", calls: "Calls", tokens: "Tokens", cost: "Cost", recent7d: "Last 7 days", defaultOption: "Default" };
+  const models = status?.models ?? [];
+  return (
+    <section className="page-grid">
+      <div className="content-card stack-card">
+        <div className="card-toolbar">
+          <div className="card-title-block">
+            <h3>{title}</h3>
+            <p>{description}</p>
+          </div>
+          <button type="button" title={copy.refresh} disabled={busy} onClick={onRefresh}>
+            <RefreshCw size={16} className={busy ? "spin" : undefined} />
+            {busy ? copy.refreshing : copy.refresh}
+          </button>
+        </div>
+        <div className="model-card-grid">
+          {models.length ? models.map((model) => (
+            <ConfiguredModelCard
+              key={model.id}
+              model={{ id: model.id, label: model.label, provider: model.provider ?? "hermes" }}
+              badgeLabel={model.isDefault ? copy.defaultOption : model.provider}
+              copy={copy}
+              language={language}
+            />
+          )) : <div className="empty-state page-empty">{copy.empty}</div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function HermesAgentsPage({
+  title,
+  description,
+  config,
+  status,
+  language,
+  busy,
+  refreshBusy,
+  onRefresh,
+  onAddProfile
+}: {
+  title: string;
+  description: string;
+  config?: HermesConfigResponse;
+  status?: HarnessStatus;
+  language: Language;
+  busy: boolean;
+  refreshBusy: boolean;
+  onRefresh: () => void;
+  onAddProfile: (input: CreateHermesProfileRequest) => void;
+}) {
+  const copy = language === "zh-CN"
+    ? { configured: "已配置 Agent", add: "添加 Agent", adding: "添加中", refresh: "重新检查", refreshing: "检查中", name: "Profile ID", description: "描述", cloneFrom: "从 Profile 复制", noClone: "不复制", defaultBadge: "默认", defaultModel: "默认模型", provider: "提供方", alias: "Alias", path: "Agent 路径", workspace: "工作区", empty: "尚未解析到 Hermes Profile。", hint: "这里的每个 Agent 对应到 Hermes 里面的每个 Profile。" }
+    : { configured: "Configured agents", add: "Add Agent", adding: "Adding", refresh: "Refresh", refreshing: "Checking", name: "Profile ID", description: "Description", cloneFrom: "Clone from profile", noClone: "Do not clone", defaultBadge: "Default", defaultModel: "Default model", provider: "Provider", alias: "Alias", path: "Agent path", workspace: "Workspace", empty: "No Hermes profiles have been resolved.", hint: "Each Agent here maps to one Hermes profile." };
+  const profiles = config?.profiles ?? status?.profiles ?? [];
+  const [name, setName] = useState("");
+  const [profileDescription, setProfileDescription] = useState("");
+  const [cloneFrom, setCloneFrom] = useState("");
+  const submit = () => {
+    const nextName = name.trim();
+    if (!nextName || busy) return;
+    onAddProfile({ name: nextName, description: profileDescription.trim() || undefined, cloneFrom: cloneFrom || undefined });
+    setName("");
+    setProfileDescription("");
+  };
+  return (
+    <section className="page-grid">
+      <div className="content-card stack-card">
+        <div className="card-toolbar">
+          <div className="card-title-block">
+            <h3>{copy.configured}</h3>
+            <p>{copy.hint}</p>
+          </div>
+          <button type="button" title={copy.refresh} disabled={refreshBusy} onClick={onRefresh}>
+            <RefreshCw size={16} className={refreshBusy ? "spin" : undefined} />
+            {refreshBusy ? copy.refreshing : copy.refresh}
+          </button>
+        </div>
+        <div className="model-card-grid">
+          {profiles.length ? (
+            profiles.map((profile) => (
+              <article key={profile.id} className="model-card">
+                <div className="model-card-head">
+                  <IdentityTitle kind="agent" id={profile.id} label={profile.label} />
+                  {profile.isDefault && <span className="status-pill status-default">{copy.defaultBadge}</span>}
+                </div>
+                <div className="model-card-main">
+                  <code>{profile.path ?? profile.id}</code>
+                </div>
+                <div className="model-card-meta">
+                  <span>{`${copy.defaultModel}: ${profile.modelId ?? "-"}`}</span>
+                  <span>{`${copy.provider}: ${profile.provider ?? "-"}`}</span>
+                  <span>{`${copy.workspace}: ${profile.workspace ?? "-"}`}</span>
+                  <span>{`${copy.alias}: ${profile.alias ?? "-"}`}</span>
+                </div>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state page-empty">{copy.empty}</div>
+          )}
+        </div>
+      </div>
+      <div className="content-card stack-card">
+        <div className="card-toolbar">
+          <div className="card-title-block">
+            <h3>{copy.add}</h3>
+            <p>{description}</p>
+          </div>
+        </div>
+        <div className="form-grid">
+          <label>
+            <span>{copy.name}</span>
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="researcher" />
+          </label>
+          <label>
+            <span>{copy.cloneFrom}</span>
+            <select value={cloneFrom} onChange={(event) => setCloneFrom(event.target.value)}>
+              <option value="">{copy.noClone}</option>
+              {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+            </select>
+          </label>
+          <label className="field-span-full">
+            <span>{copy.description}</span>
+            <input value={profileDescription} onChange={(event) => setProfileDescription(event.target.value)} />
+          </label>
+        </div>
+        <div className="card-actions">
+          <button type="button" className="primary-action" disabled={busy || !name.trim()} onClick={submit}>
+            {busy ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
+            {busy ? copy.adding : copy.add}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function HarnessSkillsPage({
+  title,
+  description,
+  language,
+  skillStatus,
+  hermesSkills,
+  busy,
+  onInstallSkills
+}: {
+  title: string;
+  description: string;
+  language: Language;
+  skillStatus?: HarnessSkillStatusResponse;
+  hermesSkills?: HermesConfigResponse["skills"];
+  busy: boolean;
+  onInstallSkills: () => void;
+}) {
+  const copy = language === "zh-CN"
+    ? { installed: "已安装 Hermes Skill", profile: "Profile", path: "路径", source: "数据源", count: (value: number) => `${value.toLocaleString(language)} Skills`, empty: "尚未扫描到 Hermes 已安装 Skill。" }
+    : { installed: "Installed Hermes Skills", profile: "Profile", path: "Path", source: "Source", count: (value: number) => `${value.toLocaleString(language)} Skills`, empty: "No installed Hermes skills were scanned." };
+  return (
+    <section className="page-grid">
+      <div className="content-card stack-card">
+        <div className="card-toolbar">
+          <div className="card-title-block">
+            <h3>{title}</h3>
+            <p>{description}</p>
+          </div>
+          <span className="status-pill status-running">{copy.count(hermesSkills?.length ?? 0)}</span>
+        </div>
+        <div className="model-card-grid">
+          {hermesSkills?.length ? (
+            hermesSkills.map((skill) => (
+              <article key={`${skill.profileId ?? "default"}:${skill.id}:${skill.path}`} className="model-card">
+                <div className="model-card-head">
+                  <div className="model-card-main">
+                    <strong>{skill.label}</strong>
+                    <code>{skill.id}</code>
+                  </div>
+                  <span className="status-pill status-succeeded">{skill.profileId ?? "default"}</span>
+                </div>
+                <div className="model-card-main">
+                  <code>{skill.path}</code>
+                </div>
+                <div className="model-card-meta">
+                  <span>{`${copy.source}: Hermes`}</span>
+                  <span>{`${copy.profile}: ${skill.profileId ?? "default"}`}</span>
+                </div>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state page-empty">{copy.empty}</div>
+          )}
+        </div>
+      </div>
+      <HarnessSkillsCard ui={openClawPanelSkillCopy(language)} skillStatus={skillStatus} language={language} busy={busy} onInstallSkills={onInstallSkills} />
+    </section>
+  );
+}
+
+function HermesChannelsPage({
+  title,
+  description,
+  config,
+  language,
+  busy,
+  refreshBusy,
+  onRefresh,
+  onAddChannel
+}: {
+  title: string;
+  description: string;
+  config?: HermesConfigResponse;
+  language: Language;
+  busy: boolean;
+  refreshBusy: boolean;
+  onRefresh: () => void;
+  onAddChannel: (input: CreateHermesChannelRequest) => void;
+}) {
+  const copy = language === "zh-CN"
+    ? { configured: "已配置频道", add: "添加频道配置", adding: "添加中", refresh: "重新检查", refreshing: "检查中", enabled: "已启用", platform: "平台", profile: "Profile", id: "频道 ID", name: "名称", type: "类型", threadId: "Thread ID", source: "目录", empty: "尚未解析到 Hermes 频道。" }
+    : { configured: "Configured channels", add: "Add channel config", adding: "Adding", refresh: "Refresh", refreshing: "Checking", enabled: "Enabled", platform: "Platform", profile: "Profile", id: "Channel ID", name: "Name", type: "Type", threadId: "Thread ID", source: "Directory", empty: "No Hermes channels have been resolved." };
+  const channels = config?.channels ?? [];
+  const [draft, setDraft] = useState<CreateHermesChannelRequest>({ platform: "feishu", id: "", name: "", type: "group" });
+  const updateDraft = (field: keyof CreateHermesChannelRequest, value: string) => setDraft((current) => ({ ...current, [field]: value }));
+  const submit = () => {
+    if (!draft.platform.trim() || !draft.id.trim() || busy) return;
+    onAddChannel(draft);
+    setDraft({ platform: draft.platform, id: "", name: "", type: draft.type });
+  };
+  return (
+    <section className="page-grid">
+      <div className="content-card stack-card">
+        <div className="card-toolbar">
+          <div className="card-title-block">
+            <h3>{copy.configured}</h3>
+            <p>{description}</p>
+          </div>
+          <button type="button" title={copy.refresh} disabled={refreshBusy} onClick={onRefresh}>
+            <RefreshCw size={16} className={refreshBusy ? "spin" : undefined} />
+            {refreshBusy ? copy.refreshing : copy.refresh}
+          </button>
+        </div>
+        <div className="model-card-grid">
+          {channels.length ? channels.map((channel) => (
+            <article key={`${channel.profileId ?? "default"}:${channel.platform}:${channel.id}:${channel.threadId ?? ""}`} className="model-card">
+              <div className="model-card-head">
+                <IdentityTitle kind="channel" id={channel.platform} label={channel.name} />
+                <span className="status-pill status-succeeded">{copy.enabled}</span>
+              </div>
+              <div className="model-card-main">
+                <code>{`${channel.platform}:${channel.id}`}</code>
+              </div>
+              <div className="model-card-meta">
+                <span>{`${copy.profile}: ${channel.profileId ?? "default"}`}</span>
+                <span>{`${copy.type}: ${channel.type ?? "-"}`}</span>
+                <span>{`${copy.threadId}: ${channel.threadId ?? "-"}`}</span>
+              </div>
+            </article>
+          )) : <div className="empty-state page-empty">{copy.empty}</div>}
+        </div>
+      </div>
+      <div className="content-card stack-card">
+        <div className="card-toolbar">
+          <div className="card-title-block">
+            <h3>{copy.add}</h3>
+            <p>{config?.channelDirectoryPath ?? copy.source}</p>
+          </div>
+        </div>
+        <div className="form-grid">
+          <label><span>{copy.platform}</span><input value={draft.platform} onChange={(event) => updateDraft("platform", event.target.value)} /></label>
+          <label><span>{copy.id}</span><input value={draft.id} onChange={(event) => updateDraft("id", event.target.value)} /></label>
+          <label><span>{copy.name}</span><input value={draft.name ?? ""} onChange={(event) => updateDraft("name", event.target.value)} /></label>
+          <label><span>{copy.type}</span><input value={draft.type ?? ""} onChange={(event) => updateDraft("type", event.target.value)} /></label>
+          <label className="field-span-full"><span>{copy.threadId}</span><input value={draft.threadId ?? ""} onChange={(event) => updateDraft("threadId", event.target.value)} /></label>
+        </div>
+        <div className="card-actions">
+          <button type="button" className="primary-action" disabled={busy || !draft.platform.trim() || !draft.id.trim()} onClick={submit}>
+            {busy ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
+            {busy ? copy.adding : copy.add}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -166,6 +166,7 @@ export interface StartAgentTaskInput {
   nodeRunId: string;
   source: OpenClawObjectSource;
   agentId?: string;
+  profileId?: string;
   agentName: string;
   prompt: string;
   modelId?: string;

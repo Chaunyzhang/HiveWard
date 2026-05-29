@@ -7,6 +7,8 @@ import type {
   ConfigureOpenClawChannelRequest,
   ConfigureOpenClawModelAuthRequest,
   CreateCompanyRequest,
+  CreateHermesChannelRequest,
+  CreateHermesProfileRequest,
   CreateOpenClawAgentRequest,
   CreateBlueprintRequest,
   CreateBlueprintProposalRequest,
@@ -19,6 +21,7 @@ import type {
   HarnessSkillStatusResponse,
   HarnessStatus,
   HarnessStatusResponse,
+  HermesConfigResponse,
   ApplyHivewardUpdateResponse,
   ApprovalRequest,
   ApprovalRequestResponse,
@@ -268,6 +271,24 @@ export const api = {
   async getHarnessStatus(): Promise<HarnessStatus[]> {
     const response = await request<HarnessStatusResponse>("/api/harness-status");
     return response.statuses;
+  },
+
+  async getHermesConfig(): Promise<HermesConfigResponse> {
+    return request<HermesConfigResponse>("/api/hermes-config");
+  },
+
+  async addHermesProfile(input: CreateHermesProfileRequest): Promise<HermesConfigResponse> {
+    return request<HermesConfigResponse>("/api/hermes-config/profiles", {
+      method: "POST",
+      body: JSON.stringify(input satisfies CreateHermesProfileRequest)
+    });
+  },
+
+  async addHermesChannel(input: CreateHermesChannelRequest): Promise<HermesConfigResponse> {
+    return request<HermesConfigResponse>("/api/hermes-config/channels", {
+      method: "POST",
+      body: JSON.stringify(input satisfies CreateHermesChannelRequest)
+    });
   },
 
   async getClaudeCodeModelConfig(): Promise<ClaudeCodeModelConfigResponse> {

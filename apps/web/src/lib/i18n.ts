@@ -134,6 +134,7 @@ export interface Messages {
     output: string;
     parallelLanes: string;
     position: string;
+    profile: string;
     ports: string;
     primaryModel: string;
     prompt: string;
@@ -390,6 +391,7 @@ export const messages: Record<Language, Messages> = {
       output: "Output",
       parallelLanes: "Parallel lanes",
       position: "Position",
+      profile: "Profile",
       ports: "Ports",
       primaryModel: "Primary model",
       prompt: "Prompt",
@@ -455,7 +457,11 @@ export const messages: Record<Language, Messages> = {
       googleConfig: "Config",
       cursorConfig: "Config",
       opencodeConfig: "Config",
-      hermesConfig: "Config"
+      hermesConfig: "Config",
+      hermesModels: "Models",
+      hermesAgents: "Agents",
+      hermesSkills: "Skills",
+      hermesChannels: "Channels"
     },
     nodeTypes: {
       agent: "Agent",
@@ -539,6 +545,22 @@ export const messages: Record<Language, Messages> = {
       hermesConfig: {
         title: "Hermes Beta Config",
         description: "Check whether the local Hermes CLI harness is installed and ready."
+      },
+      hermesModels: {
+        title: "Hermes Models",
+        description: "Model options resolved for Hermes blueprint and chat execution."
+      },
+      hermesAgents: {
+        title: "Hermes Agents",
+        description: "Each Agent here maps to one Hermes profile."
+      },
+      hermesSkills: {
+        title: "Hermes Skills",
+        description: "HiveWard operating skills installed into Hermes."
+      },
+      hermesChannels: {
+        title: "Hermes Channels",
+        description: "Channels scanned from the Hermes channel directory."
       }
     },
     panels: {
@@ -765,6 +787,7 @@ export const messages: Record<Language, Messages> = {
       output: "输出",
       parallelLanes: "\u5e76\u884c\u6392\u6570",
       position: "位置",
+      profile: "Profile",
       ports: "端口",
       primaryModel: "主模型",
       prompt: "提示词",
@@ -827,7 +850,11 @@ export const messages: Record<Language, Messages> = {
       googleConfig: "\u914d\u7f6e",
       cursorConfig: "\u914d\u7f6e",
       opencodeConfig: "\u914d\u7f6e",
-      hermesConfig: "\u914d\u7f6e"
+      hermesConfig: "\u914d\u7f6e",
+      hermesModels: "\u6a21\u578b",
+      hermesAgents: "Agent",
+      hermesSkills: "Skills",
+      hermesChannels: "\u9891\u9053"
     },
     nodeTypes: {
       agent: "Agent",
@@ -911,6 +938,22 @@ export const messages: Record<Language, Messages> = {
       hermesConfig: {
         title: "Hermes Beta \u914d\u7f6e",
         description: "\u68c0\u67e5\u672c\u673a Hermes CLI harness \u662f\u5426\u5df2\u5b89\u88c5\u5e76\u53ef\u7528\u3002"
+      },
+      hermesModels: {
+        title: "Hermes \u6a21\u578b",
+        description: "\u7528\u4e8e Hermes \u84dd\u56fe\u548c\u804a\u5929\u6267\u884c\u7684\u6a21\u578b\u9009\u9879\u3002"
+      },
+      hermesAgents: {
+        title: "Hermes Agent",
+        description: "\u8fd9\u91cc\u7684\u6bcf\u4e2a Agent \u5bf9\u5e94 Hermes \u91cc\u7684\u4e00\u4e2a Profile\u3002"
+      },
+      hermesSkills: {
+        title: "Hermes Skills",
+        description: "\u5b89\u88c5\u5230 Hermes \u7684 HiveWard \u6267\u884c\u624b\u518c Skills\u3002"
+      },
+      hermesChannels: {
+        title: "Hermes \u9891\u9053",
+        description: "\u4ece Hermes channel directory \u626b\u63cf\u5230\u7684\u901a\u4fe1\u9891\u9053\u3002"
       }
     },
     panels: {

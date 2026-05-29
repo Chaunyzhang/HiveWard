@@ -109,6 +109,7 @@ export interface ManagerNodeConfig extends BlueprintNodeBaseConfig {
   maxHandoffs: number;
   instructions?: string;
   openclawAgentId?: string;
+  profileId?: string;
   agentName?: string;
   modelId?: string;
   skillIds?: string[];
@@ -145,6 +146,7 @@ export interface ConditionNodeConfig extends BlueprintNodeBaseConfig {
 export interface SummaryNodeConfig extends BlueprintNodeBaseConfig {
   mode: "structured_merge" | "harness_summary";
   runtimeId?: AgentRuntimeId;
+  profileId?: string;
   prompt?: string;
   modelId?: string;
   runtimeAccessPolicy?: RuntimeAccessPolicy;
@@ -1938,6 +1940,7 @@ function toPortableBlueprintNodeConfig(type: BlueprintNodeType, config: Blueprin
       description: agentConfig.description,
       resultRole: agentConfig.resultRole,
       crossRoundContextMode: agentConfig.crossRoundContextMode,
+      profileId: agentConfig.profileId,
       agentName: agentConfig.agentName,
       prompt: agentConfig.prompt,
       userPrompt: agentConfig.userPrompt,
@@ -1966,6 +1969,7 @@ function toPortableBlueprintNodeConfig(type: BlueprintNodeType, config: Blueprin
       crossRoundContextMode: summaryConfig.crossRoundContextMode,
       mode: summaryConfig.mode,
       runtimeId: summaryConfig.runtimeId,
+      profileId: summaryConfig.profileId,
       prompt: summaryConfig.prompt,
       modelId: summaryConfig.modelId,
       runtimeAccessPolicy: summaryConfig.runtimeAccessPolicy ? { ...summaryConfig.runtimeAccessPolicy } : undefined
@@ -2127,6 +2131,7 @@ function readPortableBlueprintNodeConfig(
         mode === "harness_summary"
           ? readOptionalAgentRuntimeId(config.runtimeId, `${fieldName}.runtimeId`) ?? "openclaw"
           : readOptionalAgentRuntimeId(config.runtimeId, `${fieldName}.runtimeId`),
+      profileId: readOptionalString(config.profileId),
       modelId: readOptionalString(config.modelId),
       prompt: readOptionalString(config.prompt),
       runtimeAccessPolicy: readRuntimeAccessPolicy(config.runtimeAccessPolicy, config.permissionProfile)
@@ -2139,6 +2144,7 @@ function readPortableBlueprintNodeConfig(
       maxHandoffs: readBoundedInteger(config.maxHandoffs, 1, 50, 12),
       instructions: readOptionalString(config.instructions),
       openclawAgentId: readOptionalString(config.openclawAgentId),
+      profileId: readOptionalString(config.profileId),
       agentName: readOptionalString(config.agentName),
       modelId: readOptionalString(config.modelId),
       skillIds: Array.isArray(config.skillIds) ? readStringArray(config.skillIds, `${fieldName}.skillIds`) : [],

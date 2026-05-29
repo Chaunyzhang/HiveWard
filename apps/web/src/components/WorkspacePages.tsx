@@ -3485,7 +3485,7 @@ function mergeModelCatalogOptions(fields: OpenClawWizardField[], providerId: str
   });
 }
 
-function IdentityTitle({ kind, id, label }: { kind: IdentityKind; id: string; label: string }) {
+export function IdentityTitle({ kind, id, label }: { kind: IdentityKind; id: string; label: string }) {
   return (
     <div className="identity-title">
       <IdentityMark kind={kind} id={id} label={label} />

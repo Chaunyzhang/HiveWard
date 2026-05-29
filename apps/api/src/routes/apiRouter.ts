@@ -1,7 +1,7 @@
 import { Router, type Response } from "express";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -25,6 +25,12 @@ import type {
   CreateLeaderDelegationRequest,
   HarnessId,
   HarnessModelOption,
+  HarnessProfileOption,
+  HermesChannelOption,
+  HermesConfigResponse,
+  HermesSkillOption,
+  CreateHermesProfileRequest,
+  CreateHermesChannelRequest,
   HarnessSkillInstallCandidate,
   HarnessSkillInstallCandidateSource,
   HarnessSkillId,
@@ -308,6 +314,32 @@ export function createApiRouter({ store, openClawConfigStore, adapter, worker, a
     try {
       const [version, config] = await Promise.all([openClawConfigStore.getVersion(), openClawConfigStore.getState()]);
       res.json({ statuses: buildHarnessStatuses(version, config, resolveHarnessModelDefaults()) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/api/hermes-config", (_req, res, next) => {
+    try {
+      res.json(readHermesConfigResponse());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/api/hermes-config/profiles", (req, res, next) => {
+    try {
+      createHermesProfile(req.body as CreateHermesProfileRequest);
+      res.status(201).json(readHermesConfigResponse());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/api/hermes-config/channels", async (req, res, next) => {
+    try {
+      await createHermesChannel(req.body as CreateHermesChannelRequest);
+      res.status(201).json(readHermesConfigResponse());
     } catch (error) {
       next(error);
     }
@@ -1810,6 +1842,7 @@ async function streamHivewardChatSession({
         ? await buildSelectedBlueprintDraftingContext(store, resolvedRoleScope)
         : undefined;
     const prompt = buildChatPrompt(resolvedRequestBody, roleSkillPrompt, rebuildContext, selectedBlueprintContext);
+    const skillIds = await chatSkillIdsForRequest(requestBody.harnessId, resolvedRoleScope, requestBody.mode, openClawConfigStore);
     await adapter.streamChatMessage(
       {
         sessionKey: nativeSessionKey,
@@ -1821,7 +1854,7 @@ async function streamHivewardChatSession({
         permissionMode: requestBody.permissionMode,
         idempotencyKey: userMessage.id,
         timeoutMs: 3_600_000,
-        skillIds: chatSkillIdsForRequest(resolvedRoleScope, requestBody.mode)
+        skillIds
       },
       (event) => {
         if (event.type === "started") {
@@ -2445,10 +2478,12 @@ function roleSkillIdForRole(role: ChatRoleScope["role"]): HarnessSkillId {
   return role === "leader" ? "hiveward-leader" : "hiveward-ceo";
 }
 
-function chatSkillIdsForRequest(
+async function chatSkillIdsForRequest(
+  harnessId: HarnessId,
   roleScope: ChatRoleScope | undefined,
-  mode: ChatMode | undefined
-): HarnessSkillId[] | undefined {
+  mode: ChatMode | undefined,
+  openClawConfigStore: OpenClawConfigStore
+): Promise<HarnessSkillId[] | undefined> {
   const skillIds: HarnessSkillId[] = [];
   if (roleScope) {
     skillIds.push(roleSkillIdForRole(roleScope.role));
@@ -2456,7 +2491,12 @@ function chatSkillIdsForRequest(
   if (mode === "skill_split") {
     skillIds.push("hiveward-skill-decomposer");
   }
-  return skillIds.length ? skillIds : undefined;
+  if (!skillIds.length) return undefined;
+
+  const config = await openClawConfigStore.getState();
+  const installRoot = resolveHarnessSkillInstallTarget(harnessId, config).root;
+  const installedSkillIds = skillIds.filter((skillId) => fileExists(join(installRoot, skillId, "SKILL.md")));
+  return installedSkillIds.length ? installedSkillIds : undefined;
 }
 
 function resolveChatModelId(
@@ -3258,7 +3298,8 @@ function buildHarnessStatuses(
       command: "hermes",
       checkedAt,
       defaultModelId: defaults.hermes,
-      models: defaults.hermesModels
+      models: defaults.hermesModels,
+      profiles: readHermesProfiles()
     })
   ];
 }
@@ -3440,7 +3481,8 @@ function buildCliHarnessStatus({
   command,
   checkedAt,
   defaultModelId,
-  models
+  models,
+  profiles
 }: {
   id: Extract<HarnessId, "google" | "cursor" | "opencode" | "hermes">;
   label: string;
@@ -3449,6 +3491,7 @@ function buildCliHarnessStatus({
   checkedAt: string;
   defaultModelId: string | undefined;
   models: HarnessModelOption[];
+  profiles?: HarnessProfileOption[];
 }): HarnessStatus {
   const version = detectCliVersion(command);
   const installed = version.installed;
@@ -3457,6 +3500,7 @@ function buildCliHarnessStatus({
     label,
     defaultModelId,
     models,
+    profiles,
     installed,
     environmentOk: installed && Boolean(defaultModelId),
     connectionState: installed ? "available" : "unavailable",
@@ -3486,9 +3530,261 @@ function buildCliHarnessStatus({
         detail: defaultModelId
           ? `${defaultModelId} (${models.length} model option${models.length === 1 ? "" : "s"} resolved).`
           : "No default model was resolved; HiveWard will let the CLI use its native default."
-      }
+      },
+      ...(profiles
+        ? [{
+            id: `${id}-profiles`,
+            label: "Profiles",
+            status: profiles.length > 0 ? "pass" as const : "warning" as const,
+            detail: profiles.length > 0
+              ? `${profiles.length} Hermes profile${profiles.length === 1 ? "" : "s"} detected. Create aliases with hermes profile alias <name> before using non-default profiles.`
+              : "No Hermes profiles were detected from hermes profile list."
+          }]
+        : [])
     ]
   };
+}
+
+function readHermesProfiles(): HarnessProfileOption[] {
+  try {
+    const result = runHermesCli(["profile", "list"], 2_000);
+    if (result.error || result.status !== 0) return [];
+    const homePath = resolveHermesHome();
+    const rootConfig = readHermesProfileConfig(homePath);
+    return parseHermesProfileList(result.stdout || result.stderr || "").map((profile) => {
+      const profilePath = resolveHermesProfilePath(homePath, profile.id);
+      const localConfig = {
+        ...rootConfig,
+        ...(profilePath ? readHermesProfileConfig(profilePath) : {})
+      };
+      return {
+        ...profile,
+        modelId: profile.modelId ?? localConfig.modelId,
+        provider: localConfig.provider,
+        path: profilePath,
+        workspace: localConfig.workspace
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function resolveHermesProfilePath(homePath: string, profileId: string): string | undefined {
+  const path = profileId === "default" ? join(homePath, "profiles", "default") : join(homePath, "profiles", profileId);
+  return fileExists(path) ? path : profileId === "default" ? homePath : undefined;
+}
+
+function readHermesProfileConfig(profilePath: string): { modelId?: string; provider?: string; workspace?: string } {
+  const configPath = join(profilePath, "config.yaml");
+  let content = "";
+  try {
+    content = readFileSync(configPath, "utf8");
+  } catch {
+    return {};
+  }
+  return {
+    modelId: readYamlSectionString(content, "model", "default"),
+    provider: readYamlSectionString(content, "model", "provider"),
+    workspace: readYamlSectionString(content, "terminal", "cwd")
+  };
+}
+
+function readHermesConfigResponse(): HermesConfigResponse {
+  const homePath = resolveHermesHome();
+  const channelDirectoryPath = join(homePath, "channel_directory.json");
+  return {
+    homePath,
+    configPath: join(homePath, "config.yaml"),
+    channelDirectoryPath,
+    profiles: readHermesProfiles(),
+    channels: readAllHermesChannels(homePath, channelDirectoryPath),
+    skills: readHermesSkills(homePath)
+  };
+}
+
+function createHermesProfile(input: CreateHermesProfileRequest): void {
+  const name = normalizeHermesProfileName(input?.name);
+  if (!name) {
+    throw new Error("Hermes profile name is required and must use lowercase letters, numbers, dashes, or underscores.");
+  }
+  const args = ["profile", "create", name];
+  const cloneFrom = normalizeHermesProfileName(input.cloneFrom);
+  if (cloneFrom) args.push("--clone-from", cloneFrom);
+  const description = readOptionalString(input.description);
+  if (description) args.push("--description", description);
+  const result = runHermesCli(args, 30_000);
+  if (result.error || result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || result.error?.message || "Hermes profile creation failed.").trim());
+  }
+  if (input.createAlias !== false) {
+    const aliasResult = runHermesCli(["profile", "alias", name, "--name", `hermes-${name}`], 10_000);
+    if (aliasResult.error || aliasResult.status !== 0) {
+      throw new Error((aliasResult.stderr || aliasResult.stdout || aliasResult.error?.message || "Hermes alias creation failed.").trim());
+    }
+  }
+}
+
+function runHermesCli(args: string[], timeout: number) {
+  if (process.platform === "win32") {
+    return spawnSync("cmd.exe", ["/d", "/v:off", "/c", "hermes", ...args], {
+      encoding: "utf8",
+      timeout,
+      windowsHide: true
+    });
+  }
+  return spawnSync("hermes", args, {
+    encoding: "utf8",
+    timeout
+  });
+}
+
+async function createHermesChannel(input: CreateHermesChannelRequest): Promise<void> {
+  const platform = normalizeHermesChannelKey(input?.platform);
+  const id = readOptionalString(input?.id);
+  if (!platform || !id) {
+    throw new Error("Hermes channel platform and id are required.");
+  }
+  const homePath = resolveHermesHome();
+  const channelDirectoryPath = join(homePath, "channel_directory.json");
+  const directory = readHermesChannelDirectory(channelDirectoryPath);
+  const platforms = isPlainRecord(directory.platforms) ? { ...directory.platforms } : {};
+  const entries = Array.isArray(platforms[platform]) ? [...platforms[platform] as unknown[]] : [];
+  const channel = {
+    id,
+    name: readOptionalString(input.name) ?? id,
+    type: readOptionalString(input.type) ?? "manual",
+    thread_id: readOptionalString(input.threadId) ?? null
+  };
+  const existingIndex = entries.findIndex((entry) => isPlainRecord(entry) && readOptionalString(entry.id) === id);
+  if (existingIndex >= 0) entries[existingIndex] = channel;
+  else entries.push(channel);
+  platforms[platform] = entries;
+  await mkdir(homePath, { recursive: true });
+  await writeJsonObjectFileAtomic(channelDirectoryPath, {
+    ...directory,
+    updated_at: new Date().toISOString(),
+    platforms
+  });
+}
+
+function readHermesChannels(path: string): HermesChannelOption[] {
+  const directory = readHermesChannelDirectory(path);
+  const platforms = isPlainRecord(directory.platforms) ? directory.platforms : {};
+  const channels: HermesChannelOption[] = [];
+  for (const [platform, entries] of Object.entries(platforms)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (!isPlainRecord(entry)) continue;
+      const id = readOptionalString(entry.id);
+      if (!id) continue;
+      channels.push({
+        profileId: undefined,
+        platform,
+        id,
+        name: readOptionalString(entry.name) ?? id,
+        type: readOptionalString(entry.type),
+        threadId: readOptionalString(entry.thread_id)
+      });
+    }
+  }
+  return channels.sort((left, right) => `${left.platform}:${left.name}`.localeCompare(`${right.platform}:${right.name}`));
+}
+
+function readAllHermesChannels(homePath: string, rootChannelDirectoryPath: string): HermesChannelOption[] {
+  const channels = readHermesChannels(rootChannelDirectoryPath).map((channel) => ({ ...channel, profileId: "default" }));
+  const profilesRoot = join(homePath, "profiles");
+  try {
+    for (const profileId of readdirSyncSafe(profilesRoot)) {
+      const directoryPath = join(profilesRoot, profileId, "channel_directory.json");
+      if (!fileExists(directoryPath)) continue;
+      channels.push(...readHermesChannels(directoryPath).map((channel) => ({ ...channel, profileId })));
+    }
+  } catch {
+    return channels;
+  }
+  const seen = new Set<string>();
+  return channels.filter((channel) => {
+    const key = `${channel.profileId ?? ""}:${channel.platform}:${channel.id}:${channel.threadId ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function readHermesSkills(homePath: string): HermesSkillOption[] {
+  const skills: HermesSkillOption[] = [
+    ...readHermesSkillsFromDirectory(join(homePath, "skills")),
+  ];
+  const profilesRoot = join(homePath, "profiles");
+  for (const profileId of readdirSyncSafe(profilesRoot)) {
+    skills.push(...readHermesSkillsFromDirectory(join(profilesRoot, profileId, "skills"), profileId));
+  }
+  const seen = new Set<string>();
+  return skills.filter((skill) => {
+    const key = `${skill.profileId ?? "default"}:${skill.id}:${skill.path}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((left, right) => `${left.profileId ?? "default"}:${left.label}`.localeCompare(`${right.profileId ?? "default"}:${right.label}`));
+}
+
+function readHermesSkillsFromDirectory(skillsPath: string, profileId?: string): HermesSkillOption[] {
+  return readdirSyncSafe(skillsPath).flatMap((id) => {
+    const skillPath = join(skillsPath, id, "SKILL.md");
+    if (!fileExists(skillPath)) return [];
+    return [{
+      id,
+      label: id,
+      path: skillPath,
+      profileId
+    }];
+  });
+}
+
+function readHermesChannelDirectory(path: string): Record<string, unknown> {
+  const value = readJsonFile(path);
+  return isPlainRecord(value) ? { ...value } : { platforms: {} };
+}
+
+function resolveHermesHome(env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(readEnvString(env, "HERMES_HOME") ?? join(homedir(), ".hermes"));
+}
+
+function normalizeHermesProfileName(value: unknown): string | undefined {
+  const name = readOptionalString(value)?.toLowerCase();
+  return name && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(name) ? name : undefined;
+}
+
+function normalizeHermesChannelKey(value: unknown): string | undefined {
+  const key = readOptionalString(value)?.toLowerCase();
+  return key && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(key) ? key : undefined;
+}
+
+function parseHermesProfileList(output: string): HarnessProfileOption[] {
+  const profiles: HarnessProfileOption[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("Profile") || line.startsWith("─")) continue;
+    const isDefault = line.startsWith("◆");
+    const normalized = line.replace(/^◆\s*/, "").trim();
+    const [id, modelId, _gateway, alias] = normalized.split(/\s+/);
+    if (!id || id === "Profile" || seen.has(id)) continue;
+    seen.add(id);
+    profiles.push({
+      id,
+      label: id,
+      modelId: modelId && !isMissingHermesProfileCell(modelId) ? modelId : undefined,
+      alias: alias && !isMissingHermesProfileCell(alias) ? alias : undefined,
+      isDefault: isDefault || undefined
+    });
+  }
+  return profiles;
+}
+
+function isMissingHermesProfileCell(value: string): boolean {
+  return value === "-" || value === "—";
 }
 
 function detectCliVersion(command: string): { installed: boolean; version?: string; error?: string } {
@@ -3516,6 +3812,87 @@ function detectCliVersion(command: string): { installed: boolean; version?: stri
   } catch (error) {
     return { installed: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function readdirSyncSafe(path: string): string[] {
+  try {
+    return readdirSync(path).filter((entry) => !entry.startsWith("."));
+  } catch {
+    return [];
+  }
+}
+
+function readYamlSectionString(content: string, sectionName: string, key: string): string | undefined {
+  let inSection = false;
+  const keyPattern = new RegExp(`^\\s{2}${escapeRegExp(key)}\\s*:\\s*(.+?)\\s*$`);
+  for (const rawLine of content.split(/\r?\n/)) {
+    if (!rawLine.trim() || rawLine.trim().startsWith("#")) continue;
+    if (/^\S[^:]*:\s*$/.test(rawLine)) {
+      inSection = rawLine.trim() === `${sectionName}:`;
+      continue;
+    }
+    if (!inSection) continue;
+    const match = keyPattern.exec(rawLine);
+    if (!match?.[1]) continue;
+    return unquoteYamlScalar(match[1]);
+  }
+  return undefined;
+}
+
+function readHermesConfiguredModelsFromFiles(env: NodeJS.ProcessEnv = process.env): HarnessModelOption[] {
+  const homePath = resolveHermesHome(env);
+  const options: HarnessModelOption[] = [];
+  for (const configPath of [
+    join(homePath, "config.yaml"),
+    ...readdirSyncSafe(join(homePath, "profiles")).map((profileId) => join(homePath, "profiles", profileId, "config.yaml"))
+  ]) {
+    try {
+      const content = readFileSync(configPath, "utf8");
+      const provider = readYamlSectionString(content, "model", "provider") ?? "hermes";
+      const defaultModel = readYamlSectionString(content, "model", "default");
+      if (defaultModel) options.push({ id: defaultModel, label: defaultModel, provider, thinkingLevels: cliHarnessDefaultThinkingLevels });
+      for (const fallback of readHermesFallbackModels(content)) {
+        options.push({ id: fallback.modelId, label: fallback.modelId, provider: fallback.provider ?? provider, thinkingLevels: cliHarnessDefaultThinkingLevels });
+      }
+    } catch {
+      continue;
+    }
+  }
+  return mergeHarnessModelOptions(options);
+}
+
+function readHermesFallbackModels(content: string): Array<{ modelId: string; provider?: string }> {
+  const models: Array<{ modelId: string; provider?: string }> = [];
+  let inFallbacks = false;
+  let currentProvider: string | undefined;
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (/^\S[^:]*:\s*$/.test(rawLine)) {
+      inFallbacks = line === "fallback_providers:";
+      currentProvider = undefined;
+      continue;
+    }
+    if (!inFallbacks) continue;
+    const providerMatch = /^-\s*provider:\s*(.+)$/.exec(line);
+    if (providerMatch?.[1]) {
+      currentProvider = unquoteYamlScalar(providerMatch[1]);
+      continue;
+    }
+    const modelMatch = /^model:\s*(.+)$/.exec(line);
+    if (modelMatch?.[1]) {
+      models.push({ modelId: unquoteYamlScalar(modelMatch[1]), provider: currentProvider });
+    }
+  }
+  return models;
+}
+
+function unquoteYamlScalar(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
 }
 
 function resolveConfigFile({
@@ -3693,9 +4070,11 @@ function resolveHarnessModelDefaults(env: NodeJS.ProcessEnv = process.env): Harn
     readEnvString(env, "HIVEWARD_OPENCODE_DEFAULT_MODEL") ??
     readEnvString(env, "OPENCODE_DEFAULT_MODEL") ??
     fallbackCliDefaultModel;
+  const hermesConfiguredModels = readHermesConfiguredModelsFromFiles(env);
   const hermesDefaultModelId =
     readEnvString(env, "HIVEWARD_HERMES_DEFAULT_MODEL") ??
     readEnvString(env, "HERMES_DEFAULT_MODEL") ??
+    hermesConfiguredModels[0]?.id ??
     fallbackCliDefaultModel;
 
   return {
@@ -3731,7 +4110,10 @@ function resolveHarnessModelDefaults(env: NodeJS.ProcessEnv = process.env): Harn
       cliHarnessDefaultThinkingLevels
     ),
     hermesModels: prepareHarnessModelOptions(
-      readEnvModelOptions(env, ["HIVEWARD_HERMES_MODELS", "HERMES_MODELS"], "hermes", cliHarnessDefaultThinkingLevels),
+      [
+        ...hermesConfiguredModels,
+        ...readEnvModelOptions(env, ["HIVEWARD_HERMES_MODELS", "HERMES_MODELS"], "hermes", cliHarnessDefaultThinkingLevels)
+      ],
       hermesDefaultModelId,
       "hermes",
       cliHarnessDefaultThinkingLevels

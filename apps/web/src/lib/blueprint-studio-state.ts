@@ -1,4 +1,4 @@
-import type { AgentRuntimeId, CanvasSize } from "@hiveward/shared";
+import type { AgentRuntimeId, CanvasSize, HarnessProfileOption } from "@hiveward/shared";
 import { runtimeDisplayParts } from "./harness-labels";
 
 export type BlueprintRuntimeOption = {
@@ -16,6 +16,8 @@ export type BlueprintModelOption = {
 export type BlueprintModelSelectOption = {
   value: string;
   label: string;
+  badgeLabel?: string;
+  disabled?: boolean;
 };
 
 export type BlueprintCanvasViewport = {
@@ -282,4 +284,25 @@ export function buildBlueprintModelSelectOptions(input: {
 
 export function resolveBlueprintModelSelectValue(modelId: string | undefined): string {
   return modelId === "inherit" ? "" : modelId ?? "";
+}
+
+export function buildHermesProfileSelectOptions(input: {
+  runtimeId: AgentRuntimeId;
+  profiles: HarnessProfileOption[];
+  defaultLabel: string;
+  defaultBadgeLabel?: string;
+}): BlueprintModelSelectOption[] {
+  if (input.runtimeId !== "hermes") return [];
+  return [
+    { value: "", label: input.defaultLabel },
+    ...input.profiles.map((profile) => {
+      const option: BlueprintModelSelectOption = {
+        value: profile.id,
+        label: profile.alias ? `${profile.label} (${profile.alias})` : profile.label
+      };
+      if (profile.isDefault) option.badgeLabel = input.defaultBadgeLabel ?? input.defaultLabel;
+      if (!profile.alias) option.disabled = true;
+      return option;
+    })
+  ];
 }

@@ -1,6 +1,6 @@
 {
   "name": "@hiveward/web",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hiveward/shared": "0.5.3"
+    "@hiveward/shared": "0.5.4"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

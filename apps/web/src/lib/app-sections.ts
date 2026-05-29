@@ -18,7 +18,11 @@ export type AppNavSectionId =
   | "googleConfig"
   | "cursorConfig"
   | "opencodeConfig"
-  | "hermesConfig";
+  | "hermesConfig"
+  | "hermesModels"
+  | "hermesAgents"
+  | "hermesSkills"
+  | "hermesChannels";
 
 export type AppSectionId = AppNavSectionId | "companyDirectory" | "hivewardHome";
 
@@ -45,7 +49,7 @@ export const appSectionGroups = [
   },
   {
     id: "hermes",
-    sections: ["hermesConfig"]
+    sections: ["hermesConfig", "hermesModels", "hermesAgents", "hermesSkills", "hermesChannels"]
   },
   {
     id: "claudeCode",

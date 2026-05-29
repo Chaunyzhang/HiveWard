@@ -230,11 +230,23 @@ export interface HarnessModelOption {
   isDefault?: boolean;
 }
 
+export interface HarnessProfileOption {
+  id: string;
+  label: string;
+  alias?: string;
+  modelId?: string;
+  provider?: string;
+  path?: string;
+  workspace?: string;
+  isDefault?: boolean;
+}
+
 export interface HarnessStatus {
   id: HarnessId;
   label: string;
   defaultModelId?: string;
   models?: HarnessModelOption[];
+  profiles?: HarnessProfileOption[];
   installed: boolean;
   environmentOk: boolean;
   connectionState: HarnessConnectionState;
@@ -245,6 +257,46 @@ export interface HarnessStatus {
 
 export interface HarnessStatusResponse {
   statuses: HarnessStatus[];
+}
+
+export interface HermesChannelOption {
+  profileId?: string;
+  platform: string;
+  id: string;
+  name: string;
+  type?: string;
+  threadId?: string;
+}
+
+export interface HermesSkillOption {
+  id: string;
+  label: string;
+  path: string;
+  profileId?: string;
+}
+
+export interface HermesConfigResponse {
+  homePath: string;
+  configPath: string;
+  channelDirectoryPath: string;
+  profiles: HarnessProfileOption[];
+  channels: HermesChannelOption[];
+  skills: HermesSkillOption[];
+}
+
+export interface CreateHermesProfileRequest {
+  name: string;
+  description?: string;
+  cloneFrom?: string;
+  createAlias?: boolean;
+}
+
+export interface CreateHermesChannelRequest {
+  platform: string;
+  id: string;
+  name?: string;
+  type?: string;
+  threadId?: string;
 }
 
 export type ClaudeCodeModelPresetCategory =

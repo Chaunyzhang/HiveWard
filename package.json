@@ -1,6 +1,6 @@
 {
   "name": "hiveward",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "让101个Agent合作为你打工：调度 Claude Code、Codex、OpenClaw 的 Agent Company 工作台。",
   "private": true,
   "license": "Apache-2.0",

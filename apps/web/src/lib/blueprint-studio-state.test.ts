@@ -3,6 +3,7 @@ import {
   buildAgentHarnessOptions,
   buildArchitectureRoleDetailRows,
   buildBlueprintModelSelectOptions,
+  buildHermesProfileSelectOptions,
   buildSummaryHarnessOptions,
   blueprintSelectOpenEventName,
   createBlueprintCanvasWorld,
@@ -45,6 +46,40 @@ describe("blueprint studio state", () => {
       { value: "cursor", label: "Cursor CLI", badgeLabel: "Beta" },
       { value: "opencode", label: "OpenCode", badgeLabel: "Beta" },
       { value: "hermes", label: "Hermes", badgeLabel: "Beta" }
+    ]);
+  });
+
+  it("uses stable Hermes profile ids as blueprint values while showing aliases as labels", () => {
+    expect(
+      buildHermesProfileSelectOptions({
+        runtimeId: "hermes",
+        defaultLabel: "Default",
+        profiles: [
+          { id: "architect", label: "Architect", alias: "hermes-architect", isDefault: true },
+          { id: "researcher", label: "Researcher" }
+        ]
+      })
+    ).toEqual([
+      { value: "", label: "Default" },
+      { value: "architect", label: "Architect (hermes-architect)", badgeLabel: "Default" },
+      { value: "researcher", label: "Researcher", disabled: true }
+    ]);
+  });
+
+  it("disables Hermes profiles that do not expose a runtime alias", () => {
+    expect(
+      buildHermesProfileSelectOptions({
+        runtimeId: "hermes",
+        defaultLabel: "Default",
+        profiles: [
+          { id: "architect", label: "Architect", alias: "hermes-architect" },
+          { id: "researcher", label: "Researcher" }
+        ]
+      })
+    ).toEqual([
+      { value: "", label: "Default" },
+      { value: "architect", label: "Architect (hermes-architect)" },
+      { value: "researcher", label: "Researcher", disabled: true }
     ]);
   });
 
