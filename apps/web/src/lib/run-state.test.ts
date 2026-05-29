@@ -205,6 +205,49 @@ describe("run state sync", () => {
     expect(syncApprovalsForRun(existing, createRunView("running"))).toEqual([]);
   });
 
+  it("keeps only pending approval request revisions in the inbox", () => {
+    const runView = createRunView("running");
+    runView.approvalRequests = [
+      {
+        id: "approval-v1",
+        runId: "run-1",
+        kind: "iteration_requirement_plan",
+        status: "replied",
+        title: "Round 1 Execution Plan",
+        body: "Old blocked plan.",
+        revision: 1,
+        supersededByRequestId: "approval-v2",
+        capabilities: { approve: false, reject: false, reply: false, complete: false, terminate: false },
+        requestedBy: { type: "node", label: "Manager", nodeId: "manager" },
+        requestedAt: "2026-05-21T01:02:00.000Z",
+        updatedAt: "2026-05-21T01:03:00.000Z"
+      },
+      {
+        id: "approval-v2",
+        runId: "run-1",
+        kind: "iteration_requirement_plan",
+        status: "pending",
+        title: "Round 1 Execution Plan v2",
+        body: "Latest blocked plan.",
+        revision: 2,
+        replacesRequestId: "approval-v1",
+        capabilities: { approve: false, reject: true, reply: true, complete: false, terminate: false },
+        requestedBy: { type: "node", label: "Manager", nodeId: "manager" },
+        requestedAt: "2026-05-21T01:04:00.000Z",
+        updatedAt: "2026-05-21T01:04:00.000Z"
+      }
+    ];
+
+    const approvals = syncApprovalsForRun([], runView);
+
+    expect(approvals.map((approval) => approval.approvalRequestId)).toEqual(["approval-v2"]);
+    expect(approvals[0]).toMatchObject({
+      status: "pending",
+      reviewOutput: "Latest blocked plan.",
+      canReply: true
+    });
+  });
+
   it("polls the selected running run on the runs page", () => {
     const running = createRunView("running", { runId: "run-running" });
     const queued = createRunView("queued", { runId: "run-queued" });

@@ -1203,7 +1203,7 @@ export function ApprovalsPage({
     inboxItems.filter((item) => item.status === "pending").length +
     approvals.filter(isActionableApprovalThread).length;
   const [selectedThread, setSelectedThread] = useState<InboxThreadSelection | undefined>(() =>
-    firstInboxThreadSelection(inboxItems, approvals)
+    firstInboxThreadListSelection(inboxThreadItems)
   );
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [localReplies, setLocalReplies] = useState<Record<string, InboxLocalReply[]>>({});
@@ -1218,6 +1218,7 @@ export function ApprovalsPage({
       : undefined;
   const selectedInboxApproved = selectedInboxItem?.status === "approved";
   const selectedInboxOperable = Boolean(selectedInboxItem && !selectedInboxApproved);
+  const selectedApprovalRequiresReply = Boolean(selectedApproval && approvalRequiresReplyBeforeApproval(selectedApproval));
   const canReplyToSelection = Boolean(selectedApproval?.canReply || selectedInboxOperable);
   const canApproveSelection = Boolean(
     selectedApproval ? selectedApproval.canApprove !== false || selectedApproval.canComplete === true : selectedInboxOperable
@@ -1494,8 +1495,15 @@ export function ApprovalsPage({
                   const approval = thread.approval;
                   const selected = selectedThread?.kind === "approval" && approval.nodeRunId === selectedThread.id;
                   const processed = approval.status === "approved" || approval.status === "rejected";
+                  const requiresReply = approvalRequiresReplyBeforeApproval(approval);
                   const canApproveOrComplete = approval.canApprove !== false || approval.canComplete === true;
                   const approveOrCompleteLabel = approval.canApprove === false && approval.canComplete ? inboxCopy.complete : t.actions.approve;
+                  const primaryActionLabel = requiresReply ? inboxCopy.replyRequired : approveOrCompleteLabel;
+                  const primaryActionTitle = requiresReply
+                    ? inboxCopy.replyRequiredAction
+                    : canApproveOrComplete
+                      ? approveOrCompleteLabel
+                      : inboxCopy.processedAction;
                   return (
                     <article
                       key={approval.nodeRunId}
@@ -1516,7 +1524,7 @@ export function ApprovalsPage({
                               {approvalStatusLabel(approval, language, t)}
                             </span>
                           </span>
-                          <span className="inbox-row-preview">{approvalPreviewText(approval, inboxCopy, t)}</span>
+                          <span className="inbox-row-preview">{approvalPreviewText(approval, inboxCopy, t, language)}</span>
                           <span className="inbox-row-meta">
                             <span>{approval.blueprintName}</span>
                             <time dateTime={approval.requestedAt}>{formatDateTime(approval.requestedAt, language)}</time>
@@ -1527,10 +1535,14 @@ export function ApprovalsPage({
                         <button
                           type="button"
                           className="inbox-row-action primary-action"
-                          title={canApproveOrComplete ? approveOrCompleteLabel : inboxCopy.processedAction}
-                          aria-label={approveOrCompleteLabel}
-                          disabled={!canApproveOrComplete}
+                          title={primaryActionTitle}
+                          aria-label={primaryActionLabel}
+                          disabled={!canApproveOrComplete && !requiresReply}
                           onClick={() => {
+                            if (requiresReply) {
+                              setSelectedThread({ kind: "approval", id: approval.nodeRunId });
+                              return;
+                            }
                             if (approval.canApprove === false && approval.canComplete && approval.approvalRequestId) {
                               onComplete(approval.approvalRequestId);
                               return;
@@ -1542,7 +1554,7 @@ export function ApprovalsPage({
                             onApprove(approval.blueprintRunId, approval.nodeRunId, undefined, approval.selectedReplyId);
                           }}
                         >
-                          <BadgeCheck size={16} />
+                          {requiresReply ? <MessageSquareText size={16} /> : <BadgeCheck size={16} />}
                         </button>
                         <button
                           type="button"
@@ -1581,10 +1593,17 @@ export function ApprovalsPage({
             language={language}
             messages={selectedMessages}
             onApprove={approveSelectedThread}
-            approveLabel={selectedApproval?.canApprove === false && selectedApproval.canComplete ? inboxCopy.complete : inboxCopy.approve}
+            approveLabel={
+              selectedApprovalRequiresReply
+                ? inboxCopy.replyRequired
+                : selectedApproval?.canApprove === false && selectedApproval.canComplete
+                  ? inboxCopy.complete
+                  : inboxCopy.approve
+            }
             canApprove={canApproveSelection}
             canReject={canRejectSelection}
             canReply={canReplyToSelection}
+            requiresReplyBeforeApproval={selectedApprovalRequiresReply}
             onReject={rejectSelectedThread}
             onReplyDraftChange={updateReplyDraft}
             onSelectSolution={selectApprovalSolution}
@@ -1671,6 +1690,7 @@ function InboxConversationPanel({
   canApprove,
   canReject,
   canReply,
+  requiresReplyBeforeApproval,
   onApprove,
   onReject,
   onReplyDraftChange,
@@ -1687,6 +1707,7 @@ function InboxConversationPanel({
   canApprove: boolean;
   canReject: boolean;
   canReply: boolean;
+  requiresReplyBeforeApproval: boolean;
   onApprove: () => void;
   onReject: () => void;
   onReplyDraftChange: (value: string) => void;
@@ -1787,10 +1808,12 @@ function InboxConversationPanel({
             <Send size={15} />
             {copy.sendReply}
           </button>
-          <button type="button" className="primary-action" disabled={!canApprove} onClick={onApprove}>
-            <BadgeCheck size={15} />
-            {approveLabel}
-          </button>
+          {!requiresReplyBeforeApproval && (
+            <button type="button" className="primary-action" disabled={!canApprove} onClick={onApprove}>
+              <BadgeCheck size={15} />
+              {approveLabel}
+            </button>
+          )}
           <button type="button" className="danger-action" disabled={!canReject} onClick={onReject}>
             <Trash2 size={15} />
             {copy.reject}
@@ -1826,6 +1849,8 @@ type InboxCopy = {
   processedAction: string;
   processedPlaceholder: string;
   reject: string;
+  replyRequired: string;
+  replyRequiredAction: string;
   replyPlaceholder: string;
   sendReply: string;
   solutionSelected: string;
@@ -1873,6 +1898,8 @@ function getInboxCopy(language: Language): InboxCopy {
       processedAction: "已处理，不能重复操作",
       processedPlaceholder: "这封收件已经处理，不能继续回复或再次审批。",
       reject: "\u9a73\u56de",
+      replyRequired: "\u9700\u8981\u56de\u590d",
+      replyRequiredAction: "\u8bf7\u56de\u590d\u8865\u5145\u7f3a\u5931\u4fe1\u606f\uff0c\u751f\u6210\u4fee\u8ba2\u8ba1\u5212\u540e\u624d\u80fd\u6279\u51c6\u3002",
       replyPlaceholder: "\u8f93\u5165\u56de\u590d\uff0cShift+Enter \u6362\u884c...",
       sendReply: "\u56de\u590d",
       solutionSelected: "\u5df2\u9009\u7528",
@@ -1913,6 +1940,8 @@ function getInboxCopy(language: Language): InboxCopy {
     processedAction: "Already processed",
     processedPlaceholder: "This inbox item has already been processed.",
     reject: "Reject",
+    replyRequired: "Reply required",
+    replyRequiredAction: "Reply with missing information to generate a revised plan before approval.",
     replyPlaceholder: "Reply, Shift+Enter for a new line...",
     sendReply: "Reply",
     solutionSelected: "Selected",
@@ -2015,6 +2044,10 @@ function isActionableApprovalThread(approval: PendingApprovalItem): boolean {
   return approval.status !== "approved" && approval.status !== "rejected" && approval.status !== "replying";
 }
 
+function approvalRequiresReplyBeforeApproval(approval: PendingApprovalItem): boolean {
+  return approval.status === "pending" && approval.canApprove === false && approval.canReply === true && approval.canComplete !== true;
+}
+
 function approvalStatusClassName(approval: PendingApprovalItem): string {
   if (approval.status === "approved") return "status-approved";
   if (approval.status === "rejected") return "status-rejected";
@@ -2083,15 +2116,15 @@ function approvalSubject(approval: PendingApprovalItem): string {
   return approval.nodeLabel || approval.blueprintName;
 }
 
-function approvalPreviewText(approval: PendingApprovalItem, copy: InboxCopy, t: Messages): string {
-  return approvalContentBlocks(approval, copy, t)
+function approvalPreviewText(approval: PendingApprovalItem, copy: InboxCopy, t: Messages, language: Language): string {
+  return approvalContentBlocks(approval, copy, t, language)
     .map((block) => block.body)
     .join("\n\n");
 }
 
-function approvalContentBlocks(approval: PendingApprovalItem, copy: InboxCopy, t: Messages): InboxContentBlock[] {
+function approvalContentBlocks(approval: PendingApprovalItem, copy: InboxCopy, t: Messages, language: Language): InboxContentBlock[] {
   if (approval.reviewOutput !== undefined) {
-    const formatted = (formatOutput(approval.reviewOutput) ?? "").trim();
+    const formatted = localizeApprovalBody((formatOutput(approval.reviewOutput) ?? "").trim(), language);
     return [
       {
         key: `${approval.nodeRunId}:review-output`,
@@ -2113,21 +2146,13 @@ function approvalContentBlocks(approval: PendingApprovalItem, copy: InboxCopy, t
   }
 
   return upstream.map((item) => {
-    const formatted = (formatOutput(item.output) ?? "").trim();
+    const formatted = localizeApprovalBody((formatOutput(item.output) ?? "").trim(), language);
     return {
       key: item.nodeRunId,
       label: item.nodeLabel,
       body: formatted || t.trace.noOutput
     };
   });
-}
-
-function firstInboxThreadSelection(inboxItems: InboxItem[], approvals: PendingApprovalItem[]): InboxThreadSelection | undefined {
-  const firstInboxItem = inboxItems[0];
-  if (firstInboxItem) return { kind: "inbox", id: firstInboxItem.id };
-  const firstApproval = approvals[0];
-  if (firstApproval) return { kind: "approval", id: firstApproval.nodeRunId };
-  return undefined;
 }
 
 function hasInboxThread(selection: InboxThreadSelection, items: InboxThreadListItem[]): boolean {
@@ -2177,9 +2202,9 @@ function buildInboxConversationMessages({
 }): InboxConversationMessage[] {
   const baseMessages =
     selection.kind === "inbox" && inboxItem
-      ? buildFormalInboxConversation(inboxItem, copy, language)
+        ? buildFormalInboxConversation(inboxItem, copy, language)
       : selection.kind === "approval" && approval
-        ? buildApprovalConversation(approval, copy, t)
+        ? buildApprovalConversation(approval, copy, t, language)
         : [];
   const approvalReplies =
     selection.kind === "approval"
@@ -2282,10 +2307,11 @@ function buildFormalInboxConversation(item: InboxItem, copy: InboxCopy, language
 function buildApprovalConversation(
   approval: PendingApprovalItem,
   copy: InboxCopy,
-  t: Messages
+  t: Messages,
+  language: Language
 ): InboxConversationMessage[] {
   const selectedReplyId = approval.selectedReplyId ?? approvalReviewOutputSolutionId;
-  return approvalContentBlocks(approval, copy, t).map((block) => ({
+  return approvalContentBlocks(approval, copy, t, language).map((block) => ({
     id: block.key,
     role: "assistant" as const,
     speaker: block.label,
@@ -2295,6 +2321,37 @@ function buildApprovalConversation(
     selectedSolution: selectedReplyId === approvalReviewOutputSolutionId,
     canUseAsSolution: true
   }));
+}
+
+function localizeApprovalBody(body: string, language: Language): string {
+  if (language !== "zh-CN" || !body.trim()) return body;
+  return body
+    .replace(/^# Round (\d+) Preflight Blocked v(\d+)$/gm, "# 第 $1 轮预检阻塞 v$2")
+    .replace(/^Research source: blocked$/gm, "研究来源：已阻塞")
+    .replace(/^Plan source: blocked$/gm, "计划来源：已阻塞")
+    .replace(/^Human feedback: /gm, "用户补充：")
+    .replace(/^## Blocker$/gm, "## 阻塞原因")
+    .replace(/^## Required Action$/gm, "## 下一步")
+    .replace(
+      /Manager research fallback failed with status failed: model[_-]?not[_-]?configured: Claude Code agent node requires an explicit modelId\./gi,
+      "Manager 研究兜底任务失败：modelnotconfigured：Claude Code Agent 节点需要显式设置 modelId。"
+    )
+    .replace(
+      /Manager research fallback failed with status failed: model[_-]?not[_-]?configured: Claude Code Agent 节点需要显式设置 modelId。/gi,
+      "Manager 研究兜底任务失败：modelnotconfigured：Claude Code Agent 节点需要显式设置 modelId。"
+    )
+    .replace(
+      /Claude Code agent node requires an explicit modelId\./g,
+      "Claude Code Agent 节点需要显式设置 modelId。"
+    )
+    .replace(
+      /^- Reply with missing credentials, permissions, facts, or revised instructions\.$/gm,
+      "- 在下方回复缺失的凭证、权限、事实或修订说明。"
+    )
+    .replace(
+      /^- This approval cannot be approved into execution until a revised plan is generated\.$/gm,
+      "- 生成修订版计划前，这条审批不能直接批准执行。"
+    );
 }
 
 function formatInboxPayload(payload: Record<string, unknown> | undefined, copy: InboxCopy): string {

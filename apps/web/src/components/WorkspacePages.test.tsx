@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { BlueprintDefinition, BlueprintRunView } from "@hiveward/shared";
+import type { BlueprintDefinition, BlueprintRunView, InboxItem, PendingApprovalItem } from "@hiveward/shared";
 import { messages } from "../lib/i18n";
-import { RunsPage } from "./WorkspacePages";
+import { ApprovalsPage, RunsPage } from "./WorkspacePages";
 
 describe("RunsPage", () => {
   it("renders the run report board before raw trace details", () => {
@@ -801,5 +801,184 @@ describe("RunsPage", () => {
     expect(html).toContain("Manager 正在准备第 1 轮计划");
     expect(html).toContain("调研、提需和计划整理都属于运行步骤。");
     expect(html).not.toContain(messages["zh-CN"].empty.noRunHistory);
+  });
+});
+
+describe("ApprovalsPage", () => {
+  it("shows reply-required copy for blocked approvals that cannot be approved yet", () => {
+    const now = "2026-05-29T13:02:58.739Z";
+    const approval: PendingApprovalItem = {
+      approvalRequestId: "approval-blocked-plan",
+      kind: "iteration_requirement_plan",
+      blueprintId: "blueprint-1",
+      blueprintName: "Manager-driven HTML delivery",
+      blueprintRunId: "run-1",
+      nodeRunId: "approval-blocked-plan",
+      nodeId: "manager-1",
+      nodeLabel: "HTML Delivery Manager",
+      startedBy: "local-user",
+      startedAt: now,
+      requestedAt: now,
+      status: "pending",
+      reviewOutput: "# Round 1 Preflight Blocked\n\nReply with the missing topic.",
+      canApprove: false,
+      canReject: true,
+      canReply: true,
+      canComplete: false,
+      canTerminate: false
+    };
+
+    const html = renderToStaticMarkup(
+      <ApprovalsPage
+        approvals={[approval]}
+        inboxItems={[]}
+        language="en"
+        t={messages.en}
+        onApprove={() => undefined}
+        onApproveApprovalRequest={() => undefined}
+        onComplete={() => undefined}
+        onReject={() => undefined}
+        onRejectApprovalRequest={() => undefined}
+        onReply={() => undefined}
+        onReplyApprovalRequest={() => undefined}
+        onSelectApprovalReply={() => undefined}
+        onReplyInboxItem={() => undefined}
+        onApproveInboxItem={() => undefined}
+        onRejectInboxItem={() => undefined}
+      />
+    );
+
+    expect(html).toContain("Reply required");
+    expect(html).toContain("Reply with missing information to generate a revised plan before approval.");
+    expect(html).not.toContain("Already processed");
+    expect(html).not.toMatch(/class="primary-action" disabled=""[^>]*>[\s\S]*Reply required/);
+  });
+
+  it("localizes blocked preflight approval chrome in Chinese", () => {
+    const now = "2026-05-29T13:21:01.000Z";
+    const approval: PendingApprovalItem = {
+      approvalRequestId: "approval-blocked-plan-zh",
+      kind: "iteration_requirement_plan",
+      blueprintId: "blueprint-1",
+      blueprintName: "Manager-driven HTML delivery",
+      blueprintRunId: "run-1",
+      nodeRunId: "approval-blocked-plan-zh",
+      nodeId: "manager-1",
+      nodeLabel: "HTML Delivery Manager",
+      startedBy: "local-user",
+      startedAt: now,
+      requestedAt: now,
+      status: "pending",
+      reviewOutput: [
+        "# Round 1 Preflight Blocked v2",
+        "Research source: blocked",
+        "Plan source: blocked",
+        "Human feedback: 科技行业动态",
+        "",
+        "## Blocker",
+        "Manager research fallback failed with status failed: model_not_configured: Claude Code agent node requires an explicit modelId.",
+        "",
+        "## Required Action",
+        "- Reply with missing credentials, permissions, facts, or revised instructions.",
+        "- This approval cannot be approved into execution until a revised plan is generated."
+      ].join("\n"),
+      canApprove: false,
+      canReject: true,
+      canReply: true,
+      canComplete: false,
+      canTerminate: false
+    };
+
+    const html = renderToStaticMarkup(
+      <ApprovalsPage
+        approvals={[approval]}
+        inboxItems={[]}
+        language="zh-CN"
+        t={messages["zh-CN"]}
+        onApprove={() => undefined}
+        onApproveApprovalRequest={() => undefined}
+        onComplete={() => undefined}
+        onReject={() => undefined}
+        onRejectApprovalRequest={() => undefined}
+        onReply={() => undefined}
+        onReplyApprovalRequest={() => undefined}
+        onSelectApprovalReply={() => undefined}
+        onReplyInboxItem={() => undefined}
+        onApproveInboxItem={() => undefined}
+        onRejectInboxItem={() => undefined}
+      />
+    );
+
+    expect(html).toContain("第 1 轮预检阻塞 v2");
+    expect(html).toContain("研究来源：已阻塞");
+    expect(html).toContain("计划来源：已阻塞");
+    expect(html).toContain("用户补充：科技行业动态");
+    expect(html).toContain("阻塞原因");
+    expect(html).toContain("下一步");
+    expect(html).toContain("Claude Code Agent 节点需要显式设置 modelId");
+    expect(html).not.toContain("Required Action");
+    expect(html).not.toContain("Manager research fallback failed");
+    expect(html).not.toContain("Research source: blocked");
+  });
+
+  it("selects the newest visible approval thread when it sorts ahead of older inbox items", () => {
+    const older = "2026-05-25T12:36:20.845Z";
+    const newer = "2026-05-29T13:02:58.739Z";
+    const inboxItem: InboxItem = {
+      id: "inbox-old",
+      companyId: "company-1",
+      type: "blueprint_proposal",
+      status: "rejected",
+      title: "Legacy proposal",
+      summary: "Older formal inbox item.",
+      createdByRoleId: "leader-1",
+      blueprintId: "blueprint-old",
+      blueprintName: "Older blueprint",
+      createdAt: older,
+      updatedAt: older
+    };
+    const approval: PendingApprovalItem = {
+      approvalRequestId: "approval-new",
+      kind: "iteration_requirement_plan",
+      blueprintId: "blueprint-new",
+      blueprintName: "Manager-driven HTML delivery",
+      blueprintRunId: "run-new",
+      nodeRunId: "approval-new",
+      nodeId: "manager-1",
+      nodeLabel: "HTML Delivery Manager",
+      startedBy: "local-user",
+      startedAt: newer,
+      requestedAt: newer,
+      status: "pending",
+      reviewOutput: "Latest run approval body.",
+      canApprove: true,
+      canReject: true,
+      canReply: true,
+      canComplete: false,
+      canTerminate: false
+    };
+
+    const html = renderToStaticMarkup(
+      <ApprovalsPage
+        approvals={[approval]}
+        inboxItems={[inboxItem]}
+        language="en"
+        t={messages.en}
+        onApprove={() => undefined}
+        onApproveApprovalRequest={() => undefined}
+        onComplete={() => undefined}
+        onReject={() => undefined}
+        onRejectApprovalRequest={() => undefined}
+        onReply={() => undefined}
+        onReplyApprovalRequest={() => undefined}
+        onSelectApprovalReply={() => undefined}
+        onReplyInboxItem={() => undefined}
+        onApproveInboxItem={() => undefined}
+        onRejectInboxItem={() => undefined}
+      />
+    );
+
+    expect(html).toContain('<div class="chat-session-view-heading"><span>Conversation</span><strong>Round Execution Plan</strong></div>');
+    expect(html).not.toContain('<div class="chat-session-view-heading"><span>Conversation</span><strong>Legacy proposal</strong></div>');
   });
 });

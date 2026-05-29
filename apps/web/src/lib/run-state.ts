@@ -134,7 +134,9 @@ export function syncApprovalsForRun(
 ): PendingApprovalItem[] {
   const approvalRequests = runView.approvalRequests ?? [];
   const approvalsForRun = approvalRequests.length > 0
-    ? approvalRequests.map((request) => buildApprovalItemFromRequest(runView, request))
+    ? approvalRequests
+        .filter((request) => request.status === "pending")
+        .map((request) => buildApprovalItemFromRequest(runView, request))
     : buildLegacyApprovalItems(current, runView);
 
   return [...approvalsForRun, ...current.filter((approval) => approval.blueprintRunId !== runView.run.id)]
