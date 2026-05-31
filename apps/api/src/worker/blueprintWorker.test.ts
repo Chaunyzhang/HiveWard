@@ -940,6 +940,48 @@ describe("BlueprintWorker", () => {
     expect((selectedNode?.output as { selectedReplyId?: string }).selectedReplyId).toBe(waitingOutput.replies[1]?.id);
   });
 
+  it("streams Agent approval discussion through the runtime that created the waiting node", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const delivery = createAgentNode("delivery", "Delivery");
+    delivery.runtimeId = "opencode";
+    delivery.config = {
+      ...delivery.config,
+      approval: {
+        enabled: true
+      }
+    };
+    const blueprint = createBlueprint([delivery], []);
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-runtime-1", "claude"),
+      createStartedAgentTask("task-runtime-2", "claude")
+    ], [
+      createCompletedAgentTask("task-runtime-1", "succeeded", "draft answer", undefined, "claude"),
+      createCompletedAgentTask("task-runtime-2", "succeeded", "claude follow-up", undefined, "claude")
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const waitingView = await waitForRunStatus(store, run.id, "waiting_approval");
+    const waitingNode = waitingView.nodeRuns.find((nodeRun) => nodeRun.nodeId === "delivery");
+    const approvalRequest = waitingView.approvalRequests?.find((request) => request.kind === "agent_proposal");
+    if (!approvalRequest?.threadId || !waitingNode) throw new Error("Expected agent approval request.");
+
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: approvalRequest.threadId,
+      message: "Use the same harness for this follow-up.",
+      onEvent: () => undefined
+    });
+
+    expect(adapter.calls[0]?.source).toBe("opencode");
+    expect(waitingNode.runtimeRef?.source).toBe("claude");
+    expect(adapter.calls[1]?.source).toBe("claude");
+    expect(adapter.waitCalls[1]?.source).toBe("claude");
+  });
+
   it("keeps Agent approval rejection from rerunning or continuing the run", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
     const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));

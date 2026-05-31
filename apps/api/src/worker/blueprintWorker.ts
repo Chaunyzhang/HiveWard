@@ -1481,7 +1481,7 @@ export class BlueprintWorker {
     onEvent({ type: "inbox_message_created", messageId: userReply.id, threadType: "approval", threadId });
 
     const config = node.config as AgentNodeConfig;
-    const runtimeId = node.runtimeId ?? "openclaw";
+    const runtimeId: AgentRuntimeId = waiting.runtimeRef?.source ?? node.runtimeId ?? "openclaw";
     const replyInput = buildAgentApprovalReplyInput(waiting.input, waiting.output.reviewOutput, waiting.output.replies, userReply);
     const inputWithWorkspace = await this.withAgentWorkspaceInput(blueprint, node, replyInput);
     const crossRoundInput = await this.withNodeCrossRoundContext({
