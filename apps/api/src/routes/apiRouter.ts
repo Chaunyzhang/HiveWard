@@ -70,10 +70,13 @@ import type {
   ReplyBlueprintRunApprovalRequest,
   ReplyInboxItemRequest,
   SendChatSessionMessageRequest,
+  StreamInboxThreadMessageRequest,
   UpdateChatSessionTitleRequest,
   UpdateHivewardChatSessionRequest,
   SelectBlueprintRunApprovalRequest,
   ChatStreamEvent,
+  InboxThreadType,
+  StreamInboxThreadMessageEvent,
   ApprovalDecision,
   ApprovalRequest,
   ApprovalThread,
@@ -955,6 +958,54 @@ export function createApiRouter({ store, openClawConfigStore, adapter, worker, a
     }
   });
 
+  router.post("/api/inbox/threads/:threadType/:threadId/messages/stream", async (req, res, next) => {
+    let body: StreamInboxThreadMessageRequest;
+    let threadType: InboxThreadType;
+    let threadId: string;
+    try {
+      body = normalizeStreamInboxThreadMessageRequest(req.body);
+      threadType = readInboxThreadType(req.params.threadType);
+      threadId = readRouteParam(req.params.threadId, "threadId");
+    } catch (error) {
+      next(error);
+      return;
+    }
+
+    if (worker.isInboxThreadStreamActive(threadType, threadId)) {
+      sendConflict(res, "inbox_discussion_in_progress", "Inbox discussion is already streaming for this thread.");
+      return;
+    }
+
+    res.status(200);
+    res.setHeader("content-type", "text/event-stream; charset=utf-8");
+    res.setHeader("cache-control", "no-cache, no-transform");
+    res.setHeader("connection", "keep-alive");
+    res.flushHeaders?.();
+    const isClosed = () => res.writableEnded || res.destroyed;
+
+    try {
+      await worker.streamInboxThreadMessage({
+        threadType,
+        threadId,
+        message: body.message,
+        onEvent: (event) => {
+          writeChatStreamEvent(res, event, isClosed);
+        }
+      });
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error && typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : undefined;
+      writeChatStreamEvent(res, {
+        type: "error",
+        code,
+        message: error instanceof Error ? error.message : "Inbox discussion stream failed."
+      }, isClosed);
+    } finally {
+      res.end();
+    }
+  });
+
   router.get("/api/dashboard-state", async (_req, res, next) => {
     try {
       res.json({ dashboard: await store.getDashboardState() });
@@ -1704,6 +1755,23 @@ function normalizeReplyInboxItemRequest(value: unknown): ReplyInboxItemRequest {
     throw new Error("Inbox reply message is required.");
   }
   return { message };
+}
+
+function normalizeStreamInboxThreadMessageRequest(value: unknown): StreamInboxThreadMessageRequest {
+  if (!isPlainRecord(value)) {
+    throw new Error("Inbox thread message request must be a JSON object.");
+  }
+  const message = readOptionalString(value.message);
+  if (!message) {
+    throw new Error("Inbox thread message is required.");
+  }
+  return { message };
+}
+
+function readInboxThreadType(value: unknown): InboxThreadType {
+  const threadType = readOptionalString(value);
+  if (threadType === "approval" || threadType === "inbox") return threadType;
+  throw new Error("Inbox thread type must be approval or inbox.");
 }
 
 function normalizeSessionChatRequest(value: unknown): SendChatSessionMessageRequest {
@@ -2615,7 +2683,7 @@ function includesAny(value: string, needles: string[]): boolean {
 
 function writeChatStreamEvent(
   res: Response,
-  event: ChatStreamEvent,
+  event: StreamInboxThreadMessageEvent,
   isClosed: () => boolean
 ): boolean {
   if (isClosed()) return false;

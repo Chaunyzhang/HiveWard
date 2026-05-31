@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { RuntimeAdapter, RuntimeChatSessionResult, RuntimeChatSessionTitleResult } from "@hiveward/adapter";
 import {
+  type AgentNodeConfig,
   type AgentTaskResult,
   blueprintRunArchiveSchema,
   createActiveManagerNewsHtmlChaosBlueprint,
@@ -19,7 +20,8 @@ import {
   type BlueprintEdge,
   type BlueprintNode,
   type BlueprintNodeRun,
-  type BlueprintRunStatus
+  type BlueprintRunStatus,
+  type ChatStreamEvent
 } from "@hiveward/shared";
 import { FileHivewardStore } from "../store/fileHivewardStore";
 import type { HivewardStore } from "../store/hivewardStore";
@@ -82,6 +84,24 @@ class ScriptedAdapter implements RuntimeAdapter {
 
   async streamChatMessage(): Promise<void> {
     throw new Error("Chat stream is not used by blueprint worker tests.");
+  }
+
+  async streamAgentTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    const started = await this.startAgentTask(input);
+    onEvent({ ...started, type: "started" });
+    const result = await this.waitForAgentTask({
+      nodeRunId: input.nodeRunId,
+      taskId: started.taskId,
+      runId: started.runId,
+      sessionKey: started.sessionKey,
+      source: started.source,
+      agentId: input.agentId,
+      modelId: input.modelId
+    });
+    const output = typeof result.output === "string" ? result.output : result.output === undefined ? undefined : JSON.stringify(result.output, null, 2);
+    if (output) onEvent({ type: "delta", text: output });
+    onEvent(toTestDoneEvent(result, output));
+    return result;
   }
 
   async startAgentTask(input: StartAgentTaskInput): Promise<StartedAgentTaskResult> {
@@ -184,6 +204,24 @@ class BlockingAdapter implements RuntimeAdapter {
     throw new Error("Chat stream is not used by blueprint worker tests.");
   }
 
+  async streamAgentTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    const started = await this.startAgentTask(input);
+    onEvent({ ...started, type: "started" });
+    const result = await this.waitForAgentTask({
+      nodeRunId: input.nodeRunId,
+      taskId: started.taskId,
+      runId: started.runId,
+      sessionKey: started.sessionKey,
+      source: started.source,
+      agentId: input.agentId,
+      modelId: input.modelId
+    });
+    const output = typeof result.output === "string" ? result.output : result.output === undefined ? undefined : JSON.stringify(result.output, null, 2);
+    if (output) onEvent({ type: "delta", text: output });
+    onEvent(toTestDoneEvent(result, output));
+    return result;
+  }
+
   async startAgentTask(input: StartAgentTaskInput): Promise<StartedAgentTaskResult> {
     this.calls.push(input);
     return this.startedResult;
@@ -205,6 +243,21 @@ class BlockingAdapter implements RuntimeAdapter {
   complete(result: AgentTaskResult): void {
     this.resolveCompletion?.(result);
   }
+}
+
+function toTestDoneEvent(result: AgentTaskResult, output?: string): Extract<ChatStreamEvent, { type: "done" }> {
+  return {
+    type: "done",
+    taskId: result.taskId,
+    runId: result.runId,
+    sessionKey: result.sessionKey,
+    source: result.source,
+    status: result.status,
+    output,
+    error: result.error,
+    usage: result.usage,
+    updatedAt: result.updatedAt
+  };
 }
 
 describe("BlueprintWorker", () => {
@@ -803,6 +856,88 @@ describe("BlueprintWorker", () => {
     });
     expect(adapter.sendCalls[0]?.body).toContain("Blueprint Test blueprint completed");
     expect(adapter.sendCalls[0]?.body).toContain("draft answer");
+  });
+
+  it("streams Agent approval discussion into an assistant candidate without approving", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const delivery = createAgentNode("delivery", "Delivery");
+    delivery.config = {
+      ...delivery.config,
+      approval: {
+        enabled: true
+      }
+    };
+    const blueprint = createBlueprint([delivery], []);
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-1"),
+      createStartedAgentTask("task-2")
+    ], [
+      createCompletedAgentTask("task-1", "succeeded", "draft answer"),
+      createCompletedAgentTask("task-2", "succeeded", {
+        humanReportMd: "## Summary\n\nAlternative answer.",
+        result: { status: "ready" }
+      })
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const waitingView = await waitForRunStatus(store, run.id, "waiting_approval");
+    const approvalRequest = waitingView.approvalRequests?.find((request) => request.kind === "agent_proposal");
+    if (!approvalRequest?.threadId) throw new Error("Expected agent approval request.");
+    const events: Array<{ type: string; text?: string; replyId?: string; messageId?: string }> = [];
+
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: approvalRequest.threadId,
+      message: "Give me another version.",
+      onEvent: (event) => events.push(event)
+    });
+
+    const replyView = await store.getRunView(run.id);
+    const waitingNode = replyView?.nodeRuns.find((nodeRun) => nodeRun.nodeId === "delivery");
+    const waitingOutput = waitingNode?.output as {
+      approvalType: "agent";
+      reviewOutput: string;
+      replies: Array<{ id: string; role: string; body: string }>;
+      selectedReplyId?: string;
+    };
+
+    expect(replyView?.run.status).toBe("waiting_approval");
+    expect(waitingNode?.status).toBe("waiting_approval");
+    expect(waitingOutput.reviewOutput).toBe("draft answer");
+    expect(waitingOutput.selectedReplyId).toBeUndefined();
+    expect(waitingOutput.replies.map((reply) => [reply.role, reply.body])).toEqual([
+      ["user", "Give me another version."],
+      ["assistant", "## Summary\n\nAlternative answer."]
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "inbox_message_created",
+      "started",
+      "delta",
+      "done",
+      "inbox_candidate_created"
+    ]);
+    expect(events.find((event) => event.type === "inbox_candidate_created")?.replyId).toBe(waitingOutput.replies[1]?.id);
+    expect(adapter.calls).toHaveLength(2);
+    const deliveryConfig = delivery.config as AgentNodeConfig;
+    expect(adapter.calls[1]).toMatchObject({
+      source: "openclaw",
+      agentName: deliveryConfig.agentName,
+      modelId: deliveryConfig.modelId,
+      permissionProfile: deliveryConfig.permissionProfile,
+      workingDirectory: deliveryConfig.workingDirectory,
+      tools: deliveryConfig.tools,
+      skillIds: deliveryConfig.skillIds
+    });
+    expect(JSON.stringify(adapter.calls[1]?.input)).toContain("Give me another version.");
+
+    await worker.selectApprovalReply(blueprint, replyView!.run, waitingNode!.id, waitingOutput.replies[1]!.id);
+    const selectedView = await store.getRunView(run.id);
+    const selectedNode = selectedView?.nodeRuns.find((nodeRun) => nodeRun.nodeId === "delivery");
+    expect((selectedNode?.output as { selectedReplyId?: string }).selectedReplyId).toBe(waitingOutput.replies[1]?.id);
   });
 
   it("keeps Agent approval rejection from rerunning or continuing the run", async () => {

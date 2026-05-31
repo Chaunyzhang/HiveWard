@@ -174,7 +174,7 @@ describe("ApprovalsPage", () => {
     expect(extractButtonByAriaLabel(html, "Approve")).toContain("disabled");
   });
 
-  it("processed approval shows read-only composer and no active approve action", () => {
+  it("processed approval keeps the discussion composer while disabling lifecycle actions", () => {
     const html = renderToStaticMarkup(
       <ApprovalsPage
         approvals={[createPendingApproval({
@@ -207,8 +207,8 @@ describe("ApprovalsPage", () => {
     );
 
     expect(extractButtonByAriaLabel(html, "Approve")).toContain("disabled");
-    expect(html).toContain("This inbox item has already been processed.");
-    expect(html).toMatch(/<textarea[^>]*disabled/);
+    expect(html).toContain("Add a comment; comments do not change the workflow.");
+    expect(html).not.toMatch(/<textarea[^>]*disabled/);
   });
 
   it("does not wait for a harness reply for request-backed approval comments", () => {

@@ -41,6 +41,7 @@ import type {
   DashboardWidgetType,
   InboxItem,
   ApprovalThread,
+  ChatStreamEvent,
   PendingApprovalItem,
   RuntimeOverview,
   UpdateCompanyRequest,
@@ -61,7 +62,7 @@ import {
   resolveRunViewDisplayStatus,
   writeAcknowledgedTerminalRunIds
 } from "../lib/run-state";
-import { resolveApiResourceUrl } from "../lib/api";
+import { api, resolveApiResourceUrl } from "../lib/api";
 import { harnessLikeDisplayLabel } from "../lib/harness-labels";
 import { formatWorkspacePathPlaceholder, joinWorkspacePath } from "../lib/workspace-path";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -1235,6 +1236,7 @@ export function ApprovalsPage({
   onReviseApprovalRequest,
   onSelectApprovalReply,
   onReplyInboxItem,
+  onInboxThreadStreamDone,
   onApproveInboxItem,
   onRejectInboxItem
 }: {
@@ -1255,6 +1257,7 @@ export function ApprovalsPage({
   onReviseApprovalRequest: (approvalRequestId: string, message: string) => void;
   onSelectApprovalReply: (blueprintRunId: string, nodeRunId: string, selectedReplyId: string) => void;
   onReplyInboxItem: (itemId: string, message: string) => void;
+  onInboxThreadStreamDone?: () => Promise<void> | void;
   onApproveInboxItem: (itemId: string, comment?: string) => void;
   onRejectInboxItem: (itemId: string, comment?: string) => void;
 }) {
@@ -1280,6 +1283,7 @@ export function ApprovalsPage({
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [localReplies, setLocalReplies] = useState<Record<string, InboxLocalReply[]>>({});
   const [pendingHarnessReplies, setPendingHarnessReplies] = useState<Record<string, InboxPendingHarnessReply>>({});
+  const [streamingThreadKeys, setStreamingThreadKeys] = useState<Set<string>>(() => new Set());
   const selectedInboxItem =
     selectedThread?.kind === "inbox"
       ? inboxItems.find((item) => item.id === selectedThread.id)
@@ -1291,13 +1295,14 @@ export function ApprovalsPage({
   const selectedApproval = selectedApprovalThread?.approval;
   const selectedInboxApproved = selectedInboxItem?.status === "approved";
   const selectedInboxOperable = Boolean(selectedInboxItem && !selectedInboxApproved && !actionPending);
-  const canReplyToSelection = Boolean(!actionPending && (selectedApproval?.canReply || selectedInboxOperable));
+  const selectedThreadKey = selectedThread ? inboxThreadKey(selectedThread) : undefined;
+  const selectedThreadStreaming = selectedThreadKey ? streamingThreadKeys.has(selectedThreadKey) : false;
+  const canReplyToSelection = Boolean(!actionPending && !selectedThreadStreaming && (selectedApproval || selectedInboxItem));
   const canApproveSelection = Boolean(
     !actionPending && (selectedApproval ? selectedApproval.canApprove !== false || selectedApproval.canComplete === true : selectedInboxOperable)
   );
   const canRejectSelection = Boolean(!actionPending && ((selectedApproval && selectedApproval.canReject) || selectedInboxOperable));
   const canRequestChangesSelection = Boolean(!actionPending && selectedApproval?.approvalRequestId && (selectedApproval.canRequestChanges || selectedApproval.canRevise));
-  const selectedThreadKey = selectedThread ? inboxThreadKey(selectedThread) : undefined;
   const selectedReplyDraft = selectedThreadKey ? (replyDrafts[selectedThreadKey] ?? "") : "";
   const selectedMessages = useMemo(
     () =>
@@ -1357,7 +1362,7 @@ export function ApprovalsPage({
   };
 
   const sendLocalReply = () => {
-    if (!selectedThreadKey || !canReplyToSelection) return;
+    if (!selectedThread || !selectedThreadKey || !canReplyToSelection) return;
     const body = selectedReplyDraft.trim();
     if (!body) return;
     const reply = {
@@ -1365,44 +1370,6 @@ export function ApprovalsPage({
       body,
       createdAt: new Date().toISOString()
     };
-    if (selectedApproval?.canReply) {
-      const shouldWaitForHarnessReply = shouldAwaitApprovalHarnessReply(selectedApproval);
-      const pendingHarnessReply = shouldWaitForHarnessReply
-        ? {
-            id: `${reply.id}:pending`,
-            harnessLabel: formatInboxHarnessLabel(selectedApproval.harnessId),
-            createdAt: reply.createdAt
-          }
-        : undefined;
-      flushSync(() => {
-        setLocalReplies((current) => ({
-          ...current,
-          [selectedThreadKey]: [
-            ...(current[selectedThreadKey] ?? []),
-            reply
-          ]
-        }));
-        if (pendingHarnessReply) {
-          setPendingHarnessReplies((current) => ({ ...current, [selectedThreadKey]: pendingHarnessReply }));
-        } else {
-          setPendingHarnessReplies((current) => {
-            if (!current[selectedThreadKey]) return current;
-            const next = { ...current };
-            delete next[selectedThreadKey];
-            return next;
-          });
-        }
-        setReplyDrafts((current) => ({ ...current, [selectedThreadKey]: "" }));
-      });
-      window.setTimeout(() => {
-        if (selectedApproval.approvalRequestId) {
-          onReplyApprovalRequest(selectedApproval.approvalRequestId, body);
-          return;
-        }
-        onReply(selectedApproval.blueprintRunId, selectedApproval.nodeRunId, body);
-      }, 0);
-      return;
-    }
     flushSync(() => {
       setLocalReplies((current) => ({
         ...current,
@@ -1412,12 +1379,125 @@ export function ApprovalsPage({
         ]
       }));
       setReplyDrafts((current) => ({ ...current, [selectedThreadKey]: "" }));
+      setStreamingThreadKeys((current) => new Set(current).add(selectedThreadKey));
     });
-    if (selectedInboxItem && !selectedInboxApproved) {
-      window.setTimeout(() => {
-        onReplyInboxItem(selectedInboxItem.id, body);
-      }, 0);
-    }
+
+    const threadSelection = selectedThread;
+    const threadKey = selectedThreadKey;
+    const assistantId = `${reply.id}:assistant`;
+    const harnessLabel = selectedApproval ? formatInboxHarnessLabel(selectedApproval.harnessId) : inboxCopy.system;
+
+    const upsertStreamingReply = (patch: Partial<InboxPendingHarnessReply>) => {
+      setPendingHarnessReplies((current) => {
+        const existing = current[threadKey] ?? {
+          id: assistantId,
+          harnessLabel,
+          createdAt: new Date().toISOString()
+        };
+        return {
+          ...current,
+          [threadKey]: {
+            ...existing,
+            ...patch
+          }
+        };
+      });
+    };
+
+    void api.streamInboxThreadMessage(
+      threadSelection.kind,
+      threadSelection.id,
+      { message: body },
+      {
+        onEvent: (event) => {
+          if (event.type === "started") {
+            upsertStreamingReply({
+              progressText: inboxCopy.waitingHarness(formatInboxHarnessLabel(event.source))
+            });
+            return;
+          }
+          if (event.type === "runtime_state") {
+            upsertStreamingReply({
+              progressText: formatInboxRuntimeState(event)
+            });
+            return;
+          }
+          if (event.type === "delta") {
+            setPendingHarnessReplies((current) => {
+              const existing = current[threadKey] ?? {
+                id: assistantId,
+                harnessLabel,
+                createdAt: new Date().toISOString()
+              };
+              return {
+                ...current,
+                [threadKey]: {
+                  ...existing,
+                  body: event.replace ? event.text : `${existing.body ?? ""}${event.text}`,
+                  progressText: undefined
+                }
+              };
+            });
+            return;
+          }
+          if (event.type === "done") {
+            setPendingHarnessReplies((current) => {
+              const existing = current[threadKey];
+              if (!existing) return current;
+              const nextBody = existing.body || event.output || event.error || "";
+              return {
+                ...current,
+                [threadKey]: {
+                  ...existing,
+                  body: nextBody,
+                  progressText: undefined,
+                  failed: event.status === "failed" || event.status === "cancelled"
+                }
+              };
+            });
+            return;
+          }
+          if (event.type === "inbox_candidate_created") {
+            upsertStreamingReply({
+              id: event.replyId,
+              solutionId: event.replyId,
+              canUseAsSolution: true,
+              progressText: undefined
+            });
+            return;
+          }
+          if (event.type === "error") {
+            upsertStreamingReply({
+              body: event.message,
+              failed: true,
+              progressText: undefined
+            });
+          }
+        }
+      }
+    )
+      .catch((error) => {
+        upsertStreamingReply({
+          body: error instanceof Error ? error.message : inboxCopy.processedPlaceholder,
+          failed: true,
+          progressText: undefined
+        });
+      })
+      .finally(() => {
+        setStreamingThreadKeys((current) => {
+          const next = new Set(current);
+          next.delete(threadKey);
+          return next;
+        });
+        void Promise.resolve(onInboxThreadStreamDone?.()).finally(() => {
+          setPendingHarnessReplies((current) => {
+            if (!current[threadKey] || current[threadKey].failed) return current;
+            const next = { ...current };
+            delete next[threadKey];
+            return next;
+          });
+        });
+      });
   };
 
   const approveSelectedThread = () => {
@@ -1735,6 +1815,11 @@ type InboxPendingHarnessReply = {
   id: string;
   harnessLabel: string;
   createdAt: string;
+  body?: string;
+  progressText?: string;
+  failed?: boolean;
+  solutionId?: string;
+  canUseAsSolution?: boolean;
 };
 
 type InboxConversationMessage = {
@@ -1848,6 +1933,12 @@ function InboxConversationPanel({
                   </div>
                 ) : (
                   <MarkdownRenderer value={message.body} className="chat-message-body" />
+                )}
+                {!message.pending && message.progressText && (
+                  <div className="chat-message-pending">
+                    <Loader2 className="spin" size={15} />
+                    {message.progressText}
+                  </div>
                 )}
                 {message.canUseAsSolution && message.solutionId && (
                   <div className="inbox-message-actions">
@@ -2326,6 +2417,12 @@ function formatInboxHarnessLabel(harnessId: string | undefined): string {
   return harnessLikeDisplayLabel(harnessId);
 }
 
+function formatInboxRuntimeState(event: Extract<ChatStreamEvent, { type: "runtime_state" }>): string {
+  const label = event.label.trim();
+  if (!label) return formatInboxHarnessLabel(event.source);
+  return label;
+}
+
 function makeLocalInboxReplyId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return `inbox-reply-${crypto.randomUUID()}`;
@@ -2384,16 +2481,19 @@ function buildInboxConversationMessages({
   );
   const visibleLocalReplies = replies.filter((reply) => !serverUserReplyBodies.has(reply.body.trim()));
   const pendingMessages =
-    pendingHarnessReply && selection.kind === "approval"
+    pendingHarnessReply
       ? [
           {
             id: pendingHarnessReply.id,
             role: "assistant" as const,
             speaker: pendingHarnessReply.harnessLabel,
-            body: "",
+            body: pendingHarnessReply.body ?? "",
             createdAt: pendingHarnessReply.createdAt,
-            progressText: copy.waitingHarness(pendingHarnessReply.harnessLabel),
-            pending: true
+            progressText: pendingHarnessReply.progressText ?? copy.waitingHarness(pendingHarnessReply.harnessLabel),
+            pending: !pendingHarnessReply.body && !pendingHarnessReply.failed,
+            failed: pendingHarnessReply.failed,
+            solutionId: pendingHarnessReply.solutionId,
+            canUseAsSolution: pendingHarnessReply.canUseAsSolution
           }
         ]
       : [];

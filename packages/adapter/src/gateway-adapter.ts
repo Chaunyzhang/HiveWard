@@ -387,6 +387,31 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
     };
   }
 
+  async streamAgentTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    const started = await this.startAgentTask(input);
+    onEvent({ ...started, type: "started" });
+    if (started.status === "failed" || started.status === "cancelled") {
+      const terminal: AgentTaskResult = { ...started, output: undefined, usage: undefined };
+      onEvent(toAgentTaskDoneEvent(terminal));
+      return terminal;
+    }
+    const result = await this.waitForAgentTask({
+      nodeRunId: input.nodeRunId,
+      taskId: started.taskId,
+      runId: started.runId,
+      sessionKey: started.sessionKey,
+      source: started.source,
+      agentId: input.agentId,
+      modelId: input.modelId,
+    });
+    const text = stringifyStreamOutput(result.output);
+    if (text) {
+      onEvent({ type: "delta", text });
+    }
+    onEvent(toAgentTaskDoneEvent(result, text));
+    return result;
+  }
+
   async sendChannelMessage(input: SendChannelInput): Promise<SendChannelResult> {
     return this.withSession(async (session) => {
       const result = await session.request<Record<string, unknown>>("send", {
@@ -896,6 +921,27 @@ function normalizeChatHistoryContent(role: "user" | "assistant", content: string
     return content;
   }
   return content.slice(markerIndex + userMessageMarker.length).trim();
+}
+
+function stringifyStreamOutput(output: unknown): string | undefined {
+  if (typeof output === "string") return output;
+  if (output === undefined) return undefined;
+  return JSON.stringify(output, null, 2);
+}
+
+function toAgentTaskDoneEvent(result: AgentTaskResult, output?: string): Extract<ChatStreamEvent, { type: "done" }> {
+  return {
+    type: "done",
+    taskId: result.taskId,
+    runId: result.runId,
+    sessionKey: result.sessionKey,
+    source: result.source,
+    status: result.status,
+    output,
+    error: result.error,
+    usage: result.usage,
+    updatedAt: result.updatedAt,
+  };
 }
 
 function mapGatewayChatEvent(

@@ -1439,6 +1439,17 @@ export function App() {
     }
   }, []);
 
+  const refreshAfterInboxThreadStream = useCallback(async () => {
+    try {
+      await hydrateWorkspace({
+        blueprintId: blueprintRef.current?.id,
+        runId: selectedRunIdRef.current
+      });
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : messageRef.current.errors.load);
+    }
+  }, [hydrateWorkspace]);
+
   const handleChatInboxItemCreated = useCallback(
     (item: InboxItem) => {
       setInboxItems((current) => [item, ...current.filter((candidate) => candidate.id !== item.id)]);
@@ -1752,6 +1763,7 @@ export function App() {
           onReviseApprovalRequest={reviseApprovalRequest}
           onSelectApprovalReply={selectRunApprovalReply}
           onReplyInboxItem={replyToInboxItem}
+          onInboxThreadStreamDone={refreshAfterInboxThreadStream}
           onApproveInboxItem={approveInboxItem}
           onRejectInboxItem={rejectInboxItem}
         />

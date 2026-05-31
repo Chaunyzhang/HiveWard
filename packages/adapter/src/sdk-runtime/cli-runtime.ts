@@ -219,6 +219,31 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
     };
   }
 
+  async streamTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    const started = await this.startTask(input);
+    onEvent({ ...started, type: "started" });
+    if (started.status === "failed" || started.status === "cancelled") {
+      const terminal: AgentTaskResult = { ...started, output: undefined, usage: undefined };
+      onEvent(toAgentTaskDoneEvent(terminal));
+      return terminal;
+    }
+    const result = await this.waitForTask({
+      nodeRunId: input.nodeRunId,
+      taskId: started.taskId,
+      runId: started.runId,
+      sessionKey: started.sessionKey,
+      source: started.source,
+      agentId: input.agentId,
+      modelId: input.modelId
+    });
+    const text = stringifyStreamOutput(result.output);
+    if (text) {
+      onEvent({ type: "delta", text });
+    }
+    onEvent(toAgentTaskDoneEvent(result, text));
+    return result;
+  }
+
   waitForTask(input: WaitForAgentTaskInput): Promise<AgentTaskResult> {
     return this.registry.waitForTask(input);
   }
@@ -730,6 +755,27 @@ function formatCliHarnessLabel(harnessId: CliHarnessId): string {
 
 function normalizeTimeout(value: number | undefined, defaultValue: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : defaultValue;
+}
+
+function stringifyStreamOutput(output: unknown): string | undefined {
+  if (typeof output === "string") return output;
+  if (output === undefined) return undefined;
+  return JSON.stringify(output, null, 2);
+}
+
+function toAgentTaskDoneEvent(result: AgentTaskResult, output?: string): Extract<ChatStreamEvent, { type: "done" }> {
+  return {
+    type: "done",
+    taskId: result.taskId,
+    runId: result.runId,
+    sessionKey: result.sessionKey,
+    source: result.source,
+    status: result.status,
+    output,
+    error: result.error,
+    usage: result.usage,
+    updatedAt: result.updatedAt
+  };
 }
 
 function readString(value: unknown): string | undefined {

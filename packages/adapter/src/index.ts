@@ -39,6 +39,7 @@ export interface RuntimeAdapter {
   createChatSession(input: RuntimeChatSessionInput): Promise<RuntimeChatSessionResult>;
   updateChatSessionTitle(input: RuntimeChatSessionTitleInput): Promise<RuntimeChatSessionTitleResult>;
   streamChatMessage(input: RuntimeChatStreamInput, onEvent: (event: ChatStreamEvent) => void): Promise<void>;
+  streamAgentTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult>;
   startAgentTask(input: StartAgentTaskInput): Promise<StartedAgentTaskResult>;
   waitForAgentTask(input: WaitForAgentTaskInput): Promise<AgentTaskResult>;
   sendChannelMessage(input: SendChannelInput): Promise<SendChannelResult>;
@@ -236,6 +237,31 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
     });
   }
 
+  async streamAgentTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    const started = await this.startAgentTask(input);
+    onEvent({ ...started, type: "started" });
+    if (started.status === "failed" || started.status === "cancelled") {
+      const terminal: AgentTaskResult = { ...started, output: undefined, usage: undefined };
+      onEvent(toAgentTaskDoneEvent(terminal));
+      return terminal;
+    }
+    const result = await this.waitForAgentTask({
+      nodeRunId: input.nodeRunId,
+      taskId: started.taskId,
+      runId: started.runId,
+      sessionKey: started.sessionKey,
+      source: started.source,
+      agentId: input.agentId,
+      modelId: input.modelId
+    });
+    const text = typeof result.output === "string" ? result.output : result.output === undefined ? "" : JSON.stringify(result.output, null, 2);
+    if (text) {
+      onEvent({ type: "delta", text });
+    }
+    onEvent(toAgentTaskDoneEvent(result, text || (typeof result.output === "string" ? result.output : undefined)));
+    return result;
+  }
+
   async startAgentTask(input: StartAgentTaskInput): Promise<StartedAgentTaskResult> {
     const now = new Date().toISOString();
     const taskId = `oc-task-${nanoid(8)}`;
@@ -335,6 +361,10 @@ export class UnavailableOpenClawAdapter implements RuntimeAdapter {
     throw createOpenClawGatewayNotConfiguredError();
   }
 
+  async streamAgentTask(_input: StartAgentTaskInput, _onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    throw createOpenClawGatewayNotConfiguredError();
+  }
+
   async startAgentTask(_input: StartAgentTaskInput): Promise<StartedAgentTaskResult> {
     throw createOpenClawGatewayNotConfiguredError();
   }
@@ -404,6 +434,12 @@ export class SdkRoutingRuntimeAdapter implements RuntimeAdapter {
       : this.baseAdapter.streamChatMessage(input, onEvent);
   }
 
+  streamAgentTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    return isAgentSdkProvider(input.source)
+      ? this.sdkRuntime.streamTask(input, onEvent)
+      : this.baseAdapter.streamAgentTask(input, onEvent);
+  }
+
   startAgentTask(input: StartAgentTaskInput): Promise<StartedAgentTaskResult> {
     return isAgentSdkProvider(input.source) ? this.sdkRuntime.startTask(input) : this.baseAdapter.startAgentTask(input);
   }
@@ -452,4 +488,19 @@ function formatSourceLabel(source: HarnessId | RuntimeObjectSource): string {
   if (source === "opencode") return "OpenCode";
   if (source === "hermes") return "Hermes";
   return "OpenClaw";
+}
+
+function toAgentTaskDoneEvent(result: AgentTaskResult, output?: string): Extract<ChatStreamEvent, { type: "done" }> {
+  return {
+    type: "done",
+    taskId: result.taskId,
+    runId: result.runId,
+    sessionKey: result.sessionKey,
+    source: result.source,
+    status: result.status,
+    output,
+    error: result.error,
+    usage: result.usage,
+    updatedAt: result.updatedAt
+  };
 }

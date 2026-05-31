@@ -3,6 +3,8 @@ import { nanoid } from "nanoid";
 import type { RuntimeAdapter } from "@hiveward/adapter";
 import {
   isAgentBlueprintNode,
+  approvalThreadFromRequest,
+  approvalThreadIdForRequest,
   resolveAgentRuntimeSource,
   isManagerSlotInnerInHandle,
   isManagerSlotInnerOutHandle,
@@ -10,6 +12,7 @@ import {
   resolveManagerSlotExecutionMode,
   type AgentHandoff,
   type AgentHumanReport,
+  type ChatStreamEvent,
   type AgentNodeConfig,
   type AgentRuntimeId,
   type AgentTaskResult,
@@ -21,6 +24,8 @@ import {
   type ManagerSlotNodeConfig,
   type RuntimeObjectRef,
   type StartAgentTaskInput,
+  type InboxThreadType,
+  type StreamInboxThreadMessageEvent,
   type Artifact,
   type ApprovalRequest,
   type ReleaseReport,
@@ -381,6 +386,30 @@ interface BlueprintWorkerOptions {
   nodeRunLeaseMs?: number;
 }
 
+export class InboxDiscussionInProgressError extends Error {
+  readonly statusCode = 409;
+  readonly code = "inbox_discussion_in_progress";
+
+  constructor() {
+    super("Inbox discussion is already streaming for this thread.");
+    this.name = "InboxDiscussionInProgressError";
+  }
+}
+
+interface StreamInboxThreadMessageInput {
+  threadType: InboxThreadType;
+  threadId: string;
+  message: string;
+  onEvent: (event: StreamInboxThreadMessageEvent) => void;
+}
+
+interface StreamInboxThreadMessageResult {
+  threadType: InboxThreadType;
+  threadId: string;
+  userMessageId: string;
+  assistantMessageId?: string;
+}
+
 export class BlueprintWorker {
   private readonly activeRuns = new Map<string, Promise<void>>();
   private readonly pendingRunSchedules = new Map<string, { blueprint: BlueprintDefinition; run: BlueprintRun }>();
@@ -398,6 +427,7 @@ export class BlueprintWorker {
   private readonly nodeRunLeaseMs: number;
   private readonly nodeRunClaims = new Map<string, { owner: string; workerEpoch: number }>();
   private readonly pendingApprovalRevisionContexts = new Map<string, PendingApprovalRevisionContext>();
+  private readonly activeInboxThreadStreams = new Set<string>();
 
   constructor(
     private readonly store: HivewardStore,
@@ -1318,6 +1348,263 @@ export class BlueprintWorker {
     const nextRun = { ...run, status: "waiting_approval" as const };
     await this.store.updateBlueprintRun(nextRun);
     return nextRun;
+  }
+
+  isInboxThreadStreamActive(threadType: InboxThreadType, threadId: string): boolean {
+    return this.activeInboxThreadStreams.has(inboxThreadStreamKey(threadType, threadId));
+  }
+
+  async streamInboxThreadMessage(input: StreamInboxThreadMessageInput): Promise<StreamInboxThreadMessageResult> {
+    const message = input.message.trim();
+    if (!message) {
+      throw new Error("Inbox discussion message is required.");
+    }
+    const lockKey = inboxThreadStreamKey(input.threadType, input.threadId);
+    if (this.activeInboxThreadStreams.has(lockKey)) {
+      throw new InboxDiscussionInProgressError();
+    }
+    this.activeInboxThreadStreams.add(lockKey);
+    try {
+      if (input.threadType === "inbox") {
+        return await this.streamPlainInboxThreadMessage(input.threadId, message, input.onEvent);
+      }
+      return await this.streamApprovalInboxThreadMessage(input.threadId, message, input.onEvent);
+    } finally {
+      this.activeInboxThreadStreams.delete(lockKey);
+    }
+  }
+
+  private async streamPlainInboxThreadMessage(
+    threadId: string,
+    message: string,
+    onEvent: (event: StreamInboxThreadMessageEvent) => void
+  ): Promise<StreamInboxThreadMessageResult> {
+    const item = await this.store.replyToInboxItem(threadId, message);
+    const userMessageId = item.replies?.at(-1)?.id ?? threadId;
+    onEvent({ type: "inbox_message_created", messageId: userMessageId, threadType: "inbox", threadId });
+    onEvent(inboxDiscussionDoneEvent("inbox", threadId, userMessageId));
+    return { threadType: "inbox", threadId, userMessageId };
+  }
+
+  private async streamApprovalInboxThreadMessage(
+    threadId: string,
+    message: string,
+    onEvent: (event: StreamInboxThreadMessageEvent) => void
+  ): Promise<StreamInboxThreadMessageResult> {
+    const request = await this.resolveApprovalThreadRequest(threadId);
+    if (!request) {
+      throw new Error(`Approval thread not found: ${threadId}`);
+    }
+    if (this.isAgentBackedApprovalRequest(request)) {
+      return this.streamAgentMailDiscussion(request, message, onEvent);
+    }
+    const userReply = await this.appendApprovalDiscussionReply(request, "user", message);
+    onEvent({ type: "inbox_message_created", messageId: userReply.id, threadType: "approval", threadId });
+    if (request.runId) {
+      await this.managerMailProjector.refresh(request.runId);
+    }
+    onEvent(inboxDiscussionDoneEvent("approval", threadId, userReply.id));
+    return { threadType: "approval", threadId, userMessageId: userReply.id };
+  }
+
+  private async streamAgentMailDiscussion(
+    request: ApprovalRequest,
+    message: string,
+    onEvent: (event: StreamInboxThreadMessageEvent) => void
+  ): Promise<StreamInboxThreadMessageResult> {
+    if (request.status !== "pending") {
+      throw new Error("Agent approval request is no longer pending.");
+    }
+    if (!request.runId || !request.nodeRunId) {
+      throw new Error("Agent approval request is missing run or node context.");
+    }
+    const run = await this.store.getBlueprintRun(request.runId);
+    if (!run) {
+      throw new Error(`Blueprint run not found: ${request.runId}`);
+    }
+    if (this.isTerminalRunStatus(run.status)) {
+      throw new Error("Run is already finished.");
+    }
+    const archive = await this.store.getRunArchive(run.id);
+    const blueprint = archive?.blueprintSnapshot;
+    if (!blueprint) {
+      throw new Error("Blueprint snapshot was not found for this approval thread.");
+    }
+    const nodeRuns = await this.store.listNodeRuns(run.id);
+    const waiting = nodeRuns.find((nodeRun) => nodeRun.id === request.nodeRunId && nodeRun.status === "waiting_approval");
+    if (!waiting) {
+      throw new Error("Requested approval is no longer waiting.");
+    }
+    if (!isAgentApprovalWaitingOutput(waiting.output)) {
+      throw new Error("Only Agent approval requests can stream Agent discussion.");
+    }
+    const node = blueprint.nodes.find((candidate) => candidate.id === waiting.nodeId);
+    if (!node || !isAgentBlueprintNode(node)) {
+      throw new Error("Agent approval node was not found.");
+    }
+
+    const now = new Date().toISOString();
+    const threadId = approvalThreadIdForRequest(request);
+    await this.store.upsertApprovalThread(approvalThreadFromRequest({ ...request, updatedAt: now }));
+    const userReply: AgentApprovalReply = {
+      id: `approval-reply-${nanoid(10)}`,
+      role: "user",
+      body: message,
+      createdAt: now
+    };
+    await this.store.appendApprovalReply({
+      id: userReply.id,
+      threadId,
+      approvalRequestId: request.id,
+      actor: "user",
+      body: userReply.body,
+      createdAt: userReply.createdAt,
+      metadata: {
+        source: "inbox_thread_stream",
+        nodeRunId: waiting.id
+      }
+    });
+    const nodeRunWithUserReply: BlueprintNodeRun = {
+      ...waiting,
+      output: {
+        ...waiting.output,
+        replies: markSelectedApprovalReplies([...waiting.output.replies, userReply], waiting.output.selectedReplyId)
+      }
+    };
+    await this.store.upsertNodeRun(nodeRunWithUserReply);
+    await this.migrationService.migratePendingNodeApproval({
+      runId: run.id,
+      nodeRun: nodeRunWithUserReply,
+      requestedByLabel: waiting.nodeLabel
+    });
+    await this.managerMailProjector.refresh(run.id);
+    onEvent({ type: "inbox_message_created", messageId: userReply.id, threadType: "approval", threadId });
+
+    const config = node.config as AgentNodeConfig;
+    const runtimeId = node.runtimeId ?? "openclaw";
+    const replyInput = buildAgentApprovalReplyInput(waiting.input, waiting.output.reviewOutput, waiting.output.replies, userReply);
+    const inputWithWorkspace = await this.withAgentWorkspaceInput(blueprint, node, replyInput);
+    const crossRoundInput = await this.withNodeCrossRoundContext({
+      run,
+      node,
+      nodeRun: nodeRunWithUserReply,
+      input: inputWithWorkspace,
+      prompt: this.resolveAgentPrompt(config, { requiresHandoff: this.hasDownstreamConsumers(blueprint, node) })
+    });
+    const taskInput: StartAgentTaskInput = {
+      blueprintRunId: run.id,
+      nodeRunId: waiting.id,
+      source: resolveAgentRuntimeSource(runtimeId),
+      agentId: runtimeId === "openclaw" ? config.openclawAgentId ?? "main" : undefined,
+      profileId: runtimeId === "hermes" ? config.profileId : undefined,
+      agentName: config.agentName,
+      prompt: crossRoundInput.prompt,
+      modelId: config.modelId,
+      permissionProfile: config.permissionProfile,
+      runtimeAccessPolicy: config.runtimeAccessPolicy,
+      workingDirectory: config.workingDirectory,
+      timeoutMs: config.timeoutMs,
+      outputSchema: buildAgentOutputEnvelopeSchema(config.outputSchema),
+      input: crossRoundInput.input,
+      skillIds: config.skillIds,
+      tools: config.tools
+    };
+
+    const result = await this.adapter.streamAgentTask(taskInput, onEvent);
+    if (result.status !== "succeeded") {
+      await this.appendApprovalDiscussionReply(
+        request,
+        "system",
+        result.error ?? `Agent discussion ${result.status}.`,
+        {
+          source: "inbox_thread_stream",
+          nodeRunId: waiting.id,
+          status: "failed",
+          runtime: agentTaskRuntimeMetadata(result)
+        }
+      );
+      await this.managerMailProjector.refresh(run.id);
+      return { threadType: "approval", threadId, userMessageId: userReply.id };
+    }
+
+    const assistantReply: AgentApprovalReply = {
+      id: `approval-reply-${nanoid(10)}`,
+      role: "assistant",
+      body: formatAgentApprovalDiscussionBody(result.output),
+      createdAt: new Date().toISOString()
+    };
+    await this.store.appendApprovalReply({
+      id: assistantReply.id,
+      threadId,
+      approvalRequestId: request.id,
+      actor: "agent",
+      body: assistantReply.body,
+      createdAt: assistantReply.createdAt,
+      metadata: {
+        source: "inbox_thread_stream",
+        nodeRunId: waiting.id,
+        agentOutput: result.output,
+        runtime: agentTaskRuntimeMetadata(result)
+      }
+    });
+    const latestWaiting = (await this.store.listNodeRuns(run.id))
+      .find((nodeRun) => nodeRun.id === waiting.id && nodeRun.status === "waiting_approval");
+    const output = latestWaiting?.output;
+    if (!latestWaiting || !isAgentApprovalWaitingOutput(output)) {
+      throw new Error("Agent approval was resolved before the discussion reply could be saved.");
+    }
+    const nodeRunWithAssistantReply: BlueprintNodeRun = {
+      ...latestWaiting,
+      output: {
+        ...output,
+        replies: markSelectedApprovalReplies([...output.replies, assistantReply], output.selectedReplyId)
+      },
+      usage: result.usage ?? latestWaiting.usage
+    };
+    await this.store.upsertNodeRun(nodeRunWithAssistantReply);
+    await this.migrationService.migratePendingNodeApproval({
+      runId: run.id,
+      nodeRun: nodeRunWithAssistantReply,
+      requestedByLabel: waiting.nodeLabel
+    });
+    await this.managerMailProjector.refresh(run.id);
+    onEvent({ type: "inbox_candidate_created", replyId: assistantReply.id, threadType: "approval", threadId });
+    return { threadType: "approval", threadId, userMessageId: userReply.id, assistantMessageId: assistantReply.id };
+  }
+
+  private async resolveApprovalThreadRequest(threadId: string): Promise<ApprovalRequest | undefined> {
+    const requests = await this.store.listApprovalRequests();
+    const matching = requests.filter((request) => request.id === threadId || approvalThreadIdForRequest(request) === threadId);
+    return matching
+      .sort((left, right) => {
+        if (left.status === "pending" && right.status !== "pending") return -1;
+        if (right.status === "pending" && left.status !== "pending") return 1;
+        return right.revision - left.revision || approvalRequestTimestamp(right) - approvalRequestTimestamp(left);
+      })[0];
+  }
+
+  private isAgentBackedApprovalRequest(request: ApprovalRequest): boolean {
+    return request.kind === "agent_proposal" && Boolean(request.runId && request.nodeRunId);
+  }
+
+  private async appendApprovalDiscussionReply(
+    request: ApprovalRequest,
+    actor: "user" | "agent" | "manager" | "system",
+    body: string,
+    metadata?: Record<string, unknown>
+  ) {
+    const now = new Date().toISOString();
+    const threadId = approvalThreadIdForRequest(request);
+    await this.store.upsertApprovalThread(approvalThreadFromRequest({ ...request, updatedAt: now }));
+    return this.store.appendApprovalReply({
+      id: `approval-reply-${nanoid(10)}`,
+      threadId,
+      approvalRequestId: request.id,
+      actor,
+      body,
+      createdAt: now,
+      ...(metadata ? { metadata } : {})
+    });
   }
 
   private async rerunAgentApprovalForRequestedChanges(
@@ -4751,6 +5038,56 @@ function markSelectedApprovalReplies(
       ? { ...unselectedReply, selected: true }
       : unselectedReply;
   });
+}
+
+function inboxThreadStreamKey(threadType: InboxThreadType, threadId: string): string {
+  return `${threadType}:${threadId}`;
+}
+
+function approvalRequestTimestamp(request: ApprovalRequest): number {
+  return new Date(request.updatedAt ?? request.requestedAt).getTime();
+}
+
+function inboxDiscussionDoneEvent(threadType: InboxThreadType, threadId: string, messageId: string): ChatStreamEvent {
+  const now = new Date().toISOString();
+  return {
+    type: "done",
+    taskId: messageId,
+    runId: threadId,
+    sessionKey: inboxThreadStreamKey(threadType, threadId),
+    source: "openclaw",
+    status: "succeeded",
+    updatedAt: now
+  };
+}
+
+function formatAgentApprovalDiscussionBody(output: unknown): string {
+  const record = readOutputRecord(output);
+  const humanReportMd = readString(record?.humanReportMd);
+  if (humanReportMd) return humanReportMd;
+  if (typeof output === "string" && output.trim()) return output.trim();
+  return formatJsonForApprovalReply(output);
+}
+
+function formatJsonForApprovalReply(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function agentTaskRuntimeMetadata(result: AgentTaskResult): Record<string, unknown> {
+  return {
+    taskId: result.taskId,
+    runId: result.runId,
+    sessionKey: result.sessionKey,
+    source: result.source,
+    status: result.status,
+    updatedAt: result.updatedAt,
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.usage ? { usage: result.usage } : {})
+  };
 }
 
 function buildAgentApprovalReplyInput(

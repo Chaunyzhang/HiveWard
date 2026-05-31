@@ -714,7 +714,6 @@ export class SqliteHivewardStore implements HivewardStore {
       const body = readOptionalString(message);
       if (!body) throw new Error("Inbox reply message is required.");
       const item = this.requireInboxItem(itemId);
-      if (item.status === "approved") return item;
       const now = new Date().toISOString();
       this.driver.db.prepare(
         `INSERT INTO inbox_replies (id, inbox_item_id, message, created_at) VALUES (?, ?, ?, ?)`

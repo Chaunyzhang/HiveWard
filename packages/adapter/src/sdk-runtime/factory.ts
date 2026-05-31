@@ -19,6 +19,13 @@ export class AgentSdkRuntimeRouter implements AgentSdkRuntime {
     return this.runtimes[input.source].streamChatMessage(input, onEvent);
   }
 
+  streamTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    if (!isAgentSdkProvider(input.source)) {
+      throw new Error("SDK runtime requires claude or codex source.");
+    }
+    return this.runtimes[input.source].streamTask(input, onEvent);
+  }
+
   startTask(input: StartAgentTaskInput): Promise<StartedAgentTaskResult> {
     if (!isAgentSdkProvider(input.source)) {
       throw new Error("SDK runtime requires claude or codex source.");

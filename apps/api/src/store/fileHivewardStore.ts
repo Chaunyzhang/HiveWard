@@ -761,9 +761,6 @@ export class FileHivewardStore implements HivewardStore {
       const itemIndex = items.findIndex((item) => item.id === itemId);
       if (itemIndex < 0) throw new Error(`Inbox item not found: ${itemId}`);
       const item = items[itemIndex]!;
-      if (item.status === "approved") {
-        return item;
-      }
 
       const now = new Date().toISOString();
       const replied: InboxItem = {

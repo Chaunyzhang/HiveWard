@@ -815,6 +815,73 @@ describe("agent SDK runtime", () => {
     ]);
   });
 
+  it("streams Claude Agent tasks with started, delta, runtime state, and done events", async () => {
+    const workspace = createWorkspace();
+    const runtime = new ClaudeAgentSdkRuntime(
+      new AgentSdkTaskRegistry(2),
+      { defaultTimeoutMs: 60_000, workspaceRoot: workspace },
+      fakeClaudeQuery([
+        {
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "Draft" } },
+          parent_tool_use_id: null,
+          uuid: "partial-task-1",
+          session_id: "claude-session-task"
+        } as unknown as SDKMessage,
+        {
+          type: "tool_progress",
+          tool_use_id: "tool-task-1",
+          tool_name: "Read",
+          parent_tool_use_id: null,
+          elapsed_time_seconds: 1,
+          uuid: "tool-task-progress-1",
+          session_id: "claude-session-task"
+        } as unknown as SDKMessage,
+        {
+          type: "result",
+          subtype: "success",
+          duration_ms: 1,
+          duration_api_ms: 1,
+          is_error: false,
+          num_turns: 1,
+          result: "Draft answer",
+          stop_reason: null,
+          total_cost_usd: 0,
+          usage: {},
+          modelUsage: {},
+          permission_denials: [],
+          uuid: "uuid-task-stream",
+          session_id: "claude-session-task"
+        } as unknown as SDKMessage
+      ])
+    );
+    const events: unknown[] = [];
+
+    const result = await runtime.streamTask(
+      createStartInput({ source: "claude", workingDirectory: workspace, modelId: "inherit" }),
+      (event) => events.push(event)
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(events).toEqual([
+      expect.objectContaining({ type: "started", source: "claude", status: "running" }),
+      { type: "delta", text: "Draft" },
+      expect.objectContaining({
+        type: "runtime_state",
+        source: "claude",
+        phase: "tool",
+        label: "Read"
+      }),
+      { type: "delta", text: " answer" },
+      expect.objectContaining({
+        type: "done",
+        source: "claude",
+        status: "succeeded",
+        output: "Draft answer"
+      })
+    ]);
+  });
+
   it("maps Claude Code chat thinking controls to native SDK options", async () => {
     const workspace = createWorkspace();
     const capturedOptions: Array<Parameters<ClaudeQueryFn>[0]["options"]> = [];

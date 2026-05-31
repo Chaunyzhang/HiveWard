@@ -168,6 +168,27 @@ export interface ReplyInboxItemRequest {
   message: string;
 }
 
+export type InboxThreadType = "approval" | "inbox";
+
+export interface StreamInboxThreadMessageRequest {
+  message: string;
+}
+
+export type StreamInboxThreadMessageEvent =
+  | ChatStreamEvent
+  | {
+      type: "inbox_message_created";
+      messageId: string;
+      threadType: InboxThreadType;
+      threadId: string;
+    }
+  | {
+      type: "inbox_candidate_created";
+      replyId: string;
+      threadType: InboxThreadType;
+      threadId: string;
+    };
+
 export interface ApproveInboxItemResponse {
   item: InboxItem;
   importedBlueprints?: BlueprintDefinition[];
