@@ -22,8 +22,9 @@ These rules apply to this repository and all child directories. Follow them in n
 - 提 PR 前必须检查当前分支、远端、工作树和 diff：至少运行 `git status --short --branch`、查看相关 `git diff`，并确认没有误收用户未要求的改动。
 - 提 PR 前必须查看远端仓库的 PR 规则和近期 PR 格式：优先检查 `.github/pull_request_template*`；如果没有模板，则参考远端最近已合并或已关闭 PR 的标题和正文结构。
 - 当前 HiveWard 远端 PR 的通用格式以近期 PR 为准：发布型 PR 标题使用 `Release: ... as vX.Y.Z`；非发布型 PR 可使用简洁的 `[codex] ...` 或用户指定标题。
-- PR 正文默认使用远端近期 PR 的双语结构：先 `## English`，再 `## 中文`。英文区包含 `### Summary`、必要时的 `### Version`、`### Changes`、修复类改动的 `### Root Cause`、`### Validation`、`### Notes`；中文区对应包含 `### 摘要`、必要时的 `### 版本`、`### 主要变更`、修复类改动的 `### 根因`、`### 验证`、`### 备注`。
-- 如果 PR 是小型非发布改动，仍要覆盖同样信息密度：改了什么、为什么改、影响范围、验证结果、已知限制；可以省略确实不适用的 Version/版本，但不能省略验证说明。
+- PR 正文必须使用远端近期 PR 的标准结构。最新发布型 PR 的常用结构是：`## Summary`、`## Version`、修复类或根因清晰时的 `## Root Cause`、`## Changes`、较大改动的 `## Size`、`## Validation`、`## Notes`、最后 `## 中文说明`。不要临时发明别的标题体系。
+- `## Summary` 用 2-4 条项目符号概括结果和影响；`## Version` 只在发布/版本推进 PR 中写；`## Root Cause` 只在修 bug、修设计链路或用户明确问根因时写；`## Changes` 写具体改动；`## Size` 写文件数、增删行和特别大的新增文件；`## Validation` 写实际跑过的命令和结果；`## Notes` 写 draft/stacked/base 分支/环境限制；`## 中文说明` 用 2-4 条人话说明这个 PR 对用户意味着什么。
+- 如果 PR 是小型非发布改动，仍按同一套标题写，但可以省略确实不适用的 `## Version` 和 `## Size`；不能省略 `## Summary`、`## Changes`、`## Validation`、`## Notes`、`## 中文说明`。
 - 创建 PR 前必须先完成本地验证。若验证被环境问题阻塞，PR 正文和最终汇报必须明确写出具体命令、失败原因、是否与本次改动有关，以及已执行的替代验证。
 - 默认创建 Draft PR，除非用户明确要求 ready for review 或远端既有流程明显要求非 draft release PR。
 - `gh` 可用且已认证时可以用 `gh` 创建 PR；如果 `gh` 不存在或未认证，但 GitHub connector 可用，可以通过 GitHub connector 创建 PR，并在 PR Notes/备注里说明创建方式。
