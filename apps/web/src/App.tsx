@@ -72,6 +72,7 @@ import { appSectionGroups, appSystemLabels, type AppNavSectionId, type AppSectio
 import { getVisibleClaudeCodeSavedProfiles, isClaudeCodeSavedProfileActiveProvider } from "./lib/claude-code-saved-profiles";
 import { harnessDisplayLabel, harnessDisplayParts, isHarnessId } from "./lib/harness-labels";
 import { applyHarnessPermissionModesToBlueprint } from "./lib/harness-permissions";
+import { resolveSidebarActivityMeta } from "./lib/sidebar-activity";
 import {
   applyBlueprintUpdaterToCollection,
   blueprintCollectionSignature,
@@ -709,21 +710,23 @@ export function App() {
   }, []);
 
   const sidebarActivityMeta = useMemo<Partial<Record<AppNavSectionId, number>>>(
-    () => ({
-      blueprint: activeCountOrUndefined(dirtyBlueprintIds.size),
-      runs: activeCountOrUndefined(activeTaskCount),
-      approvals: activeCountOrUndefined(pendingApprovalCount + pendingInboxCount),
-      schedule: activeCountOrUndefined(activeTaskCount + pendingApprovalCount + pendingInboxCount),
-      openclaw: activeCountOrUndefined(countHarnessStatusActivity(openClawHarnessStatus) + countHarnessSkillActivity(harnessSkillStatuses.openclaw)),
-      claudeCodeConfig: activeCountOrUndefined(countHarnessStatusActivity(claudeCodeHarnessStatus) + countHarnessSkillActivity(harnessSkillStatuses.claudeCode)),
-      codexConfig: activeCountOrUndefined(countHarnessStatusActivity(codexHarnessStatus) + countHarnessSkillActivity(harnessSkillStatuses.codex)),
-      googleConfig: activeCountOrUndefined(countHarnessStatusActivity(googleHarnessStatus) + countHarnessSkillActivity(harnessSkillStatuses.google)),
-      cursorConfig: activeCountOrUndefined(countHarnessStatusActivity(cursorHarnessStatus) + countHarnessSkillActivity(harnessSkillStatuses.cursor)),
-      opencodeConfig: activeCountOrUndefined(countHarnessStatusActivity(opencodeHarnessStatus) + countHarnessSkillActivity(harnessSkillStatuses.opencode)),
-      hermesConfig: activeCountOrUndefined(countHarnessStatusActivity(hermesHarnessStatus) + countHarnessSkillActivity(harnessSkillStatuses.hermes)),
-      skills: activeCountOrUndefined(countHarnessSkillActivity(harnessSkillStatuses.openclaw)),
-      hermesSkills: activeCountOrUndefined(countHarnessSkillActivity(harnessSkillStatuses.hermes))
-    }),
+    () =>
+      resolveSidebarActivityMeta({
+        activeTaskCount,
+        pendingApprovalCount,
+        pendingInboxCount,
+        dirtyBlueprintCount: dirtyBlueprintIds.size,
+        harnessStatuses: {
+          openclaw: openClawHarnessStatus,
+          claudeCode: claudeCodeHarnessStatus,
+          codex: codexHarnessStatus,
+          google: googleHarnessStatus,
+          cursor: cursorHarnessStatus,
+          opencode: opencodeHarnessStatus,
+          hermes: hermesHarnessStatus
+        },
+        harnessSkillStatuses
+      }),
     [
       dirtyBlueprintIds.size,
       pendingApprovalCount,
@@ -3278,26 +3281,6 @@ function modelOptionsWithCurrent(options: ClaudeCodeModelOptionEntry[], currentM
   const current = String(currentModelId ?? "").trim();
   if (!current || options.some(([id]) => id === current)) return options;
   return [[current, current], ...options];
-}
-
-function activeCountOrUndefined(count: number): number | undefined {
-  return count > 0 ? count : undefined;
-}
-
-function countHarnessStatusActivity(status: HarnessStatus | undefined): number {
-  if (!status) return 0;
-  const checkIssues = status.checks.filter((check) => check.status === "warning" || check.status === "fail").length;
-  if (checkIssues > 0) return checkIssues;
-  let count = 0;
-  if (!status.installed) count += 1;
-  if (!status.environmentOk) count += 1;
-  if (status.connectionState !== "connected" && status.connectionState !== "available") count += 1;
-  return count;
-}
-
-function countHarnessSkillActivity(status: HarnessSkillStatusResponse | undefined): number {
-  if (!status?.supported) return 0;
-  return status.skills.filter((skill) => skill.status === "missing" || skill.status === "stale" || skill.status === "error").length;
 }
 
 function buildConfiguredClaudeCodeModels(config: ClaudeCodeModelConfig | undefined, presets: ClaudeCodeModelPreset[], language: Language): Array<{
