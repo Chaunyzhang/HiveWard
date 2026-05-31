@@ -1835,9 +1835,7 @@ describe("BlueprintWorker", () => {
       sourceId: "codex-task-1",
       sessionKey: "codex-session-final"
     });
-    expect(view?.nodeRuns[0]).not.toHaveProperty("openclawRef");
     expect(view?.run.runtimeRefs[0]?.source).toBe("codex");
-    expect(view?.run).not.toHaveProperty("openclawRefs");
   });
 
   it("lets a manager node route numbered slots and return to an earlier agent slot", async () => {

@@ -87,18 +87,9 @@ import {
 
 const storeIndexSchema = "hiveward.store-index/v1";
 
-type LegacyRuntimeRefFields = {
-  openclawRef?: RuntimeObjectRef;
-};
-
-type LegacyRuntimeRefsField = {
-  openclawRefs?: RuntimeObjectRef[];
-};
-
-type RunArchiveWithLegacyRuntimeRefs = Omit<BlueprintRunArchive, "run" | "nodeRuns" | "events"> & {
-  run: BlueprintRunSummary & LegacyRuntimeRefsField;
-  nodeRuns: Array<BlueprintNodeRun & LegacyRuntimeRefFields>;
-  events: Array<BlueprintNodeEvent & LegacyRuntimeRefFields>;
+type ObsoleteRuntimeRefAliasFields = {
+  openclawRef?: unknown;
+  openclawRefs?: unknown;
 };
 
 export interface BlueprintIndexEntry {
@@ -2212,25 +2203,11 @@ export function stripRemovedBlueprintRunArchive(archive: BlueprintRunArchive): B
 }
 
 function normalizeRunArchiveRuntimeRefs(archive: BlueprintRunArchive): BlueprintRunArchive {
-  const legacyArchive = archive as RunArchiveWithLegacyRuntimeRefs;
-  const runWithLegacyRefs = legacyArchive.run;
-  const { openclawRefs: _legacyRunRefs, ...runWithoutLegacyRefs } = runWithLegacyRefs;
-  const nodeRuns = Array.isArray(legacyArchive.nodeRuns)
-    ? legacyArchive.nodeRuns.map((nodeRun) => {
-        const { openclawRef: _legacyRuntimeRef, ...nodeRunWithoutLegacyRef } = nodeRun;
-        const runtimeRef = readLegacyNodeRunRuntimeRef(nodeRun);
-        return runtimeRef ? { ...nodeRunWithoutLegacyRef, runtimeRef } : nodeRunWithoutLegacyRef;
-      })
-    : [];
-  const events = Array.isArray(legacyArchive.events)
-    ? legacyArchive.events.map((event) => {
-        const { openclawRef: _legacyRuntimeRef, ...eventWithoutLegacyRef } = event;
-        const runtimeRef = readLegacyNodeEventRuntimeRef(event);
-        return runtimeRef ? { ...eventWithoutLegacyRef, runtimeRef } : eventWithoutLegacyRef;
-      })
-    : [];
+  const run = stripObsoleteRuntimeRefAliases(archive.run);
+  const nodeRuns = Array.isArray(archive.nodeRuns) ? archive.nodeRuns.map(stripObsoleteRuntimeRefAliases) : [];
+  const events = Array.isArray(archive.events) ? archive.events.map(stripObsoleteRuntimeRefAliases) : [];
   const runtimeRefs = mergeRuntimeRefs(
-    readLegacyRunRuntimeRefs(runWithLegacyRefs),
+    readCanonicalRunRuntimeRefs(run),
     nodeRuns.flatMap((nodeRun) => {
       const runtimeRef = readBlueprintNodeRunRuntimeRef(nodeRun);
       return runtimeRef ? [runtimeRef] : [];
@@ -2239,7 +2216,7 @@ function normalizeRunArchiveRuntimeRefs(archive: BlueprintRunArchive): Blueprint
   return {
     ...archive,
     run: {
-      ...runWithoutLegacyRefs,
+      ...run,
       runtimeRefs
     },
     nodeRuns,
@@ -2247,16 +2224,15 @@ function normalizeRunArchiveRuntimeRefs(archive: BlueprintRunArchive): Blueprint
   };
 }
 
-function readLegacyNodeRunRuntimeRef(nodeRun: BlueprintNodeRun & LegacyRuntimeRefFields): RuntimeObjectRef | undefined {
-  return nodeRun.runtimeRef ?? nodeRun.openclawRef;
+function stripObsoleteRuntimeRefAliases<T extends object>(value: T): T {
+  const { openclawRef: _obsoleteRuntimeRef, openclawRefs: _obsoleteRuntimeRefs, ...canonical } =
+    value as T & ObsoleteRuntimeRefAliasFields;
+  return canonical as T;
 }
 
-function readLegacyNodeEventRuntimeRef(event: BlueprintNodeEvent & LegacyRuntimeRefFields): RuntimeObjectRef | undefined {
-  return event.runtimeRef ?? event.openclawRef;
-}
-
-function readLegacyRunRuntimeRefs(run: BlueprintRunSummary & LegacyRuntimeRefsField): RuntimeObjectRef[] {
-  return run.runtimeRefs ?? run.openclawRefs ?? [];
+function readCanonicalRunRuntimeRefs(run: Pick<BlueprintRunSummary, "runtimeRefs">): RuntimeObjectRef[] {
+  const runtimeRefs = readBlueprintRunRuntimeRefs(run);
+  return Array.isArray(runtimeRefs) ? runtimeRefs : [];
 }
 
 function mergeRuntimeRefs(...groups: RuntimeObjectRef[][]): RuntimeObjectRef[] {
@@ -2815,13 +2791,12 @@ function normalizeBlueprintIndexEntry(
 }
 
 function normalizeRunSummary(run: BlueprintRunSummary, fallbackCompanyId: string): BlueprintRunSummary {
-  const runWithLegacyRefs = run as BlueprintRunSummary & LegacyRuntimeRefsField;
-  const { openclawRefs: _legacyRefs, ...runWithoutLegacyRefs } = runWithLegacyRefs;
+  const canonicalRun = stripObsoleteRuntimeRefAliases(run);
   return {
-    ...runWithoutLegacyRefs,
-    companyId: readScopedCompanyId(run.companyId, fallbackCompanyId),
-    blueprintName: run.blueprintName || run.blueprintId,
-    runtimeRefs: readLegacyRunRuntimeRefs(runWithLegacyRefs)
+    ...canonicalRun,
+    companyId: readScopedCompanyId(canonicalRun.companyId, fallbackCompanyId),
+    blueprintName: canonicalRun.blueprintName || canonicalRun.blueprintId,
+    runtimeRefs: readCanonicalRunRuntimeRefs(canonicalRun)
   };
 }
 

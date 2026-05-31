@@ -869,7 +869,7 @@ export class SqliteHivewardStore implements HivewardStore {
       this.driver.db.prepare(
         `INSERT INTO node_runs (
           id, run_id, blueprint_id, node_id, node_label, node_type, iteration_round_id, status,
-          queued_at, started_at, ended_at, error, usage_json, openclaw_ref_json, updated_at
+          queued_at, started_at, ended_at, error, usage_json, runtime_ref_json, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
@@ -878,7 +878,7 @@ export class SqliteHivewardStore implements HivewardStore {
           ended_at = excluded.ended_at,
           error = excluded.error,
           usage_json = excluded.usage_json,
-          openclaw_ref_json = excluded.openclaw_ref_json,
+          runtime_ref_json = excluded.runtime_ref_json,
           row_version = node_runs.row_version + 1,
           updated_at = excluded.updated_at`
       ).run(
@@ -1838,7 +1838,7 @@ export class SqliteHivewardStore implements HivewardStore {
       const result = this.driver.db.prepare(
         `UPDATE node_runs
          SET started_at = COALESCE(started_at, ?),
-             openclaw_ref_json = COALESCE(?, openclaw_ref_json),
+             runtime_ref_json = COALESCE(?, runtime_ref_json),
              row_version = row_version + 1,
              updated_at = ?
          WHERE id = ?
@@ -1875,7 +1875,7 @@ export class SqliteHivewardStore implements HivewardStore {
              ended_at = ?,
              error = NULL,
              usage_json = ?,
-             openclaw_ref_json = ?,
+             runtime_ref_json = ?,
              row_version = row_version + 1,
              updated_at = ?
           WHERE id = ?
@@ -1940,7 +1940,7 @@ export class SqliteHivewardStore implements HivewardStore {
          SET status = 'cancelled',
              ended_at = ?,
              error = ?,
-             openclaw_ref_json = COALESCE(?, openclaw_ref_json),
+             runtime_ref_json = COALESCE(?, runtime_ref_json),
              row_version = row_version + 1,
              updated_at = ?
          WHERE id = ?
@@ -1997,7 +1997,7 @@ export class SqliteHivewardStore implements HivewardStore {
            ended_at = ?,
            error = NULL,
            usage_json = ?,
-           openclaw_ref_json = ?,
+           runtime_ref_json = ?,
            row_version = row_version + 1,
            updated_at = ?
        WHERE id = ?
@@ -2411,7 +2411,7 @@ export class SqliteHivewardStore implements HivewardStore {
       `INSERT INTO runs (
         id, company_id, blueprint_id, blueprint_version_id, blueprint_name, blueprint_version,
         status, started_by, started_at, ended_at, duration_ms, total_input_tokens,
-        total_output_tokens, total_cost_usd, openclaw_refs_json, final_result_json, updated_at
+        total_output_tokens, total_cost_usd, runtime_refs_json, final_result_json, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status,
@@ -2420,7 +2420,7 @@ export class SqliteHivewardStore implements HivewardStore {
         total_input_tokens = excluded.total_input_tokens,
         total_output_tokens = excluded.total_output_tokens,
         total_cost_usd = excluded.total_cost_usd,
-        openclaw_refs_json = excluded.openclaw_refs_json,
+        runtime_refs_json = excluded.runtime_refs_json,
         final_result_json = excluded.final_result_json,
         row_version = runs.row_version + 1,
         updated_at = excluded.updated_at`
@@ -2497,7 +2497,7 @@ export class SqliteHivewardStore implements HivewardStore {
       this.driver.db.prepare(
         `INSERT INTO node_runs (
           id, run_id, blueprint_id, node_id, node_label, node_type, iteration_round_id, status,
-          queued_at, started_at, ended_at, error, usage_json, openclaw_ref_json, updated_at
+          queued_at, started_at, ended_at, error, usage_json, runtime_ref_json, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
@@ -2505,7 +2505,7 @@ export class SqliteHivewardStore implements HivewardStore {
           ended_at = excluded.ended_at,
           error = excluded.error,
           usage_json = excluded.usage_json,
-          openclaw_ref_json = excluded.openclaw_ref_json,
+          runtime_ref_json = excluded.runtime_ref_json,
           updated_at = excluded.updated_at`
       ).run(
         nodeRun.id,
@@ -2537,12 +2537,12 @@ export class SqliteHivewardStore implements HivewardStore {
     }
     for (const event of sanitized.events) {
       this.driver.db.prepare(
-        `INSERT INTO run_events (id, run_id, node_run_id, sequence, type, message, openclaw_ref_json, created_at)
+        `INSERT INTO run_events (id, run_id, node_run_id, sequence, type, message, runtime_ref_json, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            type = excluded.type,
            message = excluded.message,
-           openclaw_ref_json = excluded.openclaw_ref_json,
+           runtime_ref_json = excluded.runtime_ref_json,
            created_at = excluded.created_at`
       ).run(
         event.id,
@@ -2645,13 +2645,13 @@ export class SqliteHivewardStore implements HivewardStore {
   private appendEventSync(event: BlueprintNodeEvent): void {
     const sequence = this.nextEventSequence(event.blueprintRunId);
     this.driver.db.prepare(
-      `INSERT INTO run_events (id, run_id, node_run_id, sequence, type, message, openclaw_ref_json, created_at)
+      `INSERT INTO run_events (id, run_id, node_run_id, sequence, type, message, runtime_ref_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          node_run_id = excluded.node_run_id,
          type = excluded.type,
          message = excluded.message,
-         openclaw_ref_json = excluded.openclaw_ref_json,
+         runtime_ref_json = excluded.runtime_ref_json,
          created_at = excluded.created_at`
     ).run(
       event.id,
@@ -2876,7 +2876,7 @@ function runFromRow(row: Row): BlueprintRun {
     totalInputTokens: readNumber(row.total_input_tokens, 0),
     totalOutputTokens: readNumber(row.total_output_tokens, 0),
     totalCostUsd: readNumber(row.total_cost_usd, 0),
-    runtimeRefs: readJsonArray(row.openclaw_refs_json)
+    runtimeRefs: readJsonArray(row.runtime_refs_json)
   };
 }
 
@@ -2904,7 +2904,7 @@ function nodeRunFromRow(row: Row): BlueprintNodeRun {
     output: parseOptionalJson(row.output_json),
     error: readString(row.error),
     usage: parseOptionalJson(row.usage_json) as BlueprintNodeRun["usage"],
-    runtimeRef: parseOptionalJson(row.openclaw_ref_json) as BlueprintNodeRun["runtimeRef"]
+    runtimeRef: parseOptionalJson(row.runtime_ref_json) as BlueprintNodeRun["runtimeRef"]
   };
 }
 
@@ -2916,7 +2916,7 @@ function eventFromRow(row: Row): BlueprintNodeEvent {
     type: requireString(row.type) as BlueprintNodeEvent["type"],
     message: requireString(row.message),
     createdAt: requireString(row.created_at),
-    runtimeRef: parseOptionalJson(row.openclaw_ref_json) as BlueprintNodeEvent["runtimeRef"]
+    runtimeRef: parseOptionalJson(row.runtime_ref_json) as BlueprintNodeEvent["runtimeRef"]
   };
 }
 

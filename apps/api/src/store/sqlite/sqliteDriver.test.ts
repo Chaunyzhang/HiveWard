@@ -18,6 +18,19 @@ describe("SqliteDriver schema migrations", () => {
     second.close();
   });
 
+  it("uses canonical runtime ref columns after migration", () => {
+    const sqlitePath = join(mkdtempSync(join(tmpdir(), "hiveward-schema-runtime-ref-columns-")), "hiveward.sqlite");
+    const driver = new SqliteDriver(sqlitePath);
+    driver.migrate();
+    expect(listColumnNames(driver, "runs")).toContain("runtime_refs_json");
+    expect(listColumnNames(driver, "runs")).not.toContain("openclaw_refs_json");
+    expect(listColumnNames(driver, "node_runs")).toContain("runtime_ref_json");
+    expect(listColumnNames(driver, "node_runs")).not.toContain("openclaw_ref_json");
+    expect(listColumnNames(driver, "run_events")).toContain("runtime_ref_json");
+    expect(listColumnNames(driver, "run_events")).not.toContain("openclaw_ref_json");
+    driver.close();
+  });
+
   it("upgrades v1 databases with legacy migration compatibility columns", () => {
     const sqlitePath = join(mkdtempSync(join(tmpdir(), "hiveward-schema-v1-upgrade-")), "hiveward.sqlite");
     const first = new SqliteDriver(sqlitePath);
@@ -246,7 +259,7 @@ describe("SqliteDriver schema migrations", () => {
         type TEXT NOT NULL,
         message TEXT NOT NULL,
         payload_json TEXT,
-        openclaw_ref_json TEXT,
+        runtime_ref_json TEXT,
         created_at TEXT NOT NULL
       );
       CREATE INDEX idx_run_events_run_created ON run_events(run_id, created_at);

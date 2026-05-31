@@ -53,7 +53,7 @@ describe("FileHivewardStore blueprint node sanitization", () => {
     ]);
   });
 
-  it("normalizes legacy OpenClaw refs into runtime refs when reading run archives", async () => {
+  it("persists canonical runtime refs in run archives", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
     const storePath = join(dir, "hiveward-store.json");
     const store = new FileHivewardStore(storePath);
@@ -62,7 +62,50 @@ describe("FileHivewardStore blueprint node sanitization", () => {
     const now = new Date().toISOString();
     const blueprint = await store.saveBlueprint(createDirtyBlueprint(now));
     const run = await store.createBlueprintRun(blueprint, "tester");
-    const legacyRuntimeRef = {
+    const runtimeRef = {
+      source: "codex",
+      sourceId: "codex-task-1",
+      sourceUpdatedAt: now,
+      taskId: "codex-task-1",
+      runId: "codex-run-1",
+      sessionKey: "codex-session-1"
+    } as const;
+    await store.upsertNodeRun({
+      ...createNodeRun(run.id, blueprint.id, "draft", "agent", "succeeded"),
+      runtimeRef
+    });
+    await store.appendEvent({
+      id: "event-draft",
+      blueprintRunId: run.id,
+      nodeRunId: "node-run-draft",
+      type: "node.run.completed",
+      message: "Draft completed.",
+      createdAt: now,
+      runtimeRef
+    });
+
+    const view = await store.getRunView(run.id);
+    const archiveText = readFileSync(join(dir, "runs", `${run.id}.json`), "utf8");
+
+    expect(view?.run.runtimeRefs).toEqual([expect.objectContaining({ source: "codex", runId: "codex-run-1" })]);
+    expect(view?.nodeRuns[0]?.runtimeRef).toMatchObject({ source: "codex", sessionKey: "codex-session-1" });
+    expect(view?.events[0]?.runtimeRef).toMatchObject({ source: "codex", taskId: "codex-task-1" });
+    expect(archiveText).toContain("\"runtimeRef\"");
+    expect(archiveText).toContain("\"runtimeRefs\"");
+    expect(archiveText).not.toContain("openclawRef");
+    expect(archiveText).not.toContain("openclawRefs");
+  });
+
+  it("drops obsolete OpenClaw runtime aliases without using them as runtime refs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
+    const storePath = join(dir, "hiveward-store.json");
+    const store = new FileHivewardStore(storePath);
+    await store.init();
+
+    const now = new Date().toISOString();
+    const blueprint = await store.saveBlueprint(createDirtyBlueprint(now));
+    const run = await store.createBlueprintRun(blueprint, "tester");
+    const obsoleteRef = {
       source: "codex",
       sourceId: "codex-task-1",
       sourceUpdatedAt: now,
@@ -77,34 +120,29 @@ describe("FileHivewardStore blueprint node sanitization", () => {
       events: Array<Record<string, unknown>>;
     };
     delete archive.run.runtimeRefs;
-    delete archive.run.openclawRefs;
-    archive.nodeRuns = [
-      {
-        ...createNodeRun(run.id, blueprint.id, "draft", "agent", "succeeded"),
-        openclawRef: legacyRuntimeRef
-      }
-    ];
-    archive.events = [
-      {
-        id: "event-draft",
-        blueprintRunId: run.id,
-        nodeRunId: "node-run-draft",
-        type: "node.run.completed",
-        message: "Draft completed.",
-        createdAt: now,
-        openclawRef: legacyRuntimeRef
-      }
-    ];
+    archive.run.openclawRefs = [obsoleteRef];
+    archive.nodeRuns = [{
+      ...createNodeRun(run.id, blueprint.id, "draft", "agent", "succeeded"),
+      openclawRef: obsoleteRef
+    }];
+    archive.events = [{
+      id: "event-draft",
+      blueprintRunId: run.id,
+      nodeRunId: "node-run-draft",
+      type: "node.run.completed",
+      message: "Draft completed.",
+      createdAt: now,
+      openclawRef: obsoleteRef
+    }];
     writeFileSync(archivePath, JSON.stringify(archive, null, 2));
 
     const view = await store.getRunView(run.id);
 
-    expect(view?.run.runtimeRefs).toEqual([expect.objectContaining({ source: "codex", runId: "codex-run-1" })]);
-    expect(view?.run).not.toHaveProperty("openclawRefs");
-    expect(view?.nodeRuns[0]?.runtimeRef).toMatchObject({ source: "codex", sessionKey: "codex-session-1" });
-    expect(view?.nodeRuns[0]).not.toHaveProperty("openclawRef");
-    expect(view?.events[0]?.runtimeRef).toMatchObject({ source: "codex", taskId: "codex-task-1" });
-    expect(view?.events[0]).not.toHaveProperty("openclawRef");
+    expect(view?.run.runtimeRefs).toEqual([]);
+    expect(view?.nodeRuns[0]?.runtimeRef).toBeUndefined();
+    expect(view?.events[0]?.runtimeRef).toBeUndefined();
+    expect(JSON.stringify(view)).not.toContain("openclawRef");
+    expect(JSON.stringify(view)).not.toContain("openclawRefs");
   });
 
   it("backfills approval thread facts and manager mail projection from legacy index facts", async () => {
