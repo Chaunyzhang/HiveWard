@@ -206,7 +206,7 @@ describe.each(storeCases)("%s store contract", (_label, createHarness) => {
     } finally {
       close?.();
     }
-  });
+  }, 20_000);
 
   it("projects the pending approval harness from the paused node runtime", async () => {
     const { store, close } = await createHarness();

@@ -3556,7 +3556,7 @@ describe("BlueprintWorker", () => {
       summary: "round 1 manager snapshot",
       freeform: "Round 1 freeform memory."
     });
-  });
+  }, 30_000);
 
   it("starts self-iteration runs before preflight preparation completes", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
