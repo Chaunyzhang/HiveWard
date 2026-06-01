@@ -2,14 +2,14 @@
 
 ## Purpose
 
-Approval threads are the single conversation and lifecycle contract for HiveWard approvals. A reply or comment is conversation by default. Only explicit solution selection or another governed candidate-publication action can turn an assistant reply into the selected candidate, and only explicit lifecycle decisions can advance, end, or recalculate workflow state.
+Approval threads are the single conversation and lifecycle contract for HiveWard approvals. A reply or comment is always message-only. Only explicit lifecycle decisions can advance, end, or recalculate workflow state.
 
 This document records the architecture, API surface, migration notes, test matrix, and prompt boundary for the approval thread refactor.
 
 ## Core Model
 
 - `ApprovalThread` is the stable discussion container for one approval concern. Revised requests stay in the same thread when they share the same approval concern.
-- `ApprovalReply` is an append-only message fact. It stores user, agent, manager, or system text and optional provenance metadata. Assistant/agent/manager replies remain discussion messages until the human explicitly uses one as the selected solution.
+- `ApprovalReply` is an append-only message fact. It stores user, agent, manager, or system text and optional provenance metadata.
 - `ApprovalRequest` is the current approvable request fact. It carries kind, revision, capabilities, run/node references, and request status.
 - `ApprovalDecision` is the lifecycle action fact. Decisions record actions such as `approve`, `reject`, `complete`, `terminate`, `request_changes`, or `revise`.
 - `ManagerMail` is a rebuildable projection from approval facts. It must not become the source of truth for approval status.
@@ -19,7 +19,6 @@ This document records the architecture, API surface, migration notes, test matri
 | Action | Lifecycle effect | Allowed side effects |
 | --- | --- | --- |
 | `reply` / comment | Append a message only. Keep request and thread lifecycle unchanged. | Store a reply fact, update thread activity time, refresh read projections. |
-| `select-reply` / use solution | Keep lifecycle unchanged. | Mark the chosen assistant, agent, or manager reply as the current selected solution for the approval thread. |
 | `approve` | Accept the current request and run the deterministic next step for that request kind. | Resume execution, import an approved proposal, accept an agent output, or move a self-iteration round forward when that kind permits it. |
 | `complete` | Mark the approval target complete. | End the relevant round, session, run, or approval thread when the request kind permits it. |
 | `terminate` | Explicitly stop the workflow. | Record the reason and end the related run, session, or thread. |
@@ -27,7 +26,7 @@ This document records the architecture, API surface, migration notes, test matri
 | `request_changes` | Explicitly request changes to an Agent proposal. | May supersede the current request and rerun the Agent node into a new pending request in the same thread when the request kind permits it. |
 | `revise` | Explicitly ask the platform to regenerate a governed plan or report. | May supersede the current request and create a revised requirement plan or release report in the same thread when the request kind permits it. |
 
-`reply` must not create a candidate, select a candidate, schedule downstream work, create the next round, generate a revised request, import a blueprint, complete a run, terminate a run, or return a resume signal. The inbox thread stream may call the bound executor to answer the conversation, but that answer remains a normal discussion reply until the human explicitly selects it with `select-reply` or another governed candidate-publication action.
+`reply` must not call a harness, schedule a worker, create the next round, generate a revised request, import a blueprint, complete a run, terminate a run, or return a resume signal.
 
 ## API Surface
 
@@ -46,11 +45,6 @@ Request actions:
 - `POST /api/approval-requests/:approvalRequestId/terminate` terminates a request when the capability allows it.
 - `POST /api/approval-requests/:approvalRequestId/request-changes` explicitly requests changes when `requestChanges` is allowed.
 - `POST /api/approval-requests/:approvalRequestId/revise` explicitly regenerates the request when `revise` is allowed.
-- `POST /api/approval-requests/:approvalRequestId/select-reply` selects an assistant, agent, or manager reply as the current solution candidate. Selection does not approve, complete, reject, rerun, or otherwise advance lifecycle.
-
-Inbox discussion:
-
-- `POST /api/inbox/threads/:threadType/:threadId/messages/stream` appends the user's inbox reply, optionally routes the conversation to the bound executor through the thread-bound discussion session, resumes the stored native session when available, and streams the executor answer as a discussion reply.
 
 Thread endpoints are read and aggregation surfaces. Request endpoints are the only lifecycle action write surface; clients must not infer that a thread-level read API can mutate approval lifecycle.
 
