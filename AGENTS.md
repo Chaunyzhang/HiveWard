@@ -2,6 +2,19 @@
 
 These rules apply to this repository and all child directories. Follow them in new windows, resumed threads, and fresh agent sessions.
 
+## PR Writing Rules
+
+- Before creating or updating a PR, inspect the recent remote PRs in the same release train and match their title, body structure, base-branch convention, version naming, and validation style.
+- Release PR titles must follow the established format: `Release: <lowercase intent phrase> as v<major>.<minor>.<patch>`.
+- A release PR body must include these sections unless the current release train has a clearly different standard: `Summary / 摘要`, `Version / 版本`, `Root Cause / 根因`, `Changes / 变更`, `Size / 规模`, `Validation / 验证`, and `Notes / 备注`.
+- PR bodies must be bilingual when the release train uses bilingual explanations. English and Chinese must have the same section structure and the same facts. Do not write detailed English sections and then only a loose Chinese summary.
+- If an English bullet mentions behavior, scope, tests, version, base branch, risk, or remaining work, the Chinese side must include the same information in plain Chinese.
+- Keep version metadata aligned with the PR title and body. If the PR says `v0.5.19`, package versions and lockfile versions must also say `0.5.19`, unless the PR explicitly explains why there is no version bump.
+- Recompute PR size from the actual diff against the intended base branch. Do not reuse stale file counts, insertion counts, or deletion counts.
+- Validation entries must state exactly what was run and when. If a full test/build was run before a metadata-only change, say that plainly instead of implying it was rerun after the metadata change.
+- Document the intended base branch when the release train is stacked or when remote `main` is behind the active release baseline.
+- Exclude local test artifacts, logs, generated workspaces, and unrelated documentation from feature PRs unless the user explicitly asks to include them.
+
 ## Model Output Governance
 
 - HiveWard is a scheduling and orchestration layer first. The platform owns routing, lifecycle state, persistence, permissions, and declared output publication; Agents and Managers own judgment, strategy, content, tradeoffs, and expression.
