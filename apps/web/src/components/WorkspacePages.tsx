@@ -70,9 +70,7 @@ import {
   clearAllStreamingTextBuffers,
   clearStreamingTextBuffer,
   completeStreamingTextWithFinalBody,
-  drainStreamingTextBufferTick,
   flushStreamingTextBuffer,
-  streamingTextChunkSize,
   waitForStreamingTextDrained,
   type StreamingTextBuffer,
   type StreamingTextBufferScheduler
@@ -1411,8 +1409,8 @@ export function ApprovalsPage({
   const [localReplies, setLocalReplies] = useState<Record<string, InboxLocalReply[]>>({});
   const [pendingHarnessReplies, setPendingHarnessReplies] = useState<Record<string, InboxPendingHarnessReply>>({});
   const [streamingThreadKeys, setStreamingThreadKeys] = useState<Set<string>>(() => new Set());
-  const inboxStreamBuffersRef = useRef<Record<string, InboxStreamingBuffer>>({});
-  const inboxStreamScheduler = useMemo<InboxStreamingBufferScheduler>(
+  const inboxStreamBuffersRef = useRef<Record<string, StreamingTextBuffer>>({});
+  const inboxStreamScheduler = useMemo<StreamingTextBufferScheduler>(
     () => ({
       setInterval: (callback, delayMs) => window.setInterval(callback, delayMs),
       clearInterval: (timer) => window.clearInterval(timer)
@@ -1512,7 +1510,7 @@ export function ApprovalsPage({
       finishedKeys.add(key);
     }
     for (const key of finishedKeys) {
-      clearInboxStreamingBuffer(inboxStreamBuffersRef.current, key, inboxStreamScheduler);
+      clearStreamingTextBuffer(inboxStreamBuffersRef.current, key, inboxStreamScheduler);
     }
     if (!finishedKeys.size) return;
     setPendingHarnessReplies((current) => {
@@ -1526,15 +1524,15 @@ export function ApprovalsPage({
   }, [approvals, inboxStreamScheduler, pendingHarnessReplies]);
 
   useEffect(() => () => {
-    clearAllInboxStreamingBuffers(inboxStreamBuffersRef.current, inboxStreamScheduler);
+    clearAllStreamingTextBuffers(inboxStreamBuffersRef.current, inboxStreamScheduler);
   }, [inboxStreamScheduler]);
 
   useEffect(() => {
     for (const threadKey of Object.keys(inboxStreamBuffersRef.current)) {
       if (threadKey === selectedThreadKey) continue;
-      flushInboxStreamingBuffer({
+      flushStreamingTextBuffer({
         buffers: inboxStreamBuffersRef.current,
-        threadKey,
+        bufferKey: threadKey,
         scheduler: inboxStreamScheduler,
         setVisible: updateExistingPendingHarnessBody
       });
@@ -1619,9 +1617,9 @@ export function ApprovalsPage({
             return;
           }
           if (event.type === "delta") {
-            appendInboxStreamingDelta({
+            appendStreamingTextDelta({
               buffers: inboxStreamBuffersRef.current,
-              threadKey,
+              bufferKey: threadKey,
               text: event.text,
               replace: event.replace,
               scheduler: inboxStreamScheduler,
@@ -1637,9 +1635,9 @@ export function ApprovalsPage({
           if (event.type === "done") {
             const finalBody = event.output || event.error || "";
             if (finalBody) {
-              completeInboxStreamingBufferWithFinalBody({
+              completeStreamingTextWithFinalBody({
                 buffers: inboxStreamBuffersRef.current,
-                threadKey,
+                bufferKey: threadKey,
                 finalBody,
                 scheduler: inboxStreamScheduler,
                 setVisible: (_key, visible) => {
@@ -1677,9 +1675,9 @@ export function ApprovalsPage({
             return;
           }
           if (event.type === "error") {
-            const flushedBody = flushInboxStreamingBuffer({
+            const flushedBody = flushStreamingTextBuffer({
               buffers: inboxStreamBuffersRef.current,
-              threadKey,
+              bufferKey: threadKey,
               scheduler: inboxStreamScheduler,
               setVisible: (_key, visible) => {
                 upsertStreamingReply({
@@ -1699,9 +1697,9 @@ export function ApprovalsPage({
     )
       .catch((error) => {
         const errorBody = error instanceof Error ? error.message : inboxCopy.processedPlaceholder;
-        completeInboxStreamingBufferWithFinalBody({
+        completeStreamingTextWithFinalBody({
           buffers: inboxStreamBuffersRef.current,
-          threadKey,
+          bufferKey: threadKey,
           finalBody: errorBody,
           scheduler: inboxStreamScheduler,
           setVisible: (_key, visible) => {
@@ -1717,9 +1715,9 @@ export function ApprovalsPage({
         });
       })
       .finally(async () => {
-        await waitForInboxStreamingBufferDrained({
+        await waitForStreamingTextDrained({
           buffers: inboxStreamBuffersRef.current,
-          threadKey,
+          bufferKey: threadKey,
           scheduler: inboxStreamScheduler,
           setVisible: (_key, visible) => {
             upsertStreamingReply({
@@ -1728,7 +1726,7 @@ export function ApprovalsPage({
             });
           }
         });
-        clearInboxStreamingBuffer(inboxStreamBuffersRef.current, threadKey, inboxStreamScheduler);
+        clearStreamingTextBuffer(inboxStreamBuffersRef.current, threadKey, inboxStreamScheduler);
         setStreamingThreadKeys((current) => {
           const next = new Set(current);
           next.delete(threadKey);
@@ -2020,97 +2018,6 @@ type InboxPendingHarnessReply = {
   solutionId?: string;
   canUseAsSolution?: boolean;
 };
-
-export type InboxStreamingBuffer = {
-  visible: string;
-  queued: string;
-  timer?: number;
-  drainResolvers?: Array<(visible: string) => void>;
-};
-
-export type InboxStreamingBufferScheduler = StreamingTextBufferScheduler;
-
-export const inboxStreamingChunkSize = streamingTextChunkSize;
-export const drainInboxStreamingBufferTick = drainStreamingTextBufferTick;
-
-export function appendInboxStreamingDelta(input: {
-  buffers: Record<string, InboxStreamingBuffer>;
-  threadKey: string;
-  text: string;
-  replace?: boolean;
-  scheduler: InboxStreamingBufferScheduler;
-  setVisible: (threadKey: string, visible: string) => void;
-}): string {
-  return appendStreamingTextDelta({
-    buffers: input.buffers,
-    bufferKey: input.threadKey,
-    text: input.text,
-    replace: input.replace,
-    scheduler: input.scheduler,
-    setVisible: input.setVisible
-  });
-}
-
-export function completeInboxStreamingBufferWithFinalBody(input: {
-  buffers: Record<string, InboxStreamingBuffer>;
-  threadKey: string;
-  finalBody: string;
-  scheduler: InboxStreamingBufferScheduler;
-  setVisible: (threadKey: string, visible: string) => void;
-}): string {
-  return completeStreamingTextWithFinalBody({
-    buffers: input.buffers,
-    bufferKey: input.threadKey,
-    finalBody: input.finalBody,
-    scheduler: input.scheduler,
-    setVisible: input.setVisible
-  });
-}
-
-export function flushInboxStreamingBuffer(input: {
-  buffers: Record<string, InboxStreamingBuffer>;
-  threadKey: string;
-  scheduler: InboxStreamingBufferScheduler;
-  setVisible?: (threadKey: string, visible: string) => void;
-  finalBody?: string;
-}): string {
-  return flushStreamingTextBuffer({
-    buffers: input.buffers,
-    bufferKey: input.threadKey,
-    scheduler: input.scheduler,
-    setVisible: input.setVisible,
-    finalBody: input.finalBody
-  });
-}
-
-export function waitForInboxStreamingBufferDrained(input: {
-  buffers: Record<string, InboxStreamingBuffer>;
-  threadKey: string;
-  scheduler: InboxStreamingBufferScheduler;
-  setVisible: (threadKey: string, visible: string) => void;
-}): Promise<string> {
-  return waitForStreamingTextDrained({
-    buffers: input.buffers,
-    bufferKey: input.threadKey,
-    scheduler: input.scheduler,
-    setVisible: input.setVisible
-  });
-}
-
-export function clearInboxStreamingBuffer(
-  buffers: Record<string, InboxStreamingBuffer>,
-  threadKey: string,
-  scheduler: InboxStreamingBufferScheduler
-): void {
-  clearStreamingTextBuffer(buffers, threadKey, scheduler);
-}
-
-export function clearAllInboxStreamingBuffers(
-  buffers: Record<string, InboxStreamingBuffer>,
-  scheduler: InboxStreamingBufferScheduler
-): void {
-  clearAllStreamingTextBuffers(buffers, scheduler);
-}
 
 export type ReadOnlyConversationMessage = {
   id: string;

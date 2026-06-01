@@ -2,25 +2,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ApprovalThread, BlueprintDefinition, BlueprintRunView, PendingApprovalItem } from "@hiveward/shared";
 import { messages } from "../lib/i18n";
+import type { StreamingTextBuffer, StreamingTextBufferScheduler } from "../lib/typewriter-stream";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import {
   ApprovalsPage,
-  appendInboxStreamingDelta,
   buildRuntimeConversationMessages,
   buildCurrentOutputDisplayBody,
-  clearAllInboxStreamingBuffers,
   CompanyDirectoryPage,
-  completeInboxStreamingBufferWithFinalBody,
-  flushInboxStreamingBuffer,
-  type InboxStreamingBuffer,
-  type InboxStreamingBufferScheduler,
   resolveApprovalReplySelectionTarget,
   RunsPage,
   shouldAwaitApprovalHarnessReply,
   shouldRefreshInboxThreadImmediately,
   syncRuntimeConversationBuffers,
-  type RuntimeConversationSourceMessage,
-  waitForInboxStreamingBufferDrained
+  type RuntimeConversationSourceMessage
 } from "./WorkspacePages";
 
 describe("CompanyDirectoryPage", () => {
@@ -67,7 +61,7 @@ function createPendingApproval(overrides: Partial<PendingApprovalItem> = {}): Pe
   };
 }
 
-function createInboxStreamingBufferScheduler(): InboxStreamingBufferScheduler & {
+function createStreamingTextBufferScheduler(): StreamingTextBufferScheduler & {
   callbacks: Map<number, () => void>;
   cleared: number[];
 } {
@@ -349,143 +343,6 @@ describe("ApprovalsPage", () => {
       type: "delta",
       text: "assistant text"
     })).toBe(false);
-  });
-
-  it("buffers inbox assistant deltas and reveals them one character per tick", () => {
-    const scheduler = createInboxStreamingBufferScheduler();
-    const buffers: Record<string, InboxStreamingBuffer> = {};
-    const updates: string[] = [];
-    const largeDelta = "ABC";
-
-    appendInboxStreamingDelta({
-      buffers,
-      threadKey: "approval:thread-1",
-      text: largeDelta,
-      scheduler,
-      setVisible: (_threadKey, visible) => updates.push(visible)
-    });
-
-    expect(updates).toEqual([]);
-    expect(buffers["approval:thread-1"]?.queued).toBe(largeDelta);
-    scheduler.callbacks.get(1)?.();
-    expect(updates.at(-1)).toBe("A");
-    scheduler.callbacks.get(1)?.();
-    expect(updates.at(-1)).toBe("AB");
-    scheduler.callbacks.get(1)?.();
-    expect(updates.at(-1)).toBe("ABC");
-
-    const flushed = flushInboxStreamingBuffer({
-      buffers,
-      threadKey: "approval:thread-1",
-      scheduler,
-      setVisible: (_threadKey, visible) => updates.push(visible)
-    });
-
-    expect(flushed).toBe(largeDelta);
-    expect(updates.at(-1)).toBe(largeDelta);
-    expect(buffers["approval:thread-1"]?.queued).toBe("");
-    expect(scheduler.cleared).toContain(1);
-  });
-
-  it("queues replacement inbox assistant stream content instead of dumping it all at once", () => {
-    const scheduler = createInboxStreamingBufferScheduler();
-    const buffers: Record<string, InboxStreamingBuffer> = {};
-    const updates: string[] = [];
-
-    appendInboxStreamingDelta({
-      buffers,
-      threadKey: "approval:thread-1",
-      text: "B".repeat(80),
-      scheduler,
-      setVisible: (_threadKey, visible) => updates.push(visible)
-    });
-    expect(buffers["approval:thread-1"]?.queued.length).toBe(80);
-
-    appendInboxStreamingDelta({
-      buffers,
-      threadKey: "approval:thread-1",
-      text: "replacement",
-      replace: true,
-      scheduler,
-      setVisible: (_threadKey, visible) => updates.push(visible)
-    });
-
-    expect(updates.at(-1)).toBe("");
-    expect(buffers["approval:thread-1"]).toMatchObject({
-      visible: "",
-      queued: "replacement"
-    });
-    expect(scheduler.cleared).toContain(1);
-    scheduler.callbacks.get(2)?.();
-    expect(updates.at(-1)).toBe("r");
-  });
-
-  it("queues final inbox assistant output and waits for the typewriter drain", async () => {
-    const scheduler = createInboxStreamingBufferScheduler();
-    const buffers: Record<string, InboxStreamingBuffer> = {};
-    const updates: string[] = [];
-
-    appendInboxStreamingDelta({
-      buffers,
-      threadKey: "approval:thread-1",
-      text: "Hel",
-      scheduler,
-      setVisible: (_threadKey, visible) => updates.push(visible)
-    });
-    scheduler.callbacks.get(1)?.();
-    expect(updates.at(-1)).toBe("H");
-
-    completeInboxStreamingBufferWithFinalBody({
-      buffers,
-      threadKey: "approval:thread-1",
-      finalBody: "Hello",
-      scheduler,
-      setVisible: (_threadKey, visible) => updates.push(visible)
-    });
-
-    expect(buffers["approval:thread-1"]).toMatchObject({
-      visible: "H",
-      queued: "ello"
-    });
-
-    const drained = waitForInboxStreamingBufferDrained({
-      buffers,
-      threadKey: "approval:thread-1",
-      scheduler,
-      setVisible: (_threadKey, visible) => updates.push(visible)
-    });
-    scheduler.callbacks.get(1)?.();
-    scheduler.callbacks.get(1)?.();
-    scheduler.callbacks.get(1)?.();
-    scheduler.callbacks.get(1)?.();
-
-    await expect(drained).resolves.toBe("Hello");
-    expect(updates.at(-1)).toBe("Hello");
-  });
-
-  it("clears inbox streaming timers when conversation buffers are discarded", () => {
-    const scheduler = createInboxStreamingBufferScheduler();
-    const buffers: Record<string, InboxStreamingBuffer> = {};
-
-    appendInboxStreamingDelta({
-      buffers,
-      threadKey: "approval:thread-1",
-      text: "C".repeat(80),
-      scheduler,
-      setVisible: () => undefined
-    });
-    appendInboxStreamingDelta({
-      buffers,
-      threadKey: "approval:thread-2",
-      text: "D".repeat(80),
-      scheduler,
-      setVisible: () => undefined
-    });
-
-    clearAllInboxStreamingBuffers(buffers, scheduler);
-
-    expect(buffers).toEqual({});
-    expect(scheduler.cleared).toEqual(expect.arrayContaining([1, 2]));
   });
 
   it("routes candidate selection to node-run or request-level handlers by approval kind", () => {
@@ -1129,8 +986,8 @@ describe("RunsPage", () => {
   });
 
   it("queues only the new runtime suffix when a timeline body grows", () => {
-    const scheduler = createInboxStreamingBufferScheduler();
-    const buffers: Record<string, InboxStreamingBuffer> = {};
+    const scheduler = createStreamingTextBufferScheduler();
+    const buffers: Record<string, StreamingTextBuffer> = {};
     const receivedBodies: Record<string, string> = {};
     const updates: string[] = [];
     const message: RuntimeConversationSourceMessage = {
@@ -1169,8 +1026,8 @@ describe("RunsPage", () => {
   });
 
   it("queues runtime replacement bodies instead of showing replacements immediately", () => {
-    const scheduler = createInboxStreamingBufferScheduler();
-    const buffers: Record<string, InboxStreamingBuffer> = {
+    const scheduler = createStreamingTextBufferScheduler();
+    const buffers: Record<string, StreamingTextBuffer> = {
       "run:run-runtime:runtime:timeline-runtime": { visible: "Old", queued: "" }
     };
     const receivedBodies: Record<string, string> = {
@@ -1199,8 +1056,8 @@ describe("RunsPage", () => {
   });
 
   it("clears stale runtime buffers when timeline messages disappear", () => {
-    const scheduler = createInboxStreamingBufferScheduler();
-    const buffers: Record<string, InboxStreamingBuffer> = {};
+    const scheduler = createStreamingTextBufferScheduler();
+    const buffers: Record<string, StreamingTextBuffer> = {};
     const receivedBodies: Record<string, string> = {};
 
     syncRuntimeConversationBuffers({
