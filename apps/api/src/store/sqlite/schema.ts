@@ -554,6 +554,43 @@ const sqliteApprovalThreadDiscussionSessionStatements = [
   "ALTER TABLE approval_threads ADD COLUMN discussion_session_json TEXT"
 ];
 
+const sqliteNodeExecutionSessionStatements = [
+  `CREATE TABLE IF NOT EXISTS node_execution_sessions (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    node_run_id TEXT NOT NULL REFERENCES node_runs(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL,
+    agent_seat_id TEXT,
+    harness_id TEXT NOT NULL,
+    native_session_id TEXT,
+    runtime_ref_json TEXT,
+    policy TEXT NOT NULL CHECK (policy IN ('refresh_per_run','refresh_per_round','preserve_across_rounds')),
+    status TEXT NOT NULL CHECK (status IN ('active','paused','completed','failed','unavailable','fallback')),
+    status_reason TEXT,
+    fallback_of_session_id TEXT,
+    resumed_from_session_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_used_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_node_execution_sessions_node_run ON node_execution_sessions(node_run_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_node_execution_sessions_reuse ON node_execution_sessions(run_id, node_id, harness_id, status, updated_at)`,
+  `CREATE TABLE IF NOT EXISTS node_session_transcript_events (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES node_execution_sessions(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    node_run_id TEXT NOT NULL REFERENCES node_runs(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('user','assistant','system','runtime')),
+    kind TEXT NOT NULL,
+    content TEXT,
+    runtime_ref_json TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_node_session_transcript_events_session ON node_session_transcript_events(session_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_node_session_transcript_events_run ON node_session_transcript_events(run_id, created_at)`
+];
+
 function checksumStatements(statements: string[]): string {
   return createHash("sha256").update(statements.join("\n")).digest("hex");
 }
@@ -618,6 +655,12 @@ export const sqliteMigrations: SqliteMigration[] = [
     name: "approval_thread_discussion_session",
     checksum: checksumStatements(sqliteApprovalThreadDiscussionSessionStatements),
     up: sqliteApprovalThreadDiscussionSessionStatements
+  },
+  {
+    version: 11,
+    name: "node_execution_sessions",
+    checksum: checksumStatements(sqliteNodeExecutionSessionStatements),
+    up: sqliteNodeExecutionSessionStatements
   }
 ];
 
@@ -631,6 +674,8 @@ export const sqliteRequiredSchema = {
   run_sequence_counters: ["run_id", "scope", "last_sequence", "updated_at"],
   node_runs: ["id", "run_id", "blueprint_id", "node_id", "node_label", "node_type", "status", "runtime_ref_json", "lease_owner", "worker_epoch", "row_version", "updated_at"],
   node_run_payloads: ["node_run_id", "input_json", "output_json", "raw_result_json", "updated_at"],
+  node_execution_sessions: ["id", "run_id", "node_run_id", "node_id", "harness_id", "policy", "status", "created_at", "updated_at"],
+  node_session_transcript_events: ["id", "session_id", "run_id", "node_run_id", "role", "kind", "created_at"],
   run_events: ["id", "run_id", "node_run_id", "sequence", "type", "message", "runtime_ref_json", "created_at"],
   approval_threads: ["id", "kind", "status", "title", "current_revision", "capabilities_json", "created_at", "updated_at"],
   approval_replies: ["id", "approval_request_id", "thread_id", "message", "actor", "created_at", "metadata_json"],
@@ -651,6 +696,8 @@ export const sqliteRequiredSchema = {
 export const sqliteRequiredIndexes = {
   runs: ["idx_runs_company_started", "idx_runs_blueprint_started", "idx_runs_status_updated"],
   node_runs: ["idx_node_runs_run_status", "idx_node_runs_run_round_node"],
+  node_execution_sessions: ["idx_node_execution_sessions_node_run", "idx_node_execution_sessions_reuse"],
+  node_session_transcript_events: ["idx_node_session_transcript_events_session", "idx_node_session_transcript_events_run"],
   run_events: ["idx_run_events_run_created"],
   run_timeline_items: ["idx_run_timeline_run_created"],
   approval_threads: ["idx_approval_threads_run_status"],
@@ -669,6 +716,11 @@ export const sqliteRequiredUniqueConstraints = [
 export const sqliteRequiredForeignKeys = [
   { table: "runs", from: "company_id", targetTable: "companies", to: "id" },
   { table: "node_runs", from: "run_id", targetTable: "runs", to: "id" },
+  { table: "node_execution_sessions", from: "run_id", targetTable: "runs", to: "id" },
+  { table: "node_execution_sessions", from: "node_run_id", targetTable: "node_runs", to: "id" },
+  { table: "node_session_transcript_events", from: "session_id", targetTable: "node_execution_sessions", to: "id" },
+  { table: "node_session_transcript_events", from: "run_id", targetTable: "runs", to: "id" },
+  { table: "node_session_transcript_events", from: "node_run_id", targetTable: "node_runs", to: "id" },
   { table: "run_events", from: "run_id", targetTable: "runs", to: "id" },
   { table: "run_timeline_items", from: "run_id", targetTable: "runs", to: "id" },
   { table: "approval_decisions", from: "approval_request_id", targetTable: "approval_requests", to: "id" },
@@ -682,6 +734,9 @@ export const sqliteRequiredForeignKeys = [
 export const sqliteRequiredChecks = [
   { table: "runs", contains: "status IN ('queued','running','succeeded','failed','cancelled','skipped','waiting_approval')" },
   { table: "node_runs", contains: "status IN ('queued','running','succeeded','failed','cancelled','skipped','waiting_approval')" },
+  { table: "node_execution_sessions", contains: "policy IN ('refresh_per_run','refresh_per_round','preserve_across_rounds')" },
+  { table: "node_execution_sessions", contains: "status IN ('active','paused','completed','failed','unavailable','fallback')" },
+  { table: "node_session_transcript_events", contains: "role IN ('user','assistant','system','runtime')" },
   { table: "approval_requests", contains: "status IN ('pending','approved','rejected','replied','completed','terminated','superseded')" },
   { table: "approval_threads", contains: "status IN ('open','closed')" },
   { table: "approval_decisions", contains: "actor IN ('user','system','manager')" },

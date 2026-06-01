@@ -45,12 +45,46 @@ describe("JSON to SQLite migration", () => {
     await source.upsertArtifact(createContractArtifact(run.id, nodeRun.id));
     await source.upsertAgentHumanReport(createContractHumanReport(run.id, nodeRun.id));
     await source.upsertAgentHandoff(createContractHandoff(run.id, nodeRun.id));
+    const executionSession = await source.createNodeExecutionSession({
+      id: "node-session-migration",
+      runId: run.id,
+      nodeRunId: nodeRun.id,
+      nodeId: nodeRun.nodeId,
+      agentSeatId: "agent:codex:main",
+      harnessId: "codex",
+      nativeSessionId: "native-session-migration",
+      runtimeRef: {
+        source: "codex",
+        sourceId: "task-migration",
+        sourceUpdatedAt: contractNow,
+        taskId: "task-migration",
+        runId: "task-migration-run",
+        sessionKey: "native-session-migration"
+      },
+      policy: "preserve_across_rounds",
+      status: "completed",
+      createdAt: contractNow,
+      updatedAt: contractNow
+    });
+    await source.appendNodeSessionTranscriptEvent({
+      id: "node-session-event-migration",
+      sessionId: executionSession.id,
+      runId: run.id,
+      nodeRunId: nodeRun.id,
+      role: "assistant",
+      kind: "assistant_message",
+      content: "Migrated visible transcript",
+      metadata: { migrated: true },
+      createdAt: contractNow
+    });
     await source.createChatSession({ harnessId: "codex", title: "Migrated chat" });
 
     const sqlitePath = join(dataDir, "hiveward.sqlite");
     const migration = await migrateJsonToSqlite({ dataDir, sqlitePath });
     expect(migration.status).toBe("applied");
     expect(migration.counts.runs).toBeGreaterThanOrEqual(1);
+    expect(migration.counts.nodeExecutionSessions).toBe(1);
+    expect(migration.counts.nodeSessionTranscriptEvents).toBe(1);
 
     const verification = await verifySqliteMigration({ dataDir, sqlitePath });
     expect(verification).toMatchObject({ ok: true, mismatches: [] });

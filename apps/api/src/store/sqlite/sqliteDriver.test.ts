@@ -34,7 +34,7 @@ describe("SqliteDriver schema migrations", () => {
   it("canonicalizes legacy inbox and approval kinds in the v8 migration", () => {
     const sqlitePath = join(mkdtempSync(join(tmpdir(), "hiveward-schema-v8-kinds-")), "hiveward.sqlite");
     const legacy = new SqliteDriver(sqlitePath);
-    legacy.migrate(sqliteMigrations.slice(0, 7));
+    applyMigrationsWithoutValidation(legacy, sqliteMigrations.slice(0, 7));
     const now = "2026-05-31T00:00:00.000Z";
     legacy.db.prepare(
       "INSERT INTO companies (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)"
@@ -412,4 +412,18 @@ describe("SqliteDriver schema migrations", () => {
 
 function listColumnNames(driver: SqliteDriver, table: string): string[] {
   return (driver.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name);
+}
+
+function applyMigrationsWithoutValidation(driver: SqliteDriver, migrations: Array<(typeof sqliteMigrations)[number]>): void {
+  const apply = driver.db.transaction(() => {
+    for (const migration of migrations) {
+      for (const statement of migration.up) {
+        driver.db.exec(statement);
+      }
+      driver.db.prepare(
+        "INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES (?, ?, ?, ?)"
+      ).run(migration.version, migration.name, new Date().toISOString(), migration.checksum);
+    }
+  });
+  apply();
 }

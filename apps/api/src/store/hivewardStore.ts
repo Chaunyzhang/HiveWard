@@ -29,6 +29,10 @@ import type {
   IterationSession,
   ManagerContextSnapshot,
   ManagerMail,
+  NodeExecutionSession,
+  NodeExecutionSessionPolicy,
+  NodeExecutionSessionStatus,
+  NodeSessionTranscriptEvent,
   PortableBlueprintPackage,
   ReleaseReport,
   RoleDriverBinding,
@@ -98,6 +102,59 @@ export type PublishAgentOutputInput = NodeRunTransitionInput & {
 export type PublishAgentOutputResult = {
   published: boolean;
 };
+
+export type CreateNodeExecutionSessionInput = {
+  id?: string;
+  runId: string;
+  nodeRunId: string;
+  nodeId: string;
+  agentSeatId?: string;
+  harnessId: NodeExecutionSession["harnessId"];
+  nativeSessionId?: string;
+  runtimeRef?: NodeExecutionSession["runtimeRef"];
+  policy: NodeExecutionSessionPolicy;
+  status?: NodeExecutionSessionStatus;
+  statusReason?: string;
+  fallbackOfSessionId?: string;
+  resumedFromSessionId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  lastUsedAt?: string;
+};
+
+export type NodeExecutionSessionFilter = {
+  runId?: string;
+  nodeId?: string;
+  nodeRunId?: string;
+  harnessId?: NodeExecutionSession["harnessId"];
+  status?: NodeExecutionSessionStatus;
+};
+
+export type UpdateNodeExecutionSessionRuntimeRefInput = {
+  sessionId: string;
+  runtimeRef?: NodeExecutionSession["runtimeRef"];
+  nativeSessionId?: string;
+  status?: NodeExecutionSessionStatus;
+  updatedAt?: string;
+  lastUsedAt?: string;
+};
+
+export type MarkNodeExecutionSessionUnavailableInput = {
+  sessionId: string;
+  reason: string;
+  updatedAt?: string;
+};
+
+export type CreateFallbackNodeExecutionSessionInput = Omit<CreateNodeExecutionSessionInput, "status" | "fallbackOfSessionId"> & {
+  fallbackOfSessionId: string;
+  statusReason?: string;
+};
+
+export type AppendNodeSessionTranscriptEventInput =
+  Omit<NodeSessionTranscriptEvent, "id" | "createdAt"> & {
+    id?: string;
+    createdAt?: string;
+  };
 
 export type ApplyApprovalDecisionInput = {
   approvalRequestId: string;
@@ -231,6 +288,15 @@ export interface HivewardStore {
   upsertIterationSession(session: IterationSession): Promise<IterationSession>;
   listIterationRounds(filter?: { runId?: string; sessionId?: string; status?: IterationRound["status"] }): Promise<IterationRound[]>;
   upsertIterationRound(round: IterationRound): Promise<IterationRound>;
+
+  createNodeExecutionSession(input: CreateNodeExecutionSessionInput): Promise<NodeExecutionSession>;
+  listNodeExecutionSessions(filter?: NodeExecutionSessionFilter): Promise<NodeExecutionSession[]>;
+  getNodeExecutionSessionByNodeRun(nodeRunId: string): Promise<NodeExecutionSession | undefined>;
+  updateNodeExecutionSessionRuntimeRef(input: UpdateNodeExecutionSessionRuntimeRefInput): Promise<NodeExecutionSession | undefined>;
+  markNodeExecutionSessionUnavailable(input: MarkNodeExecutionSessionUnavailableInput): Promise<NodeExecutionSession | undefined>;
+  createFallbackNodeExecutionSession(input: CreateFallbackNodeExecutionSessionInput): Promise<NodeExecutionSession>;
+  appendNodeSessionTranscriptEvent(input: AppendNodeSessionTranscriptEventInput): Promise<NodeSessionTranscriptEvent>;
+  listNodeSessionTranscriptEvents(filter?: { sessionId?: string; runId?: string; nodeRunId?: string }): Promise<NodeSessionTranscriptEvent[]>;
 
   listArtifacts(runId?: string): Promise<Artifact[]>;
   upsertArtifact(artifact: Artifact): Promise<Artifact>;

@@ -283,6 +283,7 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
           bestEffortDeliver: true,
           label: input.agentName,
           idempotencyKey,
+          sessionKey: input.nativeSessionId,
         },
         { acceptedTimeoutMs: this.config.agentStartTimeoutMs, finalTimeoutMs: null },
       );
@@ -304,7 +305,7 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
           return {
             taskId: idempotencyKey,
             runId: idempotencyKey,
-            sessionKey: buildAgentMainSessionKey(input.agentId),
+            sessionKey: input.nativeSessionId ?? buildAgentMainSessionKey(input.agentId),
             source: "openclaw",
             status: "running",
             updatedAt: new Date().toISOString(),
@@ -315,7 +316,7 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
       }
 
       const runId = readString(accepted.runId) ?? idempotencyKey;
-      const sessionKey = readString(accepted.sessionKey) ?? buildAgentMainSessionKey(input.agentId);
+      const sessionKey = readString(accepted.sessionKey) ?? input.nativeSessionId ?? buildAgentMainSessionKey(input.agentId);
       const taskId = runId;
       const status = mapAcceptedExecutionStatus(readString(accepted.status));
       tracker.acceptedTaskId = taskId;
@@ -392,7 +393,7 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
     const requestedRunId = createGatewayId(input.nodeRunId);
     const knownRunIds = new Set([requestedRunId]);
     let activeRunId = requestedRunId;
-    let activeSessionKey = buildAgentMainSessionKey(input.agentId);
+    let activeSessionKey = input.nativeSessionId ?? buildAgentMainSessionKey(input.agentId);
     let streamedOutput = "";
     let lastUsage: RuntimeUsageFact | undefined;
     let sawGatewayStreamEvent = false;

@@ -137,6 +137,74 @@ describe.each(storeCases)("%s store contract", (_label, createHarness) => {
       await store.upsertAgentHandoff(createContractHandoff(run.id, nodeRun.id, round.id));
       await store.upsertManagerContextSnapshot(createContractManagerContext(run.id, session.id, round.id));
       await store.appendRunTimelineItem(createContractTimelineItem(run.id));
+      const executionSession = await store.createNodeExecutionSession({
+        id: "node-session-contract",
+        runId: run.id,
+        nodeRunId: nodeRun.id,
+        nodeId: nodeRun.nodeId,
+        agentSeatId: "agent:openclaw:main",
+        harnessId: "openclaw",
+        nativeSessionId: "native-session-contract",
+        runtimeRef: {
+          source: "openclaw",
+          sourceId: "task-contract",
+          sourceUpdatedAt: contractNow,
+          taskId: "task-contract",
+          runId: "task-contract-run",
+          sessionKey: "native-session-contract"
+        },
+        policy: "preserve_across_rounds",
+        status: "active",
+        createdAt: contractNow,
+        updatedAt: contractNow,
+        lastUsedAt: contractNow
+      });
+      await store.updateNodeExecutionSessionRuntimeRef({
+        sessionId: executionSession.id,
+        nativeSessionId: "native-session-contract-2",
+        runtimeRef: {
+          source: "openclaw",
+          sourceId: "task-contract-2",
+          sourceUpdatedAt: contractNow,
+          taskId: "task-contract-2",
+          runId: "task-contract-2-run",
+          sessionKey: "native-session-contract-2"
+        },
+        status: "completed",
+        updatedAt: "2026-05-31T00:00:01.000Z"
+      });
+      const transcriptEvent = await store.appendNodeSessionTranscriptEvent({
+        id: "node-session-event-contract",
+        sessionId: executionSession.id,
+        runId: run.id,
+        nodeRunId: nodeRun.id,
+        role: "assistant",
+        kind: "assistant_message",
+        content: "Contract transcript",
+        runtimeRef: {
+          source: "openclaw",
+          sourceId: "task-contract-2",
+          sourceUpdatedAt: contractNow,
+          taskId: "task-contract-2",
+          runId: "task-contract-2-run",
+          sessionKey: "native-session-contract-2"
+        },
+        metadata: { persisted: true },
+        createdAt: "2026-05-31T00:00:02.000Z"
+      });
+      const fallbackSession = await store.createFallbackNodeExecutionSession({
+        id: "node-session-contract-fallback",
+        runId: run.id,
+        nodeRunId: nodeRun.id,
+        nodeId: nodeRun.nodeId,
+        agentSeatId: "agent:openclaw:main",
+        harnessId: "openclaw",
+        policy: "preserve_across_rounds",
+        fallbackOfSessionId: executionSession.id,
+        statusReason: "native session expired",
+        createdAt: "2026-05-31T00:00:03.000Z",
+        updatedAt: "2026-05-31T00:00:03.000Z"
+      });
 
       const view = await store.getRunView(run.id);
       expect(view).toMatchObject({
@@ -154,9 +222,22 @@ describe.each(storeCases)("%s store contract", (_label, createHarness) => {
         agentHumanReports: [expect.objectContaining({ nodeRunId: nodeRun.id, bodyMd: expect.stringContaining("Contract Report") })],
         agentHandoffs: [expect.objectContaining({ nodeRunId: nodeRun.id, payload: { next: "manager", facts: ["contract complete"] } })],
         managerContextSnapshots: [expect.objectContaining({ id: "manager-context-contract" })],
+        nodeExecutionSessions: [
+          expect.objectContaining({ id: executionSession.id, nativeSessionId: "native-session-contract-2", status: "completed" }),
+          expect.objectContaining({ id: fallbackSession.id, fallbackOfSessionId: executionSession.id, status: "fallback" })
+        ],
+        nodeSessionTranscriptEvents: [expect.objectContaining({ id: transcriptEvent.id, sessionId: executionSession.id, content: "Contract transcript" })],
         runTimeline: [expect.objectContaining({ id: "timeline-contract", sequence: 1 })]
       });
       expect(view?.events.map((event) => event.id)).toEqual(["event-contract-1", "event-contract-2"]);
+      await expect(store.getNodeExecutionSessionByNodeRun(nodeRun.id)).resolves.toMatchObject({ id: fallbackSession.id, status: "fallback" });
+      await expect(store.listNodeExecutionSessions({ runId: run.id, nodeId: nodeRun.nodeId })).resolves.toEqual([
+        expect.objectContaining({ id: executionSession.id }),
+        expect.objectContaining({ id: fallbackSession.id })
+      ]);
+      await expect(store.listNodeSessionTranscriptEvents({ sessionId: executionSession.id })).resolves.toEqual([
+        expect.objectContaining({ id: transcriptEvent.id, metadata: { persisted: true } })
+      ]);
 
       await expect(store.listRunSummaries()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ id: run.id })]));
       await expect(store.listPendingApprovals()).resolves.toEqual([]);

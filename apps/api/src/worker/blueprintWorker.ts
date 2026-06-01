@@ -9,6 +9,7 @@ import {
   isManagerSlotInnerInHandle,
   isManagerSlotInnerOutHandle,
   resolveCrossRoundContextMode,
+  resolveNodeExecutionSessionPolicy,
   resolveManagerSlotExecutionMode,
   type AgentHandoff,
   type AgentHumanReport,
@@ -26,6 +27,8 @@ import {
   type IterationSession,
   type ManagerNodeConfig,
   type ManagerSlotNodeConfig,
+  type NodeExecutionSession,
+  type NodeExecutionSessionPolicy,
   type RuntimeObjectRef,
   type StartAgentTaskInput,
   type InboxThreadType,
@@ -1623,6 +1626,12 @@ export class BlueprintWorker {
 
     const config = node.config as AgentNodeConfig;
     const runtimeId: AgentRuntimeId = waiting.runtimeRef?.source ?? node.runtimeId ?? "openclaw";
+    const executionSession = await this.resolveNodeExecutionSession({
+      run,
+      node,
+      nodeRun: nodeRunWithUserReply,
+      runtimeId
+    });
     const replyInput = buildAgentApprovalReplyInput(waiting.input, waiting.output.reviewOutput, waiting.output.replies, userReply, discussionMode);
     const inputWithWorkspace = await this.withAgentWorkspaceInput(blueprint, node, replyInput);
     const crossRoundInput = await this.withNodeCrossRoundContext({
@@ -1636,6 +1645,8 @@ export class BlueprintWorker {
       blueprintRunId: run.id,
       nodeRunId: waiting.id,
       source: resolveAgentRuntimeSource(runtimeId),
+      nativeSessionId: executionSession.nativeSessionId,
+      executionSessionPolicy: executionSession.policy,
       agentId: runtimeId === "openclaw" ? config.openclawAgentId ?? "main" : undefined,
       profileId: runtimeId === "hermes" ? config.profileId : undefined,
       agentName: config.agentName,
@@ -1651,7 +1662,7 @@ export class BlueprintWorker {
       tools: config.tools
     };
 
-    const result = await this.streamInboxDiscussionChat(request, userReply.id, userReply.body, taskInput, discussionMode, onEvent);
+    const result = await this.streamInboxDiscussionChat(request, userReply.id, userReply.body, taskInput, discussionMode, onEvent, executionSession);
     if (result.status !== "succeeded") {
       await this.appendApprovalDiscussionReply(
         request,
@@ -1783,7 +1794,8 @@ export class BlueprintWorker {
     visibleUserMessage: string,
     taskInput: StartAgentTaskInput,
     discussionMode: InboxDiscussionMode,
-    onEvent: (event: StreamInboxThreadMessageEvent) => void
+    onEvent: (event: StreamInboxThreadMessageEvent) => void,
+    executionSession?: NodeExecutionSession
   ): Promise<InboxDiscussionChatResult> {
     const threadId = approvalThreadIdForRequest(request);
     const chatSession = await this.ensureApprovalDiscussionChatSession(request, taskInput);
@@ -1801,6 +1813,16 @@ export class BlueprintWorker {
       status: "sent",
       id: `chat-${userMessageId}`
     });
+    if (executionSession) {
+      await this.store.appendNodeSessionTranscriptEvent({
+        sessionId: executionSession.id,
+        runId: executionSession.runId,
+        nodeRunId: executionSession.nodeRunId,
+        role: "user",
+        kind: "user_message",
+        content: formatInboxDiscussionVisibleUserMessage(visibleUserMessage)
+      });
+    }
     const assistantChatMessage = await this.store.appendChatMessage({
       sessionId: chatSession.id,
       role: "assistant",
@@ -1861,6 +1883,9 @@ export class BlueprintWorker {
         nativeSessionState: nativeMissing ? "missing" : session.nativeSessionState
       }) ?? session;
       await this.updateApprovalDiscussionSessionFromChat(request, session);
+      if (executionSession && nativeMissing) {
+        await this.createFallbackNodeExecutionSession(executionSession, message);
+      }
       onEvent({ type: "error", message });
       return {
         status: "failed",
@@ -1920,6 +1945,40 @@ export class BlueprintWorker {
       ...(doneEvent.sessionKey ? { nativeSessionId: doneEvent.sessionKey } : {})
     }) ?? session;
     await this.updateApprovalDiscussionSessionFromChat(request, session);
+    if (executionSession) {
+      const runtimeRef = {
+        source: doneEvent.source,
+        sourceId: doneEvent.taskId,
+        sourceUpdatedAt: doneEvent.updatedAt,
+        taskId: doneEvent.taskId,
+        runId: doneEvent.runId,
+        sessionKey: doneEvent.sessionKey,
+        usageRef: doneEvent.usage?.id
+      };
+      if (nativeMissing) {
+        await this.createFallbackNodeExecutionSession(executionSession, doneEvent.error ?? "Native session unavailable.");
+      } else {
+        await this.store.updateNodeExecutionSessionRuntimeRef({
+          sessionId: executionSession.id,
+          runtimeRef,
+          nativeSessionId: doneEvent.sessionKey,
+          status: doneEvent.status === "succeeded" ? "completed" : "failed",
+          updatedAt: doneEvent.updatedAt,
+          lastUsedAt: doneEvent.updatedAt
+        });
+      }
+      await this.store.appendNodeSessionTranscriptEvent({
+        sessionId: executionSession.id,
+        runId: executionSession.runId,
+        nodeRunId: executionSession.nodeRunId,
+        role: "assistant",
+        kind: "assistant_message",
+        content: output ?? "",
+        runtimeRef,
+        metadata: { status: doneEvent.status },
+        createdAt: doneEvent.updatedAt
+      });
+    }
     return {
       status: doneEvent.status,
       output,
@@ -1942,7 +2001,7 @@ export class BlueprintWorker {
     const chatSession = await this.store.createChatSession({
       harnessId: harnessIdForRuntimeSource(taskInput.source),
       title: `Inbox discussion: ${request.title}`,
-      nativeSessionId: thread?.discussionSession?.nativeSessionId,
+      nativeSessionId: thread?.discussionSession?.nativeSessionId ?? taskInput.nativeSessionId,
       modelId: taskInput.modelId,
       agentId: taskInput.agentId,
       permissionMode: chatPermissionModeForTaskInput(taskInput),
@@ -2859,10 +2918,18 @@ export class BlueprintWorker {
       revision: input.revision
     };
     let nodeRun = await this.createRunningNodeRun(input.blueprint, input.run, input.managerNode, taskInput);
+    const executionSession = await this.resolveNodeExecutionSession({
+      run: input.run,
+      node: input.managerNode,
+      nodeRun,
+      runtimeId
+    });
     const { result, runtimeRef } = await this.runAgentTask({
       blueprintRunId: input.run.id,
       nodeRunId: nodeRun.id,
       source: resolveAgentRuntimeSource(runtimeId),
+      nativeSessionId: executionSession.nativeSessionId,
+      executionSessionPolicy: executionSession.policy,
       agentId: runtimeId === "openclaw" ? config.openclawAgentId ?? "main" : undefined,
       profileId: runtimeId === "hermes" ? config.profileId : undefined,
       agentName: config.agentName?.trim() || defaultManagerAgentName,
@@ -2878,7 +2945,7 @@ export class BlueprintWorker {
       tools: config.tools ?? []
     }, async (startedRef) => {
       nodeRun = await this.recordNodeRuntimeRef(nodeRun, startedRef);
-    });
+    }, executionSession);
     if (result.status !== "succeeded") {
       await this.failNode({ ...nodeRun, runtimeRef, usage: result.usage }, result.error ?? `Manager release report run ${result.status}.`);
       throw new Error(result.error ?? `Manager release report run ${result.status}.`);
@@ -3984,10 +4051,18 @@ export class BlueprintWorker {
       prompt: this.resolveAgentPrompt(config, { requiresHandoff: this.hasDownstreamConsumers(blueprint, node) })
     });
     let nodeRunWithInput = await this.recordNodeInput(nodeRun, crossRoundInput.input);
-    const { result, runtimeRef } = await this.runAgentTask({
+    const executionSession = await this.resolveNodeExecutionSession({
+      run,
+      node,
+      nodeRun: nodeRunWithInput,
+      runtimeId
+    });
+    const taskInput: StartAgentTaskInput = {
       blueprintRunId: run.id,
       nodeRunId: nodeRun.id,
       source: resolveAgentRuntimeSource(runtimeId),
+      nativeSessionId: executionSession.nativeSessionId,
+      executionSessionPolicy: executionSession.policy,
       agentId: runtimeId === "openclaw" ? config.openclawAgentId ?? "main" : undefined,
       profileId: runtimeId === "hermes" ? config.profileId : undefined,
       agentName: config.agentName,
@@ -4001,9 +4076,20 @@ export class BlueprintWorker {
       input: crossRoundInput.input,
       skillIds: config.skillIds,
       tools: config.tools
-    }, async (startedRef) => {
+    };
+    let { result, runtimeRef } = await this.runAgentTask(taskInput, async (startedRef) => {
       nodeRunWithInput = await this.recordNodeRuntimeRef(nodeRunWithInput, startedRef);
-    });
+    }, executionSession);
+    if (this.shouldFallbackNodeExecutionSession(executionSession, result)) {
+      const fallback = await this.createFallbackNodeExecutionSession(executionSession, result.error ?? "Native session unavailable.");
+      ({ result, runtimeRef } = await this.runAgentTask({
+        ...taskInput,
+        nativeSessionId: undefined,
+        input: await this.withFallbackSessionContext(taskInput.input, fallback, executionSession)
+      }, async (startedRef) => {
+        nodeRunWithInput = await this.recordNodeRuntimeRef(nodeRunWithInput, startedRef);
+      }, fallback));
+    }
     return this.applyAgentTaskResult(blueprint, run, node, nodeRunWithInput, result, runtimeRef);
   }
 
@@ -4057,6 +4143,122 @@ export class BlueprintWorker {
         input.prompt
       ].join("\n")
     };
+  }
+
+  private async resolveNodeExecutionSession(input: {
+    run: BlueprintRun;
+    node: BlueprintNode;
+    nodeRun: BlueprintNodeRun;
+    runtimeId: AgentRuntimeId;
+    policy?: NodeExecutionSessionPolicy;
+  }): Promise<NodeExecutionSession> {
+    const harnessId = resolveAgentRuntimeSource(input.runtimeId);
+    const policy = input.policy ?? this.defaultNodeExecutionSessionPolicy(input.node, input.nodeRun);
+    const existing = await this.store.getNodeExecutionSessionByNodeRun(input.nodeRun.id);
+    if (existing && existing.status !== "unavailable") return existing;
+
+    if (policy === "preserve_across_rounds") {
+      const reusable = (await this.store.listNodeExecutionSessions({
+        runId: input.run.id,
+        nodeId: input.node.id,
+        harnessId
+      }))
+        .filter((session) => session.nodeRunId !== input.nodeRun.id && session.status !== "unavailable" && session.status !== "failed")
+        .sort((left, right) => new Date(right.lastUsedAt ?? right.updatedAt).getTime() - new Date(left.lastUsedAt ?? left.updatedAt).getTime())[0];
+      if (reusable) {
+        return this.store.createNodeExecutionSession({
+          runId: input.run.id,
+          nodeRunId: input.nodeRun.id,
+          nodeId: input.node.id,
+          agentSeatId: this.agentSeatIdForNode(input.node, input.runtimeId),
+          harnessId,
+          nativeSessionId: reusable.nativeSessionId,
+          runtimeRef: reusable.runtimeRef,
+          policy,
+          status: reusable.nativeSessionId || reusable.runtimeRef ? "active" : reusable.status,
+          resumedFromSessionId: reusable.id
+        });
+      }
+    }
+
+    return this.store.createNodeExecutionSession({
+      runId: input.run.id,
+      nodeRunId: input.nodeRun.id,
+      nodeId: input.node.id,
+      agentSeatId: this.agentSeatIdForNode(input.node, input.runtimeId),
+      harnessId,
+      policy,
+      status: "active"
+    });
+  }
+
+  private defaultNodeExecutionSessionPolicy(node: BlueprintNode, nodeRun: BlueprintNodeRun): NodeExecutionSessionPolicy {
+    if (node.config.executionSessionPolicy) return resolveNodeExecutionSessionPolicy(node.config);
+    if (node.type === "manager") return "preserve_across_rounds";
+    if (nodeRun.iterationRoundId) return "refresh_per_round";
+    return "refresh_per_run";
+  }
+
+  private agentSeatIdForNode(node: BlueprintNode, runtimeId: AgentRuntimeId): string {
+    const config = node.config as Partial<AgentNodeConfig & ManagerNodeConfig & SummaryNodeConfig>;
+    const profile = node.type === "agent" || node.type === "manager" ? config.openclawAgentId ?? config.profileId : undefined;
+    return [node.type, runtimeId, profile, config.modelId].filter(Boolean).join(":") || `${node.type}:${runtimeId}`;
+  }
+
+  private shouldFallbackNodeExecutionSession(session: NodeExecutionSession, result: AgentTaskResult): boolean {
+    return Boolean(session.nativeSessionId && result.status === "failed" && isNativeResumeFailure(result.error));
+  }
+
+  private async createFallbackNodeExecutionSession(
+    session: NodeExecutionSession,
+    reason: string
+  ): Promise<NodeExecutionSession> {
+    await this.store.markNodeExecutionSessionUnavailable({ sessionId: session.id, reason });
+    await this.store.appendNodeSessionTranscriptEvent({
+      sessionId: session.id,
+      runId: session.runId,
+      nodeRunId: session.nodeRunId,
+      role: "system",
+      kind: "system_note",
+      content: "Native session was unavailable; HiveWard created an explicit fallback session.",
+      metadata: { reason }
+    });
+    return this.store.createFallbackNodeExecutionSession({
+      runId: session.runId,
+      nodeRunId: session.nodeRunId,
+      nodeId: session.nodeId,
+      agentSeatId: session.agentSeatId,
+      harnessId: session.harnessId,
+      policy: session.policy,
+      fallbackOfSessionId: session.id,
+      statusReason: reason
+    });
+  }
+
+  private async withFallbackSessionContext(
+    input: unknown,
+    fallback: NodeExecutionSession,
+    unavailable: NodeExecutionSession
+  ): Promise<unknown> {
+    const events = await this.store.listNodeSessionTranscriptEvents({ sessionId: unavailable.id });
+    const context = {
+      fallback: true,
+      unavailableSessionId: unavailable.id,
+      unavailableNativeSessionId: unavailable.nativeSessionId,
+      fallbackSessionId: fallback.id,
+      visibleTranscript: events
+        .filter((event) => event.content)
+        .slice(-20)
+        .map((event) => ({
+          role: event.role,
+          kind: event.kind,
+          content: event.content,
+          createdAt: event.createdAt
+        }))
+    };
+    return isRecord(input)
+      ? { ...input, nodeExecutionSessionFallback: context }
+      : { value: input, nodeExecutionSessionFallback: context };
   }
 
   private async applyAgentTaskResult(
@@ -5708,7 +5910,8 @@ export class BlueprintWorker {
 
   private async runAgentTask(
     input: StartAgentTaskInput,
-    onStarted?: (runtimeRef: RuntimeObjectRef) => Promise<void>
+    onStarted?: (runtimeRef: RuntimeObjectRef) => Promise<void>,
+    executionSession?: NodeExecutionSession
   ): Promise<{ result: AgentTaskResult; runtimeRef: RuntimeObjectRef }> {
     let runtimeRef: RuntimeObjectRef | undefined;
     const timelineState: NodeRuntimeTimelineState = {
@@ -5727,6 +5930,23 @@ export class BlueprintWorker {
       if (event.type === "started") {
         runtimeRef = runtimeRefFromStartedEvent(event);
         enqueueEventWrite(async () => {
+          if (executionSession) {
+            await this.store.updateNodeExecutionSessionRuntimeRef({
+              sessionId: executionSession.id,
+              runtimeRef: runtimeRef!,
+              nativeSessionId: event.sessionKey,
+              status: "active"
+            });
+            await this.store.appendNodeSessionTranscriptEvent({
+              sessionId: executionSession.id,
+              runId: executionSession.runId,
+              nodeRunId: executionSession.nodeRunId,
+              role: "runtime",
+              kind: "runtime_started",
+              runtimeRef: runtimeRef!,
+              metadata: { status: event.status }
+            });
+          }
           await onStarted?.(runtimeRef!);
           await this.appendNodeRuntimeTimelineItem(input, timelineState, event, runtimeRef!);
         });
@@ -5734,6 +5954,9 @@ export class BlueprintWorker {
       }
       if (event.type === "runtime_state" || event.type === "delta" || event.type === "done") {
         enqueueEventWrite(async () => {
+          if (executionSession) {
+            await this.appendNodeExecutionSessionTranscriptEvent(executionSession, event, runtimeRef);
+          }
           await this.appendNodeRuntimeTimelineItem(input, timelineState, event, runtimeRef);
         });
       }
@@ -5757,6 +5980,87 @@ export class BlueprintWorker {
         usageRef: result.usage?.id
       }
     };
+  }
+
+  private async appendNodeExecutionSessionTranscriptEvent(
+    session: NodeExecutionSession,
+    event: Extract<ChatStreamEvent, { type: "runtime_state" | "delta" | "done" }>,
+    runtimeRef: RuntimeObjectRef | undefined
+  ): Promise<void> {
+    if (event.type === "runtime_state") {
+      await this.store.appendNodeSessionTranscriptEvent({
+        sessionId: session.id,
+        runId: session.runId,
+        nodeRunId: session.nodeRunId,
+        role: "runtime",
+        kind: "runtime_state",
+        content: event.label,
+        runtimeRef,
+        metadata: {
+          phase: event.phase,
+          status: event.status,
+          activityId: event.id
+        }
+      });
+      return;
+    }
+    if (event.type === "delta") {
+      await this.store.appendNodeSessionTranscriptEvent({
+        sessionId: session.id,
+        runId: session.runId,
+        nodeRunId: session.nodeRunId,
+        role: "assistant",
+        kind: "assistant_delta",
+        content: event.text,
+        runtimeRef,
+        metadata: event.replace ? { replace: true } : undefined
+      });
+      return;
+    }
+    const finalRuntimeRef = {
+      ...(runtimeRef ?? runtimeRefFromTaskResult(event)),
+      sourceId: event.taskId,
+      sourceUpdatedAt: event.updatedAt,
+      taskId: event.taskId,
+      runId: event.runId,
+      sessionKey: event.sessionKey,
+      usageRef: event.usage?.id
+    };
+    await this.store.updateNodeExecutionSessionRuntimeRef({
+      sessionId: session.id,
+      runtimeRef: finalRuntimeRef,
+      nativeSessionId: event.sessionKey,
+      status: event.status === "succeeded" ? "completed" : "failed",
+      updatedAt: event.updatedAt,
+      lastUsedAt: event.updatedAt
+    });
+    await this.store.appendNodeSessionTranscriptEvent({
+      sessionId: session.id,
+      runId: session.runId,
+      nodeRunId: session.nodeRunId,
+      role: "runtime",
+      kind: "runtime_done",
+      content: event.error,
+      runtimeRef: finalRuntimeRef,
+      metadata: {
+        status: event.status,
+        usage: event.usage,
+        timings: event.timings
+      },
+      createdAt: event.updatedAt
+    });
+    if (event.output) {
+      await this.store.appendNodeSessionTranscriptEvent({
+        sessionId: session.id,
+        runId: session.runId,
+        nodeRunId: session.nodeRunId,
+        role: "assistant",
+        kind: "assistant_message",
+        content: event.output,
+        runtimeRef: finalRuntimeRef,
+        createdAt: event.updatedAt
+      });
+    }
   }
 
   private async appendNodeRuntimeTimelineItem(

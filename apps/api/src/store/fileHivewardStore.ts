@@ -40,6 +40,9 @@ import type {
   IterationSession,
   ManagerContextSnapshot,
   ManagerMail,
+  NodeExecutionSession,
+  NodeExecutionSessionStatus,
+  NodeSessionTranscriptEvent,
   ReleaseReport,
   RunTimelineItem,
   UpdateHivewardChatSessionRequest,
@@ -71,13 +74,19 @@ import type {
   ApplyApprovalDecisionResult,
   ApplyInboxDecisionInput,
   ApplyInboxDecisionResult,
+  AppendNodeSessionTranscriptEventInput,
   CancelNodeRunInput,
   ClaimNodeRunResult,
   CompleteNodeRunInput,
+  CreateFallbackNodeExecutionSessionInput,
+  CreateNodeExecutionSessionInput,
   FailNodeRunInput,
   HivewardStore,
+  MarkNodeExecutionSessionUnavailableInput,
+  NodeExecutionSessionFilter,
   PublishAgentOutputInput,
-  PublishAgentOutputResult
+  PublishAgentOutputResult,
+  UpdateNodeExecutionSessionRuntimeRefInput
 } from "./hivewardStore";
 import { isFileNotFoundError, safeWriteJson } from "./jsonFile";
 import {
@@ -127,6 +136,8 @@ export interface HivewardStoreIndex {
   managerContextSnapshots: ManagerContextSnapshot[];
   runTimeline: RunTimelineItem[];
   managerMail: ManagerMail[];
+  nodeExecutionSessions: NodeExecutionSession[];
+  nodeSessionTranscriptEvents: NodeSessionTranscriptEvent[];
 }
 
 type RawHivewardStoreIndex = Partial<HivewardStoreIndex> & {
@@ -242,7 +253,9 @@ export class FileHivewardStore implements HivewardStore {
           agentHandoffs: [],
           managerContextSnapshots: [],
           runTimeline: [],
-          managerMail: []
+          managerMail: [],
+          nodeExecutionSessions: [],
+          nodeSessionTranscriptEvents: []
         };
         index.roleDirectories[seededCompanyId] = buildRoleDirectory(index, seededCompanyId, now);
         await Promise.all(blueprints.map((blueprint) => this.writeBlueprintUnlocked(blueprint)));
@@ -1132,7 +1145,12 @@ export class FileHivewardStore implements HivewardStore {
       const companyId = this.getCurrentCompanyId(index);
       const run = index.runIndex.find((item) => item.id === blueprintRunId);
       if (!run || !companyId || run.companyId !== companyId) return undefined;
-      return this.readRunArchiveUnlocked(blueprintRunId);
+      const archive = await this.readRunArchiveUnlocked(blueprintRunId);
+      return {
+        ...archive,
+        nodeExecutionSessions: index.nodeExecutionSessions.filter((item) => item.runId === blueprintRunId),
+        nodeSessionTranscriptEvents: index.nodeSessionTranscriptEvents.filter((item) => item.runId === blueprintRunId)
+      };
     });
   }
 
@@ -1395,6 +1413,137 @@ export class FileHivewardStore implements HivewardStore {
       upsertById(index.iterationRounds, round);
       await this.writeIndexUnlocked(index);
       return round;
+    });
+  }
+
+  async createNodeExecutionSession(input: CreateNodeExecutionSessionInput): Promise<NodeExecutionSession> {
+    return this.enqueue(async () => {
+      const index = await this.readIndexUnlocked();
+      const now = new Date().toISOString();
+      const existing = input.fallbackOfSessionId
+        ? undefined
+        : index.nodeExecutionSessions.find((session) => session.nodeRunId === input.nodeRunId);
+      const session: NodeExecutionSession = {
+        id: input.id ?? existing?.id ?? `node-session-${nanoid(10)}`,
+        runId: input.runId,
+        nodeRunId: input.nodeRunId,
+        nodeId: input.nodeId,
+        agentSeatId: input.agentSeatId,
+        harnessId: input.harnessId,
+        nativeSessionId: input.nativeSessionId ?? existing?.nativeSessionId,
+        runtimeRef: input.runtimeRef ?? existing?.runtimeRef,
+        policy: input.policy,
+        status: input.status ?? existing?.status ?? "active",
+        statusReason: input.statusReason ?? existing?.statusReason,
+        fallbackOfSessionId: input.fallbackOfSessionId ?? existing?.fallbackOfSessionId,
+        resumedFromSessionId: input.resumedFromSessionId ?? existing?.resumedFromSessionId,
+        createdAt: input.createdAt ?? existing?.createdAt ?? now,
+        updatedAt: input.updatedAt ?? now,
+        lastUsedAt: input.lastUsedAt ?? input.updatedAt ?? existing?.lastUsedAt ?? now
+      };
+      upsertById(index.nodeExecutionSessions, session);
+      await this.writeIndexUnlocked(index);
+      return session;
+    });
+  }
+
+  async listNodeExecutionSessions(filter: NodeExecutionSessionFilter = {}): Promise<NodeExecutionSession[]> {
+    return this.enqueue(async () => {
+      const index = await this.readIndexUnlocked();
+      return index.nodeExecutionSessions
+        .filter((session) => !filter.runId || session.runId === filter.runId)
+        .filter((session) => !filter.nodeId || session.nodeId === filter.nodeId)
+        .filter((session) => !filter.nodeRunId || session.nodeRunId === filter.nodeRunId)
+        .filter((session) => !filter.harnessId || session.harnessId === filter.harnessId)
+        .filter((session) => !filter.status || session.status === filter.status)
+        .map((session, index) => ({ session, index }))
+        .sort((left, right) => compareNodeExecutionSessionAge(left.session, right.session) || left.index - right.index)
+        .map(({ session }) => session);
+    });
+  }
+
+  async getNodeExecutionSessionByNodeRun(nodeRunId: string): Promise<NodeExecutionSession | undefined> {
+    return this.enqueue(async () => {
+      const index = await this.readIndexUnlocked();
+      return index.nodeExecutionSessions
+        .filter((session) => session.nodeRunId === nodeRunId)
+        .map((session, index) => ({ session, index }))
+        .sort((left, right) => compareNodeExecutionSessionAge(left.session, right.session) || left.index - right.index)
+        .at(-1)?.session;
+    });
+  }
+
+  async updateNodeExecutionSessionRuntimeRef(input: UpdateNodeExecutionSessionRuntimeRefInput): Promise<NodeExecutionSession | undefined> {
+    return this.enqueue(async () => {
+      const index = await this.readIndexUnlocked();
+      const sessionIndex = index.nodeExecutionSessions.findIndex((session) => session.id === input.sessionId);
+      if (sessionIndex < 0) return undefined;
+      const current = index.nodeExecutionSessions[sessionIndex]!;
+      const now = input.updatedAt ?? new Date().toISOString();
+      const nativeSessionId = input.nativeSessionId ?? input.runtimeRef?.sessionKey ?? current.nativeSessionId;
+      const next: NodeExecutionSession = {
+        ...current,
+        runtimeRef: input.runtimeRef ?? current.runtimeRef,
+        nativeSessionId,
+        status: input.status ?? current.status,
+        updatedAt: now,
+        lastUsedAt: input.lastUsedAt ?? now
+      };
+      index.nodeExecutionSessions[sessionIndex] = next;
+      await this.writeIndexUnlocked(index);
+      return next;
+    });
+  }
+
+  async markNodeExecutionSessionUnavailable(input: MarkNodeExecutionSessionUnavailableInput): Promise<NodeExecutionSession | undefined> {
+    return this.enqueue(async () => {
+      const index = await this.readIndexUnlocked();
+      const sessionIndex = index.nodeExecutionSessions.findIndex((session) => session.id === input.sessionId);
+      if (sessionIndex < 0) return undefined;
+      const now = input.updatedAt ?? new Date().toISOString();
+      const next: NodeExecutionSession = {
+        ...index.nodeExecutionSessions[sessionIndex]!,
+        status: "unavailable",
+        statusReason: input.reason,
+        updatedAt: now
+      };
+      index.nodeExecutionSessions[sessionIndex] = next;
+      await this.writeIndexUnlocked(index);
+      return next;
+    });
+  }
+
+  async createFallbackNodeExecutionSession(input: CreateFallbackNodeExecutionSessionInput): Promise<NodeExecutionSession> {
+    return this.createNodeExecutionSession({
+      ...input,
+      status: "fallback",
+      fallbackOfSessionId: input.fallbackOfSessionId
+    });
+  }
+
+  async appendNodeSessionTranscriptEvent(input: AppendNodeSessionTranscriptEventInput): Promise<NodeSessionTranscriptEvent> {
+    return this.enqueue(async () => {
+      const index = await this.readIndexUnlocked();
+      const event: NodeSessionTranscriptEvent = {
+        ...input,
+        id: input.id ?? `node-session-event-${nanoid(10)}`,
+        createdAt: input.createdAt ?? new Date().toISOString()
+      };
+      upsertById(index.nodeSessionTranscriptEvents, event);
+      await this.writeIndexUnlocked(index);
+      return event;
+    });
+  }
+
+  async listNodeSessionTranscriptEvents(filter: { sessionId?: string; runId?: string; nodeRunId?: string } = {}): Promise<NodeSessionTranscriptEvent[]> {
+    return this.enqueue(async () => {
+      const index = await this.readIndexUnlocked();
+      return index.nodeSessionTranscriptEvents
+        .filter((event) => !filter.sessionId || event.sessionId === filter.sessionId)
+        .filter((event) => !filter.runId || event.runId === filter.runId)
+        .filter((event) => !filter.nodeRunId || event.nodeRunId === filter.nodeRunId)
+        .slice()
+        .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
     });
   }
 
@@ -1729,7 +1878,9 @@ export class FileHivewardStore implements HivewardStore {
       agentHandoffs: [],
       managerContextSnapshots: [],
       runTimeline: [],
-      managerMail: []
+      managerMail: [],
+      nodeExecutionSessions: [],
+      nodeSessionTranscriptEvents: []
     };
   }
 
@@ -2037,7 +2188,9 @@ export class FileHivewardStore implements HivewardStore {
       agentHandoffs: normalizeArray<AgentHandoff>(rawIndex.agentHandoffs),
       managerContextSnapshots: normalizeArray<ManagerContextSnapshot>(rawIndex.managerContextSnapshots),
       runTimeline: normalizeArray<RunTimelineItem>(rawIndex.runTimeline),
-      managerMail: normalizeManagerMail(rawIndex.managerMail)
+      managerMail: normalizeManagerMail(rawIndex.managerMail),
+      nodeExecutionSessions: normalizeNodeExecutionSessions(rawIndex.nodeExecutionSessions),
+      nodeSessionTranscriptEvents: normalizeNodeSessionTranscriptEvents(rawIndex.nodeSessionTranscriptEvents)
     };
     for (const company of companies) {
       index.roleDirectories[company.id] = buildRoleDirectory(index, company.id, now, rawIndex.roleDirectories?.[company.id]);
@@ -2092,7 +2245,9 @@ export class FileHivewardStore implements HivewardStore {
       agentHandoffs: normalizeArray<AgentHandoff>(state.agentHandoffs),
       managerContextSnapshots: normalizeArray<ManagerContextSnapshot>(state.managerContextSnapshots),
       runTimeline: normalizeArray<RunTimelineItem>(state.runTimeline),
-      managerMail: normalizeManagerMail(state.managerMail)
+      managerMail: normalizeManagerMail(state.managerMail),
+      nodeExecutionSessions: normalizeNodeExecutionSessions(state.nodeExecutionSessions),
+      nodeSessionTranscriptEvents: normalizeNodeSessionTranscriptEvents(state.nodeSessionTranscriptEvents)
     };
     for (const company of companies) {
       index.roleDirectories[company.id] = buildRoleDirectory(index, company.id, now, state.roleDirectories?.[company.id]);
@@ -2139,7 +2294,9 @@ export class FileHivewardStore implements HivewardStore {
       runTimeline: index.runTimeline
         .filter((item) => item.runId === runId)
         .sort((left, right) => left.sequence - right.sequence),
-      managerMail: index.managerMail.filter((item) => item.relatedRunId === runId)
+      managerMail: index.managerMail.filter((item) => item.relatedRunId === runId),
+      nodeExecutionSessions: index.nodeExecutionSessions.filter((item) => item.runId === runId),
+      nodeSessionTranscriptEvents: index.nodeSessionTranscriptEvents.filter((item) => item.runId === runId)
     };
   }
 
@@ -2374,6 +2531,33 @@ function normalizeManagerMail(value: unknown): ManagerMail[] {
     ...item,
     kind: normalizeApprovalRequestKind(item.kind) ?? item.kind
   }));
+}
+
+function normalizeNodeExecutionSessions(value: unknown): NodeExecutionSession[] {
+  return normalizeArray<NodeExecutionSession>(value).flatMap((session) => {
+    if (!isNodeExecutionSessionStatus(session.status)) return [];
+    return [session];
+  });
+}
+
+function normalizeNodeSessionTranscriptEvents(value: unknown): NodeSessionTranscriptEvent[] {
+  return normalizeArray<NodeSessionTranscriptEvent>(value);
+}
+
+function compareNodeExecutionSessionAge(left: NodeExecutionSession, right: NodeExecutionSession): number {
+  return Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+    Date.parse(left.updatedAt) - Date.parse(right.updatedAt) ||
+    Date.parse(left.lastUsedAt ?? left.updatedAt) - Date.parse(right.lastUsedAt ?? right.updatedAt) ||
+    left.id.localeCompare(right.id);
+}
+
+function isNodeExecutionSessionStatus(value: unknown): value is NodeExecutionSessionStatus {
+  return value === "active" ||
+    value === "paused" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "unavailable" ||
+    value === "fallback";
 }
 
 function normalizeInboxItemType(value: unknown): InboxItemType | undefined {

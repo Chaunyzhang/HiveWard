@@ -168,7 +168,7 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
     const now = new Date().toISOString();
     const taskId = `${this.harnessId}-task-${nanoid(10)}`;
     const runId = `${this.harnessId}-run-${nanoid(10)}`;
-    const sessionKey = `${this.harnessId}-session-${input.nodeRunId}`;
+    const sessionKey = input.nativeSessionId ?? `${this.harnessId}-session-${input.nodeRunId}`;
 
     let workingDirectory: string;
     try {
@@ -223,7 +223,7 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
     const now = new Date().toISOString();
     const taskId = `${this.harnessId}-task-${nanoid(10)}`;
     const runId = `${this.harnessId}-run-${nanoid(10)}`;
-    const sessionKey = `${this.harnessId}-session-${input.nodeRunId}`;
+    const sessionKey = input.nativeSessionId ?? `${this.harnessId}-session-${input.nodeRunId}`;
 
     let workingDirectory: string;
     try {

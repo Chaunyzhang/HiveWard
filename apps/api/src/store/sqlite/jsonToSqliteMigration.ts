@@ -17,6 +17,8 @@ import type {
   HivewardChatMessage,
   HivewardChatSession,
   InboxItem,
+  NodeExecutionSession,
+  NodeSessionTranscriptEvent,
   ReleaseReport
 } from "@hiveward/shared";
 import { FileHivewardStore } from "../fileHivewardStore";
@@ -258,6 +260,8 @@ type VerificationSnapshot = {
   agentHandoffs: Array<Pick<AgentHandoff, "id" | "nodeRunId" | "runId" | "roundId"> & { payloadHash: string }>;
   artifacts: Array<Pick<Artifact, "id" | "runId" | "roundId" | "nodeRunId" | "kind" | "format" | "storagePath" | "downloadUrl" | "sha256" | "bytes" | "relativePath">>;
   releaseReports: Array<Pick<ReleaseReport, "id" | "roundId" | "approvalRequestId" | "version"> & { artifactRefsHash: string }>;
+  nodeExecutionSessions: Array<Pick<NodeExecutionSession, "id" | "runId" | "nodeRunId" | "nodeId" | "agentSeatId" | "harnessId" | "nativeSessionId" | "policy" | "status" | "fallbackOfSessionId" | "resumedFromSessionId">>;
+  nodeSessionTranscriptEvents: Array<Pick<NodeSessionTranscriptEvent, "id" | "sessionId" | "runId" | "nodeRunId" | "role" | "kind" | "content"> & { runtimeRefHash: string | null; metadataHash: string | null }>;
   chatSessions: Array<Pick<HivewardChatSession, "id" | "harnessId" | "nativeSessionId" | "status">>;
   chatMessages: Array<Pick<HivewardChatMessage, "id" | "sessionId" | "role" | "content" | "status" | "nativeMessageId">>;
 };
@@ -276,6 +280,8 @@ async function collectStoreSnapshot(store: FileHivewardStore | SqliteHivewardSto
     agentHandoffs: [],
     artifacts: [],
     releaseReports: [],
+    nodeExecutionSessions: [],
+    nodeSessionTranscriptEvents: [],
     chatSessions: [],
     chatMessages: []
   };
@@ -328,6 +334,30 @@ async function collectStoreSnapshot(store: FileHivewardStore | SqliteHivewardSto
       approvalRequestId: report.approvalRequestId,
       version: report.version,
       artifactRefsHash: hashJson(report.artifactRefs)
+    })));
+    mergeById(snapshot.nodeExecutionSessions, (await store.listNodeExecutionSessions()).map((session) => ({
+      id: session.id,
+      runId: session.runId,
+      nodeRunId: session.nodeRunId,
+      nodeId: session.nodeId,
+      agentSeatId: session.agentSeatId,
+      harnessId: session.harnessId,
+      nativeSessionId: session.nativeSessionId,
+      policy: session.policy,
+      status: session.status,
+      fallbackOfSessionId: session.fallbackOfSessionId,
+      resumedFromSessionId: session.resumedFromSessionId
+    })));
+    mergeById(snapshot.nodeSessionTranscriptEvents, (await store.listNodeSessionTranscriptEvents()).map((event) => ({
+      id: event.id,
+      sessionId: event.sessionId,
+      runId: event.runId,
+      nodeRunId: event.nodeRunId,
+      role: event.role,
+      kind: event.kind,
+      content: event.content,
+      runtimeRefHash: event.runtimeRef ? hashJson(event.runtimeRef) : null,
+      metadataHash: event.metadata ? hashJson(event.metadata) : null
     })));
     snapshot.inboxPending.push(...(await store.listInboxItems())
       .filter((item) => item.status === "pending")
@@ -445,6 +475,30 @@ function collectArchiveSnapshot(snapshot: VerificationSnapshot, archive: Bluepri
     version: report.version,
     artifactRefsHash: hashJson(report.artifactRefs)
   })));
+  snapshot.nodeExecutionSessions.push(...(archive.nodeExecutionSessions ?? []).map((session) => ({
+    id: session.id,
+    runId: session.runId,
+    nodeRunId: session.nodeRunId,
+    nodeId: session.nodeId,
+    agentSeatId: session.agentSeatId,
+    harnessId: session.harnessId,
+    nativeSessionId: session.nativeSessionId,
+    policy: session.policy,
+    status: session.status,
+    fallbackOfSessionId: session.fallbackOfSessionId,
+    resumedFromSessionId: session.resumedFromSessionId
+  })));
+  snapshot.nodeSessionTranscriptEvents.push(...(archive.nodeSessionTranscriptEvents ?? []).map((event) => ({
+    id: event.id,
+    sessionId: event.sessionId,
+    runId: event.runId,
+    nodeRunId: event.nodeRunId,
+    role: event.role,
+    kind: event.kind,
+    content: event.content,
+    runtimeRefHash: event.runtimeRef ? hashJson(event.runtimeRef) : null,
+    metadataHash: event.metadata ? hashJson(event.metadata) : null
+  })));
 }
 
 function collectSnapshotCounts(snapshot: VerificationSnapshot): Record<string, number> {
@@ -460,6 +514,8 @@ function collectSnapshotCounts(snapshot: VerificationSnapshot): Record<string, n
     agentHumanReports: snapshot.agentHumanReports.length,
     agentHandoffs: snapshot.agentHandoffs.length,
     releaseReports: snapshot.releaseReports.length,
+    nodeExecutionSessions: snapshot.nodeExecutionSessions.length,
+    nodeSessionTranscriptEvents: snapshot.nodeSessionTranscriptEvents.length,
     inboxPending: snapshot.inboxPending.length,
     chatSessions: snapshot.chatSessions.length,
     chatMessages: snapshot.chatMessages.length
@@ -480,6 +536,8 @@ function compareIdentitySets(source: VerificationSnapshot, sqlite: VerificationS
     "agentHumanReports",
     "agentHandoffs",
     "releaseReports",
+    "nodeExecutionSessions",
+    "nodeSessionTranscriptEvents",
     "inboxPending",
     "chatSessions",
     "chatMessages"
@@ -572,6 +630,8 @@ function sortSnapshot(snapshot: VerificationSnapshot): void {
   snapshot.agentHandoffs.sort(compareById);
   snapshot.artifacts.sort(compareById);
   snapshot.releaseReports.sort(compareById);
+  snapshot.nodeExecutionSessions.sort(compareById);
+  snapshot.nodeSessionTranscriptEvents.sort(compareById);
   snapshot.chatSessions.sort(compareById);
   snapshot.chatMessages.sort(compareById);
 }

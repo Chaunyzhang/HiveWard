@@ -1,4 +1,12 @@
-import type { AgentPermissionProfile, RuntimeObjectRef, RuntimeObjectSource, RuntimeUsageFact } from "./runtime";
+import type {
+  AgentPermissionProfile,
+  NodeExecutionSession,
+  NodeExecutionSessionPolicy,
+  NodeSessionTranscriptEvent,
+  RuntimeObjectRef,
+  RuntimeObjectSource,
+  RuntimeUsageFact
+} from "./runtime";
 import { normalizeRuntimeAccessPolicy } from "./lifecycle";
 import type {
   ApprovalDecision,
@@ -75,6 +83,7 @@ export interface BlueprintNodeBaseConfig {
   description?: string;
   resultRole?: BlueprintNodeResultRole;
   crossRoundContextMode?: CrossRoundContextMode;
+  executionSessionPolicy?: NodeExecutionSessionPolicy;
 }
 
 export interface AgentNodeConfig extends BlueprintNodeBaseConfig {
@@ -270,6 +279,11 @@ const crossRoundContextModes = new Set<CrossRoundContextMode>([
   "node_history_with_upstream",
   "node_history_with_upstream_and_manager_memory"
 ]);
+const nodeExecutionSessionPolicies = new Set<NodeExecutionSessionPolicy>([
+  "refresh_per_run",
+  "refresh_per_round",
+  "preserve_across_rounds"
+]);
 const managerInHandlePrefix = "manager-in-";
 const managerOutHandlePrefix = "manager-out-";
 const managerSlotInHandle = "manager-slot-in";
@@ -299,6 +313,13 @@ export function resolveCrossRoundContextMode(
   config: Pick<BlueprintNodeBaseConfig, "crossRoundContextMode">
 ): CrossRoundContextMode {
   return config.crossRoundContextMode ?? "off";
+}
+
+export function resolveNodeExecutionSessionPolicy(
+  config: Pick<BlueprintNodeBaseConfig, "executionSessionPolicy">,
+  fallback: NodeExecutionSessionPolicy = "refresh_per_run"
+): NodeExecutionSessionPolicy {
+  return config.executionSessionPolicy ?? fallback;
 }
 
 export function managerSlotInnerOutHandleId(lane: number): string {
@@ -408,6 +429,8 @@ export interface BlueprintRunView {
   managerContextSnapshots?: ManagerContextSnapshot[];
   runTimeline?: RunTimelineItem[];
   managerMail?: ManagerMail[];
+  nodeExecutionSessions?: NodeExecutionSession[];
+  nodeSessionTranscriptEvents?: NodeSessionTranscriptEvent[];
 }
 
 export interface BlueprintRunSummary extends BlueprintRun {
@@ -435,6 +458,8 @@ export interface BlueprintRunArchive {
   agentHandoffs?: AgentHandoff[];
   managerContextSnapshots?: ManagerContextSnapshot[];
   runTimeline?: RunTimelineItem[];
+  nodeExecutionSessions?: NodeExecutionSession[];
+  nodeSessionTranscriptEvents?: NodeSessionTranscriptEvent[];
 }
 
 export type FinalRunResultState = "available" | "failed" | "waiting_approval" | "empty";
@@ -1958,6 +1983,7 @@ function toPortableBlueprintNodeConfig(type: BlueprintNodeType, config: Blueprin
       description: agentConfig.description,
       resultRole: agentConfig.resultRole,
       crossRoundContextMode: agentConfig.crossRoundContextMode,
+      executionSessionPolicy: agentConfig.executionSessionPolicy,
       profileId: agentConfig.profileId,
       agentName: agentConfig.agentName,
       prompt: agentConfig.prompt,
@@ -1985,6 +2011,7 @@ function toPortableBlueprintNodeConfig(type: BlueprintNodeType, config: Blueprin
       description: summaryConfig.description,
       resultRole: summaryConfig.resultRole,
       crossRoundContextMode: summaryConfig.crossRoundContextMode,
+      executionSessionPolicy: summaryConfig.executionSessionPolicy,
       mode: summaryConfig.mode,
       runtimeId: summaryConfig.runtimeId,
       profileId: summaryConfig.profileId,
@@ -2134,7 +2161,8 @@ function readPortableBlueprintNodeConfig(
     label: readRequiredString(config.label, `${fieldName}.label`),
     description: readOptionalString(config.description),
     resultRole: readOptionalResultRole(config.resultRole, `${fieldName}.resultRole`),
-    crossRoundContextMode: readCrossRoundContextMode(config.crossRoundContextMode, `${fieldName}.crossRoundContextMode`)
+    crossRoundContextMode: readCrossRoundContextMode(config.crossRoundContextMode, `${fieldName}.crossRoundContextMode`),
+    executionSessionPolicy: readNodeExecutionSessionPolicy(config.executionSessionPolicy, `${fieldName}.executionSessionPolicy`)
   };
 
   if (type === "agent") {
@@ -2200,7 +2228,7 @@ function readPortableBlueprintNodeConfig(
 function readAgentNodeConfig(
   config: Record<string, unknown>,
   fieldName: string,
-  base: Pick<BlueprintNodeBaseConfig, "label" | "description" | "resultRole" | "crossRoundContextMode">
+  base: Pick<BlueprintNodeBaseConfig, "label" | "description" | "resultRole" | "crossRoundContextMode" | "executionSessionPolicy">
 ): AgentNodeConfig {
   return {
     ...base,
@@ -2728,6 +2756,14 @@ function readCrossRoundContextMode(value: unknown, fieldName: string): CrossRoun
     return value as CrossRoundContextMode;
   }
   throw new Error(`${fieldName} must be off, node_history, node_history_with_upstream, or node_history_with_upstream_and_manager_memory.`);
+}
+
+function readNodeExecutionSessionPolicy(value: unknown, fieldName: string): NodeExecutionSessionPolicy | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "string" && nodeExecutionSessionPolicies.has(value as NodeExecutionSessionPolicy)) {
+    return value as NodeExecutionSessionPolicy;
+  }
+  throw new Error(`${fieldName} must be refresh_per_run, refresh_per_round, or preserve_across_rounds.`);
 }
 
 function readManagerSlotExecutionMode(value: unknown, fieldName: string): ManagerSlotExecutionMode {

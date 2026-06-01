@@ -38,6 +38,9 @@ import type {
   IterationSession,
   ManagerContextSnapshot,
   ManagerMail,
+  NodeExecutionSession,
+  NodeExecutionSessionStatus,
+  NodeSessionTranscriptEvent,
   PendingApprovalItem,
   PortableBlueprintPackage,
   ReleaseReport,
@@ -79,14 +82,20 @@ import type {
   ApplyApprovalDecisionResult,
   ApplyInboxDecisionInput,
   ApplyInboxDecisionResult,
+  AppendNodeSessionTranscriptEventInput,
   BlueprintSkillSourceSnapshot,
   CancelNodeRunInput,
   ClaimNodeRunResult,
   CompleteNodeRunInput,
+  CreateFallbackNodeExecutionSessionInput,
+  CreateNodeExecutionSessionInput,
   FailNodeRunInput,
   HivewardStore,
+  MarkNodeExecutionSessionUnavailableInput,
+  NodeExecutionSessionFilter,
   PublishAgentOutputInput,
-  PublishAgentOutputResult
+  PublishAgentOutputResult,
+  UpdateNodeExecutionSessionRuntimeRefInput
 } from "../hivewardStore";
 import { isFileNotFoundError } from "../jsonFile";
 import { SqliteDriver } from "./sqliteDriver";
@@ -178,6 +187,8 @@ export class SqliteHivewardStore implements HivewardStore {
     agentHumanReports: number;
     agentHandoffs: number;
     inboxItems: number;
+    nodeExecutionSessions: number;
+    nodeSessionTranscriptEvents: number;
     chatSessions: number;
     chatMessages: number;
   }> {
@@ -192,6 +203,8 @@ export class SqliteHivewardStore implements HivewardStore {
       agentHumanReports: 0,
       agentHandoffs: 0,
       inboxItems: 0,
+      nodeExecutionSessions: 0,
+      nodeSessionTranscriptEvents: 0,
       chatSessions: 0,
       chatMessages: 0
     };
@@ -267,6 +280,14 @@ export class SqliteHivewardStore implements HivewardStore {
           }
           for (const snapshot of view.managerContextSnapshots ?? []) this.upsertManagerContextSnapshotSync(snapshot);
           for (const item of view.runTimeline ?? []) this.appendRunTimelineItemSync(item);
+          for (const session of view.nodeExecutionSessions ?? []) {
+            this.upsertNodeExecutionSession(session);
+            counts.nodeExecutionSessions += 1;
+          }
+          for (const event of view.nodeSessionTranscriptEvents ?? []) {
+            this.appendNodeSessionTranscriptEventSync(event);
+            counts.nodeSessionTranscriptEvents += 1;
+          }
           if (view.managerMail?.length) this.replaceManagerMailSync(view.managerMail);
         });
       }
@@ -948,7 +969,14 @@ export class SqliteHivewardStore implements HivewardStore {
     const companyId = this.getSelectedCompanyId();
     if (!companyId) return undefined;
     const row = this.driver.db.prepare("SELECT id FROM runs WHERE id = ? AND company_id = ?").get(blueprintRunId, companyId) as Row | undefined;
-    return row ? this.requireRunArchive(blueprintRunId) : undefined;
+    if (!row) return undefined;
+    const archive = this.requireRunArchive(blueprintRunId);
+    return {
+      ...archive,
+      nodeExecutionSessions: this.readNodeExecutionSessions({ runId: blueprintRunId }),
+      nodeSessionTranscriptEvents: (this.driver.db.prepare("SELECT * FROM node_session_transcript_events WHERE run_id = ? ORDER BY created_at").all(blueprintRunId) as Row[])
+        .map(nodeSessionTranscriptEventFromRow)
+    };
   }
 
   async getLatestRunViewForBlueprint(blueprintId: string): Promise<BlueprintRunView | undefined> {
@@ -1406,6 +1434,137 @@ export class SqliteHivewardStore implements HivewardStore {
       round.endedAt
     );
     return round;
+  }
+
+  async createNodeExecutionSession(input: CreateNodeExecutionSessionInput): Promise<NodeExecutionSession> {
+    return this.driver.transaction(() => {
+      const now = new Date().toISOString();
+      const existing = input.fallbackOfSessionId
+        ? undefined
+        : this.readNodeExecutionSessions({ nodeRunId: input.nodeRunId }).at(-1);
+      const session: NodeExecutionSession = {
+        id: input.id ?? existing?.id ?? `node-session-${nanoid(10)}`,
+        runId: input.runId,
+        nodeRunId: input.nodeRunId,
+        nodeId: input.nodeId,
+        agentSeatId: input.agentSeatId,
+        harnessId: input.harnessId,
+        nativeSessionId: input.nativeSessionId ?? existing?.nativeSessionId,
+        runtimeRef: input.runtimeRef ?? existing?.runtimeRef,
+        policy: input.policy,
+        status: input.status ?? existing?.status ?? "active",
+        statusReason: input.statusReason ?? existing?.statusReason,
+        fallbackOfSessionId: input.fallbackOfSessionId ?? existing?.fallbackOfSessionId,
+        resumedFromSessionId: input.resumedFromSessionId ?? existing?.resumedFromSessionId,
+        createdAt: input.createdAt ?? existing?.createdAt ?? now,
+        updatedAt: input.updatedAt ?? now,
+        lastUsedAt: input.lastUsedAt ?? input.updatedAt ?? existing?.lastUsedAt ?? now
+      };
+      this.upsertNodeExecutionSession(session);
+      return session;
+    });
+  }
+
+  async listNodeExecutionSessions(filter: NodeExecutionSessionFilter = {}): Promise<NodeExecutionSession[]> {
+    return this.readNodeExecutionSessions(filter);
+  }
+
+  async getNodeExecutionSessionByNodeRun(nodeRunId: string): Promise<NodeExecutionSession | undefined> {
+    return this.readNodeExecutionSessions({ nodeRunId }).at(-1);
+  }
+
+  async updateNodeExecutionSessionRuntimeRef(input: UpdateNodeExecutionSessionRuntimeRefInput): Promise<NodeExecutionSession | undefined> {
+    return this.driver.transaction(() => {
+      const current = this.readNodeExecutionSession(input.sessionId);
+      if (!current) return undefined;
+      const now = input.updatedAt ?? new Date().toISOString();
+      const next: NodeExecutionSession = {
+        ...current,
+        runtimeRef: input.runtimeRef ?? current.runtimeRef,
+        nativeSessionId: input.nativeSessionId ?? input.runtimeRef?.sessionKey ?? current.nativeSessionId,
+        status: input.status ?? current.status,
+        updatedAt: now,
+        lastUsedAt: input.lastUsedAt ?? now
+      };
+      this.upsertNodeExecutionSession(next);
+      return next;
+    });
+  }
+
+  async markNodeExecutionSessionUnavailable(input: MarkNodeExecutionSessionUnavailableInput): Promise<NodeExecutionSession | undefined> {
+    return this.driver.transaction(() => {
+      const current = this.readNodeExecutionSession(input.sessionId);
+      if (!current) return undefined;
+      const next: NodeExecutionSession = {
+        ...current,
+        status: "unavailable",
+        statusReason: input.reason,
+        updatedAt: input.updatedAt ?? new Date().toISOString()
+      };
+      this.upsertNodeExecutionSession(next);
+      return next;
+    });
+  }
+
+  async createFallbackNodeExecutionSession(input: CreateFallbackNodeExecutionSessionInput): Promise<NodeExecutionSession> {
+    return this.createNodeExecutionSession({
+      ...input,
+      status: "fallback",
+      fallbackOfSessionId: input.fallbackOfSessionId
+    });
+  }
+
+  async appendNodeSessionTranscriptEvent(input: AppendNodeSessionTranscriptEventInput): Promise<NodeSessionTranscriptEvent> {
+    const event: NodeSessionTranscriptEvent = {
+      ...input,
+      id: input.id ?? `node-session-event-${nanoid(10)}`,
+      createdAt: input.createdAt ?? new Date().toISOString()
+    };
+    this.appendNodeSessionTranscriptEventSync(event);
+    return event;
+  }
+
+  private appendNodeSessionTranscriptEventSync(event: NodeSessionTranscriptEvent): void {
+    this.driver.db.prepare(
+      `INSERT INTO node_session_transcript_events (
+        id, session_id, run_id, node_run_id, role, kind, content, runtime_ref_json, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        content = excluded.content,
+        runtime_ref_json = excluded.runtime_ref_json,
+        metadata_json = excluded.metadata_json`
+    ).run(
+      event.id,
+      event.sessionId,
+      event.runId,
+      event.nodeRunId,
+      event.role,
+      event.kind,
+      event.content,
+      optionalJson(event.runtimeRef),
+      optionalJson(event.metadata),
+      event.createdAt
+    );
+  }
+
+  async listNodeSessionTranscriptEvents(filter: { sessionId?: string; runId?: string; nodeRunId?: string } = {}): Promise<NodeSessionTranscriptEvent[]> {
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+    if (filter.sessionId) {
+      clauses.push("session_id = ?");
+      values.push(filter.sessionId);
+    }
+    if (filter.runId) {
+      clauses.push("run_id = ?");
+      values.push(filter.runId);
+    }
+    if (filter.nodeRunId) {
+      clauses.push("node_run_id = ?");
+      values.push(filter.nodeRunId);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    return (this.driver.db.prepare(`SELECT * FROM node_session_transcript_events ${where} ORDER BY created_at`).all(...values) as Row[])
+      .map(nodeSessionTranscriptEventFromRow);
   }
 
   async listArtifacts(runId?: string): Promise<Artifact[]> {
@@ -2115,7 +2274,10 @@ export class SqliteHivewardStore implements HivewardStore {
       agentHandoffs: (this.driver.db.prepare("SELECT * FROM agent_handoffs").all() as Row[]).map(agentHandoffFromRow),
       managerContextSnapshots: (this.driver.db.prepare("SELECT * FROM manager_context_snapshots").all() as Row[]).map(managerContextSnapshotFromRow),
       runTimeline: (this.driver.db.prepare("SELECT * FROM run_timeline_items").all() as Row[]).map(runTimelineItemFromRow),
-      managerMail: (this.driver.db.prepare("SELECT * FROM manager_mail").all() as Row[]).map(managerMailFromRow)
+      managerMail: (this.driver.db.prepare("SELECT * FROM manager_mail").all() as Row[]).map(managerMailFromRow),
+      nodeExecutionSessions: this.readNodeExecutionSessions(),
+      nodeSessionTranscriptEvents: (this.driver.db.prepare("SELECT * FROM node_session_transcript_events").all() as Row[])
+        .map(nodeSessionTranscriptEventFromRow)
     };
   }
 
@@ -2614,7 +2776,10 @@ export class SqliteHivewardStore implements HivewardStore {
       agentHandoffs: (this.driver.db.prepare("SELECT * FROM agent_handoffs WHERE run_id = ?").all(runId) as Row[]).map(agentHandoffFromRow),
       managerContextSnapshots: (this.driver.db.prepare("SELECT * FROM manager_context_snapshots WHERE run_id = ?").all(runId) as Row[]).map(managerContextSnapshotFromRow),
       runTimeline: (this.driver.db.prepare("SELECT * FROM run_timeline_items WHERE run_id = ? ORDER BY sequence").all(runId) as Row[]).map(runTimelineItemFromRow),
-      managerMail: (this.driver.db.prepare("SELECT * FROM manager_mail WHERE related_run_id = ?").all(runId) as Row[]).map(managerMailFromRow)
+      managerMail: (this.driver.db.prepare("SELECT * FROM manager_mail WHERE related_run_id = ?").all(runId) as Row[]).map(managerMailFromRow),
+      nodeExecutionSessions: this.readNodeExecutionSessions({ runId }),
+      nodeSessionTranscriptEvents: (this.driver.db.prepare("SELECT * FROM node_session_transcript_events WHERE run_id = ? ORDER BY created_at").all(runId) as Row[])
+        .map(nodeSessionTranscriptEventFromRow)
     };
   }
 
@@ -2626,6 +2791,76 @@ export class SqliteHivewardStore implements HivewardStore {
        WHERE nr.run_id = ?
        ORDER BY nr.queued_at, nr.id`
     ).all(runId) as Row[]).map(nodeRunFromRow);
+  }
+
+  private readNodeExecutionSession(id: string): NodeExecutionSession | undefined {
+    const row = this.driver.db.prepare("SELECT * FROM node_execution_sessions WHERE id = ?").get(id) as Row | undefined;
+    return row ? nodeExecutionSessionFromRow(row) : undefined;
+  }
+
+  private readNodeExecutionSessions(filter: NodeExecutionSessionFilter = {}): NodeExecutionSession[] {
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+    if (filter.runId) {
+      clauses.push("run_id = ?");
+      values.push(filter.runId);
+    }
+    if (filter.nodeId) {
+      clauses.push("node_id = ?");
+      values.push(filter.nodeId);
+    }
+    if (filter.nodeRunId) {
+      clauses.push("node_run_id = ?");
+      values.push(filter.nodeRunId);
+    }
+    if (filter.harnessId) {
+      clauses.push("harness_id = ?");
+      values.push(filter.harnessId);
+    }
+    if (filter.status) {
+      clauses.push("status = ?");
+      values.push(filter.status);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    return (this.driver.db.prepare(`SELECT * FROM node_execution_sessions ${where} ORDER BY created_at, updated_at, COALESCE(last_used_at, updated_at), rowid`).all(...values) as Row[])
+      .map(nodeExecutionSessionFromRow);
+  }
+
+  private upsertNodeExecutionSession(session: NodeExecutionSession): void {
+    this.driver.db.prepare(
+      `INSERT INTO node_execution_sessions (
+        id, run_id, node_run_id, node_id, agent_seat_id, harness_id, native_session_id,
+        runtime_ref_json, policy, status, status_reason, fallback_of_session_id,
+        resumed_from_session_id, created_at, updated_at, last_used_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        native_session_id = excluded.native_session_id,
+        runtime_ref_json = excluded.runtime_ref_json,
+        policy = excluded.policy,
+        status = excluded.status,
+        status_reason = excluded.status_reason,
+        fallback_of_session_id = excluded.fallback_of_session_id,
+        resumed_from_session_id = excluded.resumed_from_session_id,
+        updated_at = excluded.updated_at,
+        last_used_at = excluded.last_used_at`
+    ).run(
+      session.id,
+      session.runId,
+      session.nodeRunId,
+      session.nodeId,
+      session.agentSeatId,
+      session.harnessId,
+      session.nativeSessionId,
+      optionalJson(session.runtimeRef),
+      session.policy,
+      session.status,
+      session.statusReason,
+      session.fallbackOfSessionId,
+      session.resumedFromSessionId,
+      session.createdAt,
+      session.updatedAt,
+      session.lastUsedAt
+    );
   }
 
   private nodeRunExists(id: string): boolean {
@@ -2933,6 +3168,42 @@ function nodeRunFromRow(row: Row): BlueprintNodeRun {
     error: readString(row.error),
     usage: parseOptionalJson(row.usage_json) as BlueprintNodeRun["usage"],
     runtimeRef: parseOptionalJson(row.runtime_ref_json) as BlueprintNodeRun["runtimeRef"]
+  };
+}
+
+function nodeExecutionSessionFromRow(row: Row): NodeExecutionSession {
+  return {
+    id: requireString(row.id),
+    runId: requireString(row.run_id),
+    nodeRunId: requireString(row.node_run_id),
+    nodeId: requireString(row.node_id),
+    agentSeatId: readString(row.agent_seat_id),
+    harnessId: requireString(row.harness_id) as NodeExecutionSession["harnessId"],
+    nativeSessionId: readString(row.native_session_id),
+    runtimeRef: parseOptionalJson(row.runtime_ref_json) as NodeExecutionSession["runtimeRef"],
+    policy: requireString(row.policy) as NodeExecutionSession["policy"],
+    status: requireString(row.status) as NodeExecutionSession["status"],
+    statusReason: readString(row.status_reason),
+    fallbackOfSessionId: readString(row.fallback_of_session_id),
+    resumedFromSessionId: readString(row.resumed_from_session_id),
+    createdAt: requireString(row.created_at),
+    updatedAt: requireString(row.updated_at),
+    lastUsedAt: readString(row.last_used_at)
+  };
+}
+
+function nodeSessionTranscriptEventFromRow(row: Row): NodeSessionTranscriptEvent {
+  return {
+    id: requireString(row.id),
+    sessionId: requireString(row.session_id),
+    runId: requireString(row.run_id),
+    nodeRunId: requireString(row.node_run_id),
+    role: requireString(row.role) as NodeSessionTranscriptEvent["role"],
+    kind: requireString(row.kind) as NodeSessionTranscriptEvent["kind"],
+    content: readString(row.content),
+    runtimeRef: parseOptionalJson(row.runtime_ref_json) as NodeSessionTranscriptEvent["runtimeRef"],
+    metadata: parseOptionalJson(row.metadata_json) as NodeSessionTranscriptEvent["metadata"],
+    createdAt: requireString(row.created_at)
   };
 }
 

@@ -156,7 +156,7 @@ export class ClaudeAgentSdkRuntime implements AgentSdkRuntime {
     const now = new Date().toISOString();
     const taskId = `claude-task-${nanoid(10)}`;
     const runId = `claude-run-${nanoid(10)}`;
-    const sessionKey = `claude-session-${input.nodeRunId}`;
+    const sessionKey = input.nativeSessionId ?? `claude-session-${input.nodeRunId}`;
 
     let workingDirectory: string;
     try {
@@ -212,7 +212,7 @@ export class ClaudeAgentSdkRuntime implements AgentSdkRuntime {
     const now = new Date().toISOString();
     const taskId = `claude-task-${nanoid(10)}`;
     const runId = `claude-run-${nanoid(10)}`;
-    const initialSessionKey = `claude-session-${input.nodeRunId}`;
+    const initialSessionKey = input.nativeSessionId ?? `claude-session-${input.nodeRunId}`;
 
     let workingDirectory: string;
     try {

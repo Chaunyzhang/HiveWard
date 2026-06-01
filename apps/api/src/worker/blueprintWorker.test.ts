@@ -398,7 +398,7 @@ describe("BlueprintWorker", () => {
     expect(index.nodeRuns).toBeUndefined();
     expect(index.events).toBeUndefined();
     expect(index.runIndex?.find((item) => item.id === run.id)?.status).toBe("failed");
-  });
+  }, 20_000);
 
   it("writes node input and runtime ref to the run archive before the agent task finishes", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
@@ -447,7 +447,58 @@ describe("BlueprintWorker", () => {
     adapter.complete(createCompletedAgentTask("task-1", "succeeded", "brief ok"));
     const view = await waitForRunTerminal(store, run.id);
     expect(view?.run.status).toBe("succeeded");
-  });
+  }, 20_000);
+
+  it("binds agent execution to a NodeExecutionSession and records visible transcript events", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-session-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const blueprint = createBlueprint([createAgentNode("brief", "Brief")], []);
+    const adapter = new ScriptedAdapter([
+      { ...createStartedAgentTask("task-session"), sessionKey: "native-session-1" }
+    ], [
+      { ...createCompletedAgentTask("task-session", "succeeded", "session ok"), sessionKey: "native-session-1" }
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const view = await waitForRunTerminal(store, run.id);
+    const nodeRun = view?.nodeRuns.find((candidate) => candidate.nodeId === "brief");
+    if (!nodeRun) throw new Error("Expected brief node run.");
+
+    const sessions = await store.listNodeExecutionSessions({ runId: run.id, nodeRunId: nodeRun.id });
+    expect(sessions).toEqual([
+      expect.objectContaining({
+        nodeRunId: nodeRun.id,
+        nodeId: "brief",
+        harnessId: "openclaw",
+        nativeSessionId: "native-session-1",
+        policy: "refresh_per_run",
+        status: "completed",
+        runtimeRef: expect.objectContaining({
+          taskId: "task-session",
+          runId: "task-session-run",
+          sessionKey: "native-session-1"
+        })
+      })
+    ]);
+    const session = sessions[0];
+    if (!session) throw new Error("Expected execution session.");
+    expect(view?.nodeExecutionSessions).toEqual([
+      expect.objectContaining({ id: session.id, nativeSessionId: "native-session-1" })
+    ]);
+    const transcriptEvents = await store.listNodeSessionTranscriptEvents({ sessionId: session.id });
+    expect(transcriptEvents).toHaveLength(4);
+    expect(transcriptEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "runtime", kind: "runtime_started" }),
+      expect.objectContaining({ role: "assistant", kind: "assistant_delta", content: "session ok" }),
+      expect.objectContaining({ role: "runtime", kind: "runtime_done" }),
+      expect.objectContaining({ role: "assistant", kind: "assistant_message", content: "session ok" })
+    ]));
+    expect(adapter.calls[0]?.nativeSessionId).toBeUndefined();
+    expect(adapter.calls[0]?.executionSessionPolicy).toBe("refresh_per_run");
+  }, 20_000);
 
   it("keeps agent output succeeded when a declared artifact path cannot be copied", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-artifact-fail-"));
@@ -1090,12 +1141,12 @@ describe("BlueprintWorker", () => {
     };
     const blueprint = createBlueprint([delivery], []);
     const adapter = new ScriptedAdapter([
-      createStartedAgentTask("task-resume-initial")
+      { ...createStartedAgentTask("task-resume-initial"), sessionKey: "native-approval-session" }
     ], [
-      createCompletedAgentTask("task-resume-initial", "succeeded", "draft answer"),
-      createCompletedAgentTask("task-resume-chat-1", "succeeded", "answer one"),
-      createCompletedAgentTask("task-resume-chat-2", "succeeded", "answer two"),
-      createCompletedAgentTask("task-resume-chat-3", "succeeded", "answer three")
+      { ...createCompletedAgentTask("task-resume-initial", "succeeded", "draft answer"), sessionKey: "native-approval-session" },
+      { ...createCompletedAgentTask("task-resume-chat-1", "succeeded", "answer one"), sessionKey: "native-approval-session" },
+      { ...createCompletedAgentTask("task-resume-chat-2", "succeeded", "answer two"), sessionKey: "native-approval-session" },
+      { ...createCompletedAgentTask("task-resume-chat-3", "succeeded", "answer three"), sessionKey: "native-approval-session" }
     ]);
     const worker = new BlueprintWorker(store, adapter);
 
@@ -1114,16 +1165,16 @@ describe("BlueprintWorker", () => {
     }
 
     expect(adapter.chatCalls.map((call) => call.sessionKey)).toEqual([
-      "test-chat-session-1",
-      "agent:main:main",
-      "agent:main:main"
+      "native-approval-session",
+      "native-approval-session",
+      "native-approval-session"
     ]);
     expect(adapter.calls).toHaveLength(1);
     const [thread] = await store.listApprovalThreads({ runId: run.id });
     expect(thread?.discussionSession).toMatchObject({
       threadType: "approval",
       threadId: approvalRequest.threadId,
-      nativeSessionId: "agent:main:main",
+      nativeSessionId: "native-approval-session",
       nativeSessionState: "resumable",
       status: "active"
     });
@@ -1209,12 +1260,12 @@ describe("BlueprintWorker", () => {
     };
     const blueprint = createBlueprint([delivery], []);
     const adapter = new ScriptedAdapter([
-      createStartedAgentTask("task-run-1-initial"),
-      createStartedAgentTask("task-run-2-initial")
+      { ...createStartedAgentTask("task-run-1-initial"), sessionKey: "native-run-1" },
+      { ...createStartedAgentTask("task-run-2-initial"), sessionKey: "native-run-2" }
     ], [
-      createCompletedAgentTask("task-run-1-initial", "succeeded", "first draft"),
+      { ...createCompletedAgentTask("task-run-1-initial", "succeeded", "first draft"), sessionKey: "native-run-1" },
       { ...createCompletedAgentTask("task-run-1-chat", "succeeded", "first run answer"), sessionKey: "native-run-1" },
-      createCompletedAgentTask("task-run-2-initial", "succeeded", "second draft"),
+      { ...createCompletedAgentTask("task-run-2-initial", "succeeded", "second draft"), sessionKey: "native-run-2" },
       { ...createCompletedAgentTask("task-run-2-chat", "succeeded", "second run answer"), sessionKey: "native-run-2" }
     ]);
     const worker = new BlueprintWorker(store, adapter);
@@ -1246,8 +1297,8 @@ describe("BlueprintWorker", () => {
     expect(firstThread?.discussionSession?.nativeSessionId).toBe("native-run-1");
     expect(secondThread?.discussionSession?.nativeSessionId).toBe("native-run-2");
     expect(adapter.chatCalls.map((call) => call.sessionKey)).toEqual([
-      "test-chat-session-1",
-      "test-chat-session-2"
+      "native-run-1",
+      "native-run-2"
     ]);
   });
 

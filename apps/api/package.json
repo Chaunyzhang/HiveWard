@@ -1,6 +1,6 @@
 {
   "name": "@hiveward/api",
-  "version": "0.5.19",
+  "version": "0.5.20",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,8 +8,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hiveward/adapter": "0.5.19",
-    "@hiveward/shared": "0.5.19",
+    "@hiveward/adapter": "0.5.20",
+    "@hiveward/shared": "0.5.20",
     "better-sqlite3": "^12.10.0"
   },
   "devDependencies": {

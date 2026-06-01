@@ -98,6 +98,7 @@ import type {
   BlueprintNodeType,
   BlueprintRunSummary,
   BlueprintRunView,
+  NodeExecutionSessionPolicy,
   RuntimeAccessPolicy
 } from "@hiveward/shared";
 import {
@@ -2436,6 +2437,40 @@ function CrossRoundContextField({
   );
 }
 
+function NodeExecutionSessionPolicyField({
+  config,
+  t,
+  onPatchConfig,
+  defaultPolicy,
+  className
+}: {
+  config: Pick<AgentNodeConfig & ManagerNodeConfig & SummaryNodeConfig, "executionSessionPolicy">;
+  t: Messages;
+  onPatchConfig: (patch: { executionSessionPolicy?: NodeExecutionSessionPolicy }) => void;
+  defaultPolicy: NodeExecutionSessionPolicy;
+  className?: string;
+}) {
+  const options: BlueprintSelectOption[] = [
+    { value: "refresh_per_run", label: t.options.sessionRefreshPerRun },
+    { value: "refresh_per_round", label: t.options.sessionRefreshPerRound },
+    { value: "preserve_across_rounds", label: t.options.sessionPreserveAcrossRounds }
+  ];
+  return (
+    <label className={className}>
+      <span>{t.fields.executionSessionPolicy}</span>
+      <BlueprintSelect
+        value={config.executionSessionPolicy ?? defaultPolicy}
+        options={options}
+        ariaLabel={t.fields.executionSessionPolicy}
+        onChange={(value) => onPatchConfig({
+          executionSessionPolicy: value === defaultPolicy ? undefined : value as NodeExecutionSessionPolicy
+        })}
+      />
+      <small>{t.fields.executionSessionPolicyHint}</small>
+    </label>
+  );
+}
+
 function ManagerPreflightSlotSummary({
   managerId,
   nodes,
@@ -2819,6 +2854,13 @@ function NodeConfigForm({
               )}
             </>
           )}
+          <NodeExecutionSessionPolicyField
+            className="field-span-full"
+            config={config}
+            t={t}
+            defaultPolicy="refresh_per_run"
+            onPatchConfig={onPatchConfig}
+          />
         </div>
       </div>
     );
@@ -2978,6 +3020,13 @@ function NodeConfigForm({
               className="field-span-full"
               config={config}
               t={t}
+              onPatchConfig={onPatchConfig}
+            />
+            <NodeExecutionSessionPolicyField
+              className="field-span-full"
+              config={config}
+              t={t}
+              defaultPolicy="preserve_across_rounds"
               onPatchConfig={onPatchConfig}
             />
             <label>

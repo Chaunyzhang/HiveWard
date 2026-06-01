@@ -120,7 +120,7 @@ export class CodexAgentSdkRuntime implements AgentSdkRuntime {
     const now = new Date().toISOString();
     const taskId = `codex-task-${nanoid(10)}`;
     const runId = `codex-run-${nanoid(10)}`;
-    const sessionKey = `codex-session-${input.nodeRunId}`;
+    const sessionKey = input.nativeSessionId ?? `codex-session-${input.nodeRunId}`;
 
     let workingDirectory: string;
     try {
@@ -177,7 +177,7 @@ export class CodexAgentSdkRuntime implements AgentSdkRuntime {
     const now = new Date().toISOString();
     const taskId = `codex-task-${nanoid(10)}`;
     const runId = `codex-run-${nanoid(10)}`;
-    const initialSessionKey = `codex-session-${input.nodeRunId}`;
+    const initialSessionKey = input.nativeSessionId ?? `codex-session-${input.nodeRunId}`;
 
     let workingDirectory: string;
     try {

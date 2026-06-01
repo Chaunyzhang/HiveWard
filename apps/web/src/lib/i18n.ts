@@ -111,6 +111,8 @@ export interface Messages {
     crossRoundContext: string;
     crossRoundContextHint: string;
     description: string;
+    executionSessionPolicy: string;
+    executionSessionPolicyHint: string;
     agentName: string;
     expression: string;
     harness: string;
@@ -219,6 +221,9 @@ export interface Messages {
     safeMode: string;
     selfDispatch: string;
     selfIteration: string;
+    sessionPreserveAcrossRounds: string;
+    sessionRefreshPerRound: string;
+    sessionRefreshPerRun: string;
     sequential: string;
     structuredMerge: string;
     waitForAll: string;
@@ -370,6 +375,8 @@ export const messages: Record<Language, Messages> = {
       crossRoundContext: "Cross-round context",
       crossRoundContextHint: "Applies only inside this blueprint run; it is not long-term harness memory.",
       description: "Description",
+      executionSessionPolicy: "Execution session",
+      executionSessionPolicyHint: "Controls whether HiveWard refreshes or reuses the native Harness session pointer.",
       agentName: "Agent name",
       expression: "Expression",
       harness: "Harness",
@@ -593,6 +600,9 @@ export const messages: Record<Language, Messages> = {
       safeMode: "Safe mode",
       selfDispatch: "Self dispatch",
       selfIteration: "Self iteration",
+      sessionPreserveAcrossRounds: "Preserve across rounds",
+      sessionRefreshPerRound: "Refresh per round",
+      sessionRefreshPerRun: "Refresh per run",
       sequential: "Sequential",
       structuredMerge: "structured merge",
       waitForAll: "all"
@@ -770,6 +780,8 @@ export const messages: Record<Language, Messages> = {
       crossRoundContext: "\u8de8\u8f6e\u4e0a\u4e0b\u6587",
       crossRoundContextHint: "\u4ec5\u5728\u540c\u4e00\u6b21\u84dd\u56fe run \u5185\u751f\u6548\uff0c\u4e0d\u662f Harness \u957f\u671f\u8bb0\u5fc6\u3002",
       description: "说明",
+      executionSessionPolicy: "\u6267\u884c\u4f1a\u8bdd",
+      executionSessionPolicyHint: "\u63a7\u5236 HiveWard \u5237\u65b0\u6216\u7eed\u63a5 Harness \u539f\u751f\u4f1a\u8bdd\uff1btranscript \u53ea\u662f\u5c55\u793a\u548c fallback \u4e0a\u4e0b\u6587\uff0c\u4e0d\u662f\u8bb0\u5fc6\u3002",
       agentName: "Agent 名称",
       expression: "表达式",
       instructions: "说明",
@@ -988,6 +1000,9 @@ export const messages: Record<Language, Messages> = {
       safeMode: "\u5b89\u5168\u6a21\u5f0f",
       selfDispatch: "\u81ea\u4e3b\u5206\u53d1",
       selfIteration: "\u81ea\u8fed\u4ee3",
+      sessionPreserveAcrossRounds: "\u8de8\u8f6e\u4fdd\u7559\u4f1a\u8bdd",
+      sessionRefreshPerRound: "\u6bcf\u8f6e\u5237\u65b0\u4f1a\u8bdd",
+      sessionRefreshPerRun: "\u6bcf\u6b21\u8fd0\u884c\u65b0\u4f1a\u8bdd",
       sequential: "\u987a\u5e8f\u5206\u53d1",
       structuredMerge: "结构化合并",
       waitForAll: "全部完成"
