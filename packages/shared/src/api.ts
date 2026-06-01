@@ -168,6 +168,42 @@ export interface ReplyInboxItemRequest {
   message: string;
 }
 
+export type InboxThreadType = "approval" | "inbox";
+
+export interface StreamInboxThreadMessageRequest {
+  message: string;
+}
+
+export type InboxThreadDoneEvent = {
+  type: "done";
+  taskId: string;
+  runId: string;
+  sessionKey: string;
+  status: RuntimeExecutionStatus;
+  output?: string;
+  error?: string;
+  updatedAt: string;
+  threadType: InboxThreadType;
+  threadId: string;
+  messageId: string;
+};
+
+export type StreamInboxThreadMessageEvent =
+  | ChatStreamEvent
+  | InboxThreadDoneEvent
+  | {
+      type: "inbox_message_created";
+      messageId: string;
+      threadType: InboxThreadType;
+      threadId: string;
+    }
+  | {
+      type: "inbox_candidate_created";
+      replyId: string;
+      threadType: InboxThreadType;
+      threadId: string;
+    };
+
 export interface ApproveInboxItemResponse {
   item: InboxItem;
   importedBlueprints?: BlueprintDefinition[];
@@ -181,6 +217,10 @@ export interface ApproveBlueprintRunRequest {
 
 export interface SelectBlueprintRunApprovalRequest {
   nodeRunId: string;
+  selectedReplyId: string;
+}
+
+export interface SelectApprovalRequestReplyRequest {
   selectedReplyId: string;
 }
 

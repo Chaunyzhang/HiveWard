@@ -144,6 +144,151 @@ describe("ApprovalService", () => {
     expect(replies).toEqual([]);
   });
 
+  it("selects request-level assistant candidates without creating lifecycle decisions", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-lifecycle-select-"));
+    const store = new FileHivewardStore(join(dir, "hiveward-store.json"));
+    await store.init();
+    const service = new ApprovalService(store);
+
+    const request = await service.createRequest({
+      runId: "run-select",
+      kind: "iteration_requirement_plan",
+      title: "Round 1 requirement",
+      body: "Original plan",
+      requestedBy: {
+        type: "node",
+        label: "Top Manager",
+        nodeId: "manager"
+      }
+    });
+    await store.appendApprovalReply({
+      id: "reply-candidate",
+      threadId: request.threadId ?? request.id,
+      approvalRequestId: request.id,
+      actor: "agent",
+      body: "Candidate plan",
+      createdAt: new Date().toISOString(),
+      metadata: { inboxDiscussionMode: "candidate", candidate: true }
+    });
+
+    const selected = await service.selectReply(request.id, "reply-candidate");
+
+    expect(selected).toMatchObject({
+      id: request.id,
+      status: "pending",
+      selectedReplyId: "reply-candidate",
+      body: "Original plan"
+    });
+    expect(await store.listApprovalDecisions(request.id)).toEqual([]);
+  });
+
+  it("rejects invalid request-level selections and lets ordinary assistant replies become candidates", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-lifecycle-select-invalid-"));
+    const store = new FileHivewardStore(join(dir, "hiveward-store.json"));
+    await store.init();
+    const service = new ApprovalService(store);
+
+    const first = await service.createRequest({
+      runId: "run-select-invalid",
+      kind: "iteration_requirement_plan",
+      title: "First",
+      body: "First body",
+      requestedBy: { type: "node", label: "Manager", nodeId: "manager" }
+    });
+    const second = await service.createRequest({
+      runId: "run-select-invalid",
+      kind: "manager_release_report",
+      title: "Second",
+      body: "Second body",
+      requestedBy: { type: "node", label: "Manager", nodeId: "manager" }
+    });
+    await store.appendApprovalReply({
+      id: "reply-user",
+      threadId: first.threadId ?? first.id,
+      approvalRequestId: first.id,
+      actor: "user",
+      body: "Human note",
+      createdAt: new Date().toISOString()
+    });
+    await store.appendApprovalReply({
+      id: "reply-system",
+      threadId: first.threadId ?? first.id,
+      approvalRequestId: first.id,
+      actor: "system",
+      body: "System note",
+      createdAt: new Date().toISOString()
+    });
+    await store.appendApprovalReply({
+      id: "reply-other",
+      threadId: second.threadId ?? second.id,
+      approvalRequestId: second.id,
+      actor: "manager",
+      body: "Other request candidate",
+      createdAt: new Date().toISOString(),
+      metadata: { inboxDiscussionMode: "candidate", candidate: true }
+    });
+    await store.appendApprovalReply({
+      id: "reply-not-candidate",
+      threadId: first.threadId ?? first.id,
+      approvalRequestId: first.id,
+      actor: "agent",
+      body: "Ordinary discussion reply",
+      createdAt: new Date().toISOString(),
+      metadata: { inboxDiscussionMode: "reply", candidate: false }
+    });
+
+    await expect(service.selectReply(first.id, "reply-user")).rejects.toThrow("Only assistant, agent, or manager approval replies");
+    await expect(service.selectReply(first.id, "reply-system")).rejects.toThrow("Only assistant, agent, or manager approval replies");
+    await expect(service.selectReply(first.id, "reply-not-candidate")).resolves.toMatchObject({
+      selectedReplyId: "reply-not-candidate"
+    });
+    await expect(service.selectReply(first.id, "reply-other")).rejects.toThrow("does not belong");
+
+    await service.reject(first.id);
+    await expect(service.selectReply(first.id, "reply-user")).rejects.toThrow("already closed");
+  });
+
+  it("uses the selected request-level candidate body when approving a requirement plan", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-lifecycle-selected-plan-"));
+    const store = new FileHivewardStore(join(dir, "hiveward-store.json"));
+    await store.init();
+    const service = new ApprovalService(store);
+
+    const request = await service.createRequest({
+      runId: "run-selected-plan",
+      kind: "iteration_requirement_plan",
+      title: "Round 1 requirement",
+      body: "Original plan",
+      requestedBy: { type: "node", label: "Top Manager", nodeId: "manager" }
+    });
+    await store.appendApprovalReply({
+      id: "reply-selected-plan",
+      threadId: request.threadId ?? request.id,
+      approvalRequestId: request.id,
+      actor: "agent",
+      body: "Selected candidate plan",
+      createdAt: new Date().toISOString(),
+      metadata: { inboxDiscussionMode: "candidate", candidate: true }
+    });
+    await service.selectReply(request.id, "reply-selected-plan");
+
+    const result = await service.approve(request.id);
+
+    expect(result.decision).toMatchObject({
+      action: "approve",
+      selectedReplyId: "reply-selected-plan"
+    });
+    expect(result.approvalRequest).toMatchObject({
+      status: "approved",
+      selectedReplyId: "reply-selected-plan",
+      body: "Selected candidate plan"
+    });
+    expect(await store.getApprovalRequest(request.id)).toMatchObject({
+      status: "approved",
+      body: "Selected candidate plan"
+    });
+  });
+
   it("records request_changes as a lifecycle decision without appending a reply", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hiveward-lifecycle-request-changes-"));
     const store = new FileHivewardStore(join(dir, "hiveward-store.json"));
@@ -207,6 +352,32 @@ describe("ApprovalService", () => {
 
     expect(outcome.prepareNextRound?.humanFeedback).toContain("Approve, but keep keyboard controls in the next round.");
     expect(outcome.prepareNextRound?.humanFeedback).toContain("Approval action note");
+  });
+
+  it("uses the selected manager release candidate when completing a release report", async () => {
+    const { store, approvalService, request, run } = await createReleaseReportApprovalFixture();
+    await store.appendApprovalReply({
+      id: "reply-selected-report",
+      threadId: request.threadId ?? request.id,
+      approvalRequestId: request.id,
+      actor: "manager",
+      body: "Selected release report summary",
+      createdAt: new Date().toISOString(),
+      metadata: { inboxDiscussionMode: "candidate", candidate: true }
+    });
+    await approvalService.selectReply(request.id, "reply-selected-report");
+
+    const result = await approvalService.complete(request.id);
+
+    expect(result.approvalRequest).toMatchObject({
+      status: "completed",
+      selectedReplyId: "reply-selected-report",
+      body: "Selected release report summary"
+    });
+    expect((await store.listReleaseReports(run.id))[0]).toMatchObject({
+      approvalRequestId: request.id,
+      summary: "Selected release report summary"
+    });
   });
 
   it("reply plus approve comment are both carried and ordered", async () => {

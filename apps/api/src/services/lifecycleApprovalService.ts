@@ -11,6 +11,7 @@ import type {
   RunTimelineItem
 } from "@hiveward/shared";
 import {
+  approvalThreadIdForRequest,
   capabilitiesAllow,
   emptyApprovalCapabilities,
   resolveApprovalCapabilities
@@ -155,6 +156,19 @@ export class ApprovalService {
 
   approve(id: string, comment?: string, selectedReplyId?: string): Promise<ApprovalActionResult> {
     return this.decide(id, "approve", "approved", { comment, selectedReplyId });
+  }
+
+  async selectReply(id: string, selectedReplyId: string): Promise<ApprovalRequest> {
+    const current = await this.requireRequest(id);
+    if (current.status !== "pending") {
+      throw new ApprovalConflictError("Approval request is already closed.");
+    }
+    const selectedReply = await this.requireSelectableReply(current, selectedReplyId);
+    return this.store.upsertApprovalRequest({
+      ...current,
+      selectedReplyId: selectedReply.id,
+      updatedAt: new Date().toISOString()
+    });
   }
 
   reject(id: string, comment?: string): Promise<ApprovalActionResult> {
@@ -313,6 +327,17 @@ export class ApprovalService {
     if (action === "terminate" && current.kind === "manager_release_report") {
       throw new Error("Manager release reports cannot be terminated.");
     }
+    const actionConsumesSelection = action === "approve" || action === "complete" || action === "auto_approve";
+    const selectedReplyId = actionConsumesSelection ? options.selectedReplyId ?? current.selectedReplyId : current.selectedReplyId;
+    const selectedReply = actionConsumesSelection && selectedReplyId && current.kind !== "agent_proposal"
+      ? await this.requireSelectableReply(current, selectedReplyId)
+      : undefined;
+    const selectedBody = selectedReply && approvalKindConsumesSelectedReplyBody(current.kind)
+      ? selectedReply.body
+      : undefined;
+    const releaseReport = selectedBody !== undefined && current.kind === "manager_release_report"
+      ? await this.buildSelectedReleaseReport(current, selectedBody)
+      : undefined;
     const now = new Date().toISOString();
     const decision = this.buildDecision(
       current.id,
@@ -321,15 +346,17 @@ export class ApprovalService {
       options.actor ?? "user",
       options.comment,
       now,
-      options.selectedReplyId
+      actionConsumesSelection ? selectedReplyId : options.selectedReplyId
     );
     const next: ApprovalRequest = {
       ...current,
+      ...(selectedBody !== undefined ? { body: selectedBody } : {}),
       status: resultingStatus,
+      ...(selectedReplyId ? { selectedReplyId } : {}),
       capabilities: { ...emptyApprovalCapabilities },
       updatedAt: now
     };
-    return this.applyDecisionOrThrow({ approvalRequest: next, decision });
+    return this.applyDecisionOrThrow({ approvalRequest: next, decision, releaseReport });
   }
 
   private async closeRequest(
@@ -368,6 +395,38 @@ export class ApprovalService {
     const request = await this.store.getApprovalRequest(id);
     if (!request) throw new Error(`Approval request not found: ${id}`);
     return request;
+  }
+
+  private async requireSelectableReply(request: ApprovalRequest, selectedReplyId: string): Promise<ApprovalReply> {
+    const normalizedSelectedReplyId = selectedReplyId.trim();
+    if (!normalizedSelectedReplyId) {
+      throw new Error("Approval selectedReplyId is required.");
+    }
+    const threadId = approvalThreadIdForRequest(request);
+    const reply = (await this.store.listApprovalReplies({ threadId }))
+      .find((candidate) => candidate.id === normalizedSelectedReplyId);
+    if (!reply || (reply.approvalRequestId && reply.approvalRequestId !== request.id)) {
+      throw new Error("Selected approval reply does not belong to this approval request.");
+    }
+    if (!isSelectableApprovalReply(reply, request.selectedReplyId)) {
+      throw new Error("Only assistant, agent, or manager approval replies can be selected as candidates.");
+    }
+    return reply;
+  }
+
+  private async buildSelectedReleaseReport(
+    request: ApprovalRequest,
+    selectedBody: string
+  ): Promise<ReleaseReport | undefined> {
+    if (!request.runId) return undefined;
+    const reports = await this.store.listReleaseReports(request.runId);
+    const report = request.payloadRef
+      ? reports.find((candidate) => candidate.id === request.payloadRef)
+      : undefined;
+    const selectedReport = report ??
+      reports.find((candidate) => candidate.approvalRequestId === request.id) ??
+      (request.roundId ? reports.filter((candidate) => candidate.roundId === request.roundId).at(-1) : undefined);
+    return selectedReport ? { ...selectedReport, summary: selectedBody } : undefined;
   }
 
   private buildDecision(
@@ -459,46 +518,8 @@ export class ApprovalService {
       };
     }
 
-    if (current.kind === "manager_release_report" && current.roundId) {
-      if (!current.runId) {
-        throw new Error("Release report revision requires a blueprint run.");
-      }
-      const reports = (await this.store.listReleaseReports(current.runId)).filter((report) => report.roundId === current.roundId);
-      const currentReport = reports.find((report) => report.approvalRequestId === current.id || report.id === current.payloadRef) ?? reports.at(-1);
-      const round = (await this.store.listIterationRounds({ runId: current.runId }))
-        .find((candidate) => candidate.id === current.roundId);
-      const version = Math.max(0, ...reports.map((report) => report.version)) + 1;
-      const reportId = `release-report-${nanoid(10)}`;
-      const title = `Round ${round?.roundNumber ?? current.roundId} Release Report v${version}`;
-      const artifactRefs = currentReport?.artifactRefs ?? [];
-      const summary = [
-        `This is the revised v${version} report based on review feedback.`,
-        "Revision feedback:",
-        message,
-        "Previous report summary:",
-        currentReport?.summary ?? current.body
-      ].join("\n\n");
-      const artifactBody = artifactRefs.length
-        ? artifactRefs.map((ref) => `- ${ref.title}: ${ref.location}`).join("\n")
-        : "- No artifacts were published for this report revision.";
-      return {
-        title,
-        body: `${summary}\n\nArtifacts:\n${artifactBody}`,
-        payloadRef: reportId,
-        capabilities: current.capabilities,
-        releaseReport: {
-          id: reportId,
-          runId: current.runId,
-          roundId: current.roundId,
-          approvalRequestId: "",
-          version,
-          title,
-          summary,
-          artifactRefs,
-          supersedesReportId: currentReport?.id,
-          createdAt: ""
-        }
-      };
+    if (current.kind === "manager_release_report") {
+      throw new Error("Manager release report revisions require a worker-generated Manager draft.");
     }
 
     const title = appendRevisionSuffix(current.title, revision);
@@ -521,6 +542,23 @@ export class ApprovalService {
 
 function appendRevisionSuffix(title: string, revision: number): string {
   return `${title.replace(/\s+v\d+$/i, "")} v${revision}`;
+}
+
+function approvalKindConsumesSelectedReplyBody(kind: ApprovalRequestKind): boolean {
+  return kind === "iteration_requirement_plan" || kind === "manager_release_report";
+}
+
+function isSelectableApprovalReply(reply: ApprovalReply, selectedReplyId?: string): boolean {
+  if (reply.id === selectedReplyId) return true;
+  return isSelectableApprovalReplyActor(reply.actor);
+}
+
+function isSelectableApprovalReplyActor(actor: ApprovalReply["actor"]): boolean {
+  return actor === "assistant" || actor === "agent" || actor === "manager";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 type ApprovalFeedbackEntry = {

@@ -41,8 +41,10 @@ import type {
   DashboardWidgetType,
   InboxItem,
   ApprovalThread,
+  ChatStreamEvent,
   PendingApprovalItem,
   RuntimeOverview,
+  StreamInboxThreadMessageEvent,
   UpdateCompanyRequest,
   WorkspaceDashboard,
   BlueprintDefinition,
@@ -61,8 +63,18 @@ import {
   resolveRunViewDisplayStatus,
   writeAcknowledgedTerminalRunIds
 } from "../lib/run-state";
-import { resolveApiResourceUrl } from "../lib/api";
+import { api, resolveApiResourceUrl } from "../lib/api";
 import { harnessLikeDisplayLabel } from "../lib/harness-labels";
+import {
+  appendStreamingTextDelta,
+  clearAllStreamingTextBuffers,
+  clearStreamingTextBuffer,
+  completeStreamingTextWithFinalBody,
+  flushStreamingTextBuffer,
+  waitForStreamingTextDrained,
+  type StreamingTextBuffer,
+  type StreamingTextBufferScheduler
+} from "../lib/typewriter-stream";
 import { formatWorkspacePathPlaceholder, joinWorkspacePath } from "../lib/workspace-path";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
@@ -72,7 +84,7 @@ type RunAgentHumanReport = NonNullable<BlueprintRunView["agentHumanReports"]>[nu
 type RunTimelineTraceItem = NonNullable<BlueprintRunView["runTimeline"]>[number];
 type RunIterationRound = NonNullable<BlueprintRunView["iterationRounds"]>[number];
 type RunPreflightMode = "research_resolution" | "requirement_resolution" | "revise_plan" | "preflight_judgment" | "context_snapshot";
-type RunOutputTabKey = "current" | "artifacts" | "release";
+type RunOutputTabKey = "runtime" | "current" | "artifacts" | "release";
 
 type IdentitySpec = {
   key: string;
@@ -537,7 +549,7 @@ export function RunsPage({
   );
   const activeRun = selectedRunId ? blueprintRuns.find((runView) => runView.run.id === selectedRunId) : undefined;
   const [activeIssueKey, setActiveIssueKey] = useState<string | undefined>();
-  const [activeOutputTab, setActiveOutputTab] = useState<RunOutputTabKey>("current");
+  const [activeOutputTab, setActiveOutputTab] = useState<RunOutputTabKey>("runtime");
   const [blueprintPickerOpen, setBlueprintPickerOpen] = useState(false);
   const [runHistoryOpen, setRunHistoryOpen] = useState(false);
   const [acknowledgedTerminalRunIds, setAcknowledgedTerminalRunIds] = useState<Set<string>>(() =>
@@ -591,9 +603,53 @@ export function RunsPage({
   const reportLayerCopy = getRunReportLayerCopy(language);
   const latestReleaseReport = activeRun?.releaseReports?.at(-1);
   const artifacts = activeRun?.artifacts ?? [];
+  const runtimeSourceMessages = useMemo(
+    () => (activeRun ? buildRuntimeConversationMessages(activeRun, language) : []),
+    [activeRun?.nodeRuns, activeRun?.run.id, activeRun?.runTimeline, language]
+  );
+  const [runtimeVisibleBodies, setRuntimeVisibleBodies] = useState<Record<string, string>>({});
+  const runtimeStreamBuffersRef = useRef<Record<string, StreamingTextBuffer>>({});
+  const runtimeReceivedBodiesRef = useRef<Record<string, string>>({});
+  const previousRuntimeRunIdRef = useRef<string | undefined>(undefined);
+  const runtimeStreamScheduler = useMemo<StreamingTextBufferScheduler>(
+    () => ({
+      setInterval: (callback, delayMs) => window.setInterval(callback, delayMs),
+      clearInterval: (timer) => window.clearInterval(timer)
+    }),
+    []
+  );
+  const setRuntimeVisibleBody = useCallback((bufferKey: string, visible: string) => {
+    setRuntimeVisibleBodies((current) => {
+      if (current[bufferKey] === visible) return current;
+      return {
+        ...current,
+        [bufferKey]: visible
+      };
+    });
+  }, []);
+  const runtimeConversationMessages = useMemo(
+    () =>
+      runtimeSourceMessages.map(({ sourceBody, streamKey, ...message }) => {
+        const visibleBody = runtimeVisibleBodies[streamKey] ?? "";
+        const hasSourceBody = sourceBody.length > 0;
+        const stillTyping = hasSourceBody && visibleBody !== sourceBody;
+        return {
+          ...message,
+          body: visibleBody,
+          pending: hasSourceBody ? visibleBody.length === 0 : !message.failed,
+          progressText: hasSourceBody && visibleBody.length === 0
+            ? runtimeThinkingText(language)
+            : stillTyping || !hasSourceBody
+              ? message.progressText
+              : undefined
+        };
+      }),
+    [language, runtimeSourceMessages, runtimeVisibleBodies]
+  );
   const outputTabAriaLabel = language === "zh-CN" ? "运行输出标签" : "Run output tabs";
   const outputTabs: Array<{ key: RunOutputTabKey; label: string; badge?: string }> = [
-    { key: "current", label: t.trace.modelOutput },
+    { key: "runtime", label: reportLayerCopy.liveWorkTitle },
+    { key: "current", label: reportLayerCopy.subNodeOutputTitle },
     { key: "artifacts", label: reportLayerCopy.artifactsTitle, badge: reportLayerCopy.count(artifacts.length) },
     { key: "release", label: reportLayerCopy.releaseTitle, badge: latestReleaseReport ? `v${latestReleaseReport.version}` : undefined }
   ];
@@ -604,8 +660,32 @@ export function RunsPage({
   }, [activeIssueKey, issues]);
 
   useEffect(() => {
-    setActiveOutputTab("current");
+    setActiveOutputTab("runtime");
   }, [activeRun?.run.id]);
+
+  useEffect(() => {
+    const runId = activeRun?.run.id;
+    if (previousRuntimeRunIdRef.current !== runId) {
+      clearAllStreamingTextBuffers(runtimeStreamBuffersRef.current, runtimeStreamScheduler);
+      runtimeReceivedBodiesRef.current = {};
+      setRuntimeVisibleBodies({});
+      previousRuntimeRunIdRef.current = runId;
+    }
+
+    if (!runId) return;
+
+    syncRuntimeConversationBuffers({
+      messages: runtimeSourceMessages,
+      receivedBodies: runtimeReceivedBodiesRef.current,
+      buffers: runtimeStreamBuffersRef.current,
+      scheduler: runtimeStreamScheduler,
+      setVisible: setRuntimeVisibleBody
+    });
+  }, [activeRun?.run.id, runtimeSourceMessages, runtimeStreamScheduler, setRuntimeVisibleBody]);
+
+  useEffect(() => () => {
+    clearAllStreamingTextBuffers(runtimeStreamBuffersRef.current, runtimeStreamScheduler);
+  }, [runtimeStreamScheduler]);
 
   useEffect(() => {
     if (!activeRun || activeIssueKey || issues.length === 0) return;
@@ -841,6 +921,34 @@ export function RunsPage({
             </div>
 
             <div className="run-output-panel-stack">
+              <section className="run-output-panel" role="tabpanel" hidden={activeOutputTab !== "runtime"}>
+                <div className="run-output-section">
+                  <div className="run-output-section-header">
+                    <div>
+                      <h4>{reportLayerCopy.liveWorkTitle}</h4>
+                      <p>{reportLayerCopy.liveWorkHint}</p>
+                    </div>
+                  </div>
+                  {!blueprint ? (
+                    <div className="empty-state page-empty">{t.empty.selectBlueprint}</div>
+                  ) : !activeRun ? (
+                    <div className="empty-state page-empty">{t.empty.noRunHistory}</div>
+                  ) : runtimeConversationMessages.length > 0 ? (
+                    <ReadOnlyConversationThread
+                      className="runtime-conversation-thread"
+                      emptyBody={reportLayerCopy.noLiveWork}
+                      emptyTitle={reportLayerCopy.liveWorkTitle}
+                      language={language}
+                      messages={runtimeConversationMessages}
+                      waitingText={runtimeThinkingText(language)}
+                      youAvatar={language === "zh-CN" ? "你" : "You"}
+                    />
+                  ) : (
+                    <div className="empty-state compact-empty-state">{reportLayerCopy.noLiveWork}</div>
+                  )}
+                </div>
+              </section>
+
               <section className="run-output-panel" role="tabpanel" hidden={activeOutputTab !== "current"}>
                 {activeIssue ? (
                   activeIssueOutput !== undefined ? (
@@ -930,6 +1038,10 @@ type RunArtifact = NonNullable<BlueprintRunView["artifacts"]>[number];
 function getRunReportLayerCopy(language: Language) {
   const zh = language === "zh-CN";
   return {
+    liveWorkTitle: zh ? "实时工作" : "Live work",
+    liveWorkHint: zh ? "节点运行中的只读状态和最近输出片段。" : "Read-only runtime state and recent output from running nodes.",
+    noLiveWork: zh ? "还没有实时工作记录。" : "No live runtime work has been recorded yet.",
+    subNodeOutputTitle: zh ? "子节点输出" : "Sub-node output",
     releaseTitle: zh ? "本轮报告" : "Round Report",
     noReleaseHint: zh ? "等待 Manager 汇总本轮结果" : "Waiting for the manager's round summary",
     noRelease: zh ? "还没有发布报告。" : "No release report yet.",
@@ -947,6 +1059,7 @@ export function buildCurrentOutputDisplayBody({
   language,
   actorKind,
   reason,
+  runtimeStatusBody,
   timelineDetails = []
 }: {
   bodyMd: string;
@@ -954,6 +1067,7 @@ export function buildCurrentOutputDisplayBody({
   language: Language;
   actorKind: TraceIssue["actorKind"];
   reason?: string;
+  runtimeStatusBody?: string;
   timelineDetails?: string[];
 }): string {
   const zh = language === "zh-CN";
@@ -977,6 +1091,14 @@ export function buildCurrentOutputDisplayBody({
   const actorLabel = currentOutputActorLabel(actorKind, language);
 
   return [
+    ...(runtimeStatusBody
+      ? [
+          `## ${zh ? "实时状态" : "Live status"}`,
+          "",
+          runtimeStatusBody,
+          ""
+        ]
+      : []),
     `## ${zh ? "🧾 摘要" : "🧾 Summary"}`,
     "",
     summary,
@@ -1233,8 +1355,11 @@ export function ApprovalsPage({
   onReplyApprovalRequest,
   onRequestChangesApprovalRequest,
   onReviseApprovalRequest,
-  onSelectApprovalReply,
+  onSelectRunApprovalReply,
+  onSelectApprovalRequestReply,
   onReplyInboxItem,
+  onInboxThreadMessageCreated,
+  onInboxThreadStreamDone,
   onApproveInboxItem,
   onRejectInboxItem
 }: {
@@ -1253,8 +1378,11 @@ export function ApprovalsPage({
   onReplyApprovalRequest: (approvalRequestId: string, message: string) => void;
   onRequestChangesApprovalRequest: (approvalRequestId: string, comment: string) => void;
   onReviseApprovalRequest: (approvalRequestId: string, message: string) => void;
-  onSelectApprovalReply: (blueprintRunId: string, nodeRunId: string, selectedReplyId: string) => void;
+  onSelectRunApprovalReply: (blueprintRunId: string, nodeRunId: string, selectedReplyId: string) => void;
+  onSelectApprovalRequestReply: (approvalRequestId: string, selectedReplyId: string) => void;
   onReplyInboxItem: (itemId: string, message: string) => void;
+  onInboxThreadMessageCreated?: () => Promise<void> | void;
+  onInboxThreadStreamDone?: () => Promise<void> | void;
   onApproveInboxItem: (itemId: string, comment?: string) => void;
   onRejectInboxItem: (itemId: string, comment?: string) => void;
 }) {
@@ -1280,6 +1408,29 @@ export function ApprovalsPage({
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [localReplies, setLocalReplies] = useState<Record<string, InboxLocalReply[]>>({});
   const [pendingHarnessReplies, setPendingHarnessReplies] = useState<Record<string, InboxPendingHarnessReply>>({});
+  const [streamingThreadKeys, setStreamingThreadKeys] = useState<Set<string>>(() => new Set());
+  const inboxStreamBuffersRef = useRef<Record<string, StreamingTextBuffer>>({});
+  const inboxStreamScheduler = useMemo<StreamingTextBufferScheduler>(
+    () => ({
+      setInterval: (callback, delayMs) => window.setInterval(callback, delayMs),
+      clearInterval: (timer) => window.clearInterval(timer)
+    }),
+    []
+  );
+  const updateExistingPendingHarnessBody = useCallback((threadKey: string, body: string) => {
+    setPendingHarnessReplies((current) => {
+      const existing = current[threadKey];
+      if (!existing) return current;
+      return {
+        ...current,
+        [threadKey]: {
+          ...existing,
+          body,
+          progressText: undefined
+        }
+      };
+    });
+  }, []);
   const selectedInboxItem =
     selectedThread?.kind === "inbox"
       ? inboxItems.find((item) => item.id === selectedThread.id)
@@ -1289,16 +1440,34 @@ export function ApprovalsPage({
       ? inboxThreadItems.find((thread): thread is InboxApprovalThreadListItem => thread.kind === "approval" && thread.id === selectedThread.id)
       : undefined;
   const selectedApproval = selectedApprovalThread?.approval;
-  const selectedInboxApproved = selectedInboxItem?.status === "approved";
-  const selectedInboxOperable = Boolean(selectedInboxItem && !selectedInboxApproved && !actionPending);
-  const canReplyToSelection = Boolean(!actionPending && (selectedApproval?.canReply || selectedInboxOperable));
-  const canApproveSelection = Boolean(
-    !actionPending && (selectedApproval ? selectedApproval.canApprove !== false || selectedApproval.canComplete === true : selectedInboxOperable)
-  );
-  const canRejectSelection = Boolean(!actionPending && ((selectedApproval && selectedApproval.canReject) || selectedInboxOperable));
-  const canRequestChangesSelection = Boolean(!actionPending && selectedApproval?.approvalRequestId && (selectedApproval.canRequestChanges || selectedApproval.canRevise));
   const selectedThreadKey = selectedThread ? inboxThreadKey(selectedThread) : undefined;
+  const selectedThreadStreaming = selectedThreadKey ? streamingThreadKeys.has(selectedThreadKey) : false;
   const selectedReplyDraft = selectedThreadKey ? (replyDrafts[selectedThreadKey] ?? "") : "";
+  const selectedHasDraft = Boolean(selectedReplyDraft.trim());
+  const selectedInboxProcessed = Boolean(selectedInboxItem && selectedInboxItem.status !== "pending");
+  const selectedInboxOperable = Boolean(selectedInboxItem && !selectedInboxProcessed);
+  const selectedApprovalCanPass = Boolean(selectedApproval && (selectedApproval.canApprove !== false || selectedApproval.canComplete === true));
+  const canApproveSelection = Boolean(
+    !actionPending && (selectedApproval ? selectedApprovalCanPass : selectedInboxOperable)
+  );
+  const canRejectSelection = Boolean(!actionPending && (selectedApproval ? selectedApproval.canReject : selectedInboxOperable));
+  const canReplyToSelection = Boolean(!actionPending && (selectedApproval ? selectedApproval.canReply !== false : selectedInboxItem));
+  const canSendReplySelection = canReplyToSelection && selectedHasDraft && !selectedThreadStreaming;
+  const canRequestChangesSelection = Boolean(
+    !actionPending && !selectedThreadStreaming && selectedApproval?.approvalRequestId && (selectedApproval.canRequestChanges || selectedApproval.canRevise)
+  );
+  const canSubmitRequestChangesSelection = canRequestChangesSelection && selectedHasDraft;
+  const disabledReasons = buildInboxActionDisabledReasons({
+    actionPending,
+    approval: selectedApproval,
+    canApprove: canApproveSelection,
+    canModify: canSubmitRequestChangesSelection,
+    canReject: canRejectSelection,
+    canReply: canSendReplySelection,
+    hasDraft: selectedHasDraft,
+    inboxItem: selectedInboxItem,
+    streaming: selectedThreadStreaming
+  });
   const selectedMessages = useMemo(
     () =>
       selectedThread
@@ -1333,18 +1502,42 @@ export function ApprovalsPage({
   }, [inboxThreadItems]);
 
   useEffect(() => {
+    const finishedKeys = new Set<string>();
+    for (const approval of approvals) {
+      const key = inboxThreadKey({ kind: "approval", id: approvalThreadIdForApproval(approval) });
+      const pending = pendingHarnessReplies[key];
+      if (!pending || !hasAssistantReplyAfter(approval, pending.createdAt)) continue;
+      finishedKeys.add(key);
+    }
+    for (const key of finishedKeys) {
+      clearStreamingTextBuffer(inboxStreamBuffersRef.current, key, inboxStreamScheduler);
+    }
+    if (!finishedKeys.size) return;
     setPendingHarnessReplies((current) => {
       let next = current;
-      for (const approval of approvals) {
-        const key = inboxThreadKey({ kind: "approval", id: approvalThreadIdForApproval(approval) });
-        const pending = current[key];
-        if (!pending || !hasAssistantReplyAfter(approval, pending.createdAt)) continue;
+      for (const key of finishedKeys) {
         if (next === current) next = { ...current };
         delete next[key];
       }
       return next;
     });
-  }, [approvals]);
+  }, [approvals, inboxStreamScheduler, pendingHarnessReplies]);
+
+  useEffect(() => () => {
+    clearAllStreamingTextBuffers(inboxStreamBuffersRef.current, inboxStreamScheduler);
+  }, [inboxStreamScheduler]);
+
+  useEffect(() => {
+    for (const threadKey of Object.keys(inboxStreamBuffersRef.current)) {
+      if (threadKey === selectedThreadKey) continue;
+      flushStreamingTextBuffer({
+        buffers: inboxStreamBuffersRef.current,
+        bufferKey: threadKey,
+        scheduler: inboxStreamScheduler,
+        setVisible: updateExistingPendingHarnessBody
+      });
+    }
+  }, [inboxStreamScheduler, selectedThreadKey, updateExistingPendingHarnessBody]);
 
   const updateReplyDraft = (value: string) => {
     if (!selectedThreadKey) return;
@@ -1357,7 +1550,7 @@ export function ApprovalsPage({
   };
 
   const sendLocalReply = () => {
-    if (!selectedThreadKey || !canReplyToSelection) return;
+    if (!selectedThread || !selectedThreadKey || !canSendReplySelection) return;
     const body = selectedReplyDraft.trim();
     if (!body) return;
     const reply = {
@@ -1365,44 +1558,6 @@ export function ApprovalsPage({
       body,
       createdAt: new Date().toISOString()
     };
-    if (selectedApproval?.canReply) {
-      const shouldWaitForHarnessReply = shouldAwaitApprovalHarnessReply(selectedApproval);
-      const pendingHarnessReply = shouldWaitForHarnessReply
-        ? {
-            id: `${reply.id}:pending`,
-            harnessLabel: formatInboxHarnessLabel(selectedApproval.harnessId),
-            createdAt: reply.createdAt
-          }
-        : undefined;
-      flushSync(() => {
-        setLocalReplies((current) => ({
-          ...current,
-          [selectedThreadKey]: [
-            ...(current[selectedThreadKey] ?? []),
-            reply
-          ]
-        }));
-        if (pendingHarnessReply) {
-          setPendingHarnessReplies((current) => ({ ...current, [selectedThreadKey]: pendingHarnessReply }));
-        } else {
-          setPendingHarnessReplies((current) => {
-            if (!current[selectedThreadKey]) return current;
-            const next = { ...current };
-            delete next[selectedThreadKey];
-            return next;
-          });
-        }
-        setReplyDrafts((current) => ({ ...current, [selectedThreadKey]: "" }));
-      });
-      window.setTimeout(() => {
-        if (selectedApproval.approvalRequestId) {
-          onReplyApprovalRequest(selectedApproval.approvalRequestId, body);
-          return;
-        }
-        onReply(selectedApproval.blueprintRunId, selectedApproval.nodeRunId, body);
-      }, 0);
-      return;
-    }
     flushSync(() => {
       setLocalReplies((current) => ({
         ...current,
@@ -1412,17 +1567,185 @@ export function ApprovalsPage({
         ]
       }));
       setReplyDrafts((current) => ({ ...current, [selectedThreadKey]: "" }));
+      setStreamingThreadKeys((current) => new Set(current).add(selectedThreadKey));
     });
-    if (selectedInboxItem && !selectedInboxApproved) {
-      window.setTimeout(() => {
-        onReplyInboxItem(selectedInboxItem.id, body);
-      }, 0);
-    }
+
+    const threadSelection = selectedThread;
+    const threadKey = selectedThreadKey;
+    const assistantId = `${reply.id}:assistant`;
+    const harnessLabel = selectedApproval?.harnessId ? formatInboxHarnessLabel(selectedApproval.harnessId) : inboxCopy.system;
+
+    const upsertStreamingReply = (patch: Partial<InboxPendingHarnessReply>) => {
+      setPendingHarnessReplies((current) => {
+        const existing = current[threadKey] ?? {
+          id: assistantId,
+          harnessLabel,
+          createdAt: new Date().toISOString()
+        };
+        return {
+          ...current,
+          [threadKey]: {
+            ...existing,
+            ...patch
+          }
+        };
+      });
+    };
+
+    void api.streamInboxThreadMessage(
+      threadSelection.kind,
+      threadSelection.id,
+      { message: body },
+      {
+        onEvent: (event) => {
+          if (shouldRefreshInboxThreadImmediately(event)) {
+            void Promise.resolve(onInboxThreadMessageCreated?.());
+            return;
+          }
+          if (event.type === "started") {
+            upsertStreamingReply({
+              harnessLabel: formatInboxHarnessLabel(event.source),
+              progressText: inboxCopy.waitingHarness(formatInboxHarnessLabel(event.source))
+            });
+            return;
+          }
+          if (event.type === "runtime_state") {
+            upsertStreamingReply({
+              harnessLabel: formatInboxHarnessLabel(event.source),
+              progressText: formatInboxRuntimeState(event)
+            });
+            return;
+          }
+          if (event.type === "delta") {
+            appendStreamingTextDelta({
+              buffers: inboxStreamBuffersRef.current,
+              bufferKey: threadKey,
+              text: event.text,
+              replace: event.replace,
+              scheduler: inboxStreamScheduler,
+              setVisible: (_key, visible) => {
+                upsertStreamingReply({
+                  body: visible,
+                  progressText: undefined
+                });
+              }
+            });
+            return;
+          }
+          if (event.type === "done") {
+            const finalBody = event.output || event.error || "";
+            if (finalBody) {
+              completeStreamingTextWithFinalBody({
+                buffers: inboxStreamBuffersRef.current,
+                bufferKey: threadKey,
+                finalBody,
+                scheduler: inboxStreamScheduler,
+                setVisible: (_key, visible) => {
+                  upsertStreamingReply({
+                    body: visible,
+                    progressText: undefined
+                  });
+                }
+              });
+            }
+            setPendingHarnessReplies((current) => {
+              const existing = current[threadKey];
+              if (!existing) return current;
+              const runtimeSource = "source" in event ? event.source : undefined;
+              return {
+                ...current,
+                [threadKey]: {
+                  ...existing,
+                  ...(runtimeSource ? { harnessLabel: formatInboxHarnessLabel(runtimeSource) } : {}),
+                  ...(finalBody && !existing.body ? { body: "" } : {}),
+                  progressText: undefined,
+                  failed: event.status === "failed" || event.status === "cancelled"
+                }
+              };
+            });
+            return;
+          }
+          if (event.type === "inbox_candidate_created") {
+            upsertStreamingReply({
+              id: event.replyId,
+              solutionId: event.replyId,
+              canUseAsSolution: true,
+              progressText: undefined
+            });
+            return;
+          }
+          if (event.type === "error") {
+            const flushedBody = flushStreamingTextBuffer({
+              buffers: inboxStreamBuffersRef.current,
+              bufferKey: threadKey,
+              scheduler: inboxStreamScheduler,
+              setVisible: (_key, visible) => {
+                upsertStreamingReply({
+                  body: visible,
+                  progressText: undefined
+                });
+              }
+            });
+            upsertStreamingReply({
+              body: flushedBody || event.message,
+              failed: true,
+              progressText: undefined
+            });
+          }
+        }
+      }
+    )
+      .catch((error) => {
+        const errorBody = error instanceof Error ? error.message : inboxCopy.processedPlaceholder;
+        completeStreamingTextWithFinalBody({
+          buffers: inboxStreamBuffersRef.current,
+          bufferKey: threadKey,
+          finalBody: errorBody,
+          scheduler: inboxStreamScheduler,
+          setVisible: (_key, visible) => {
+            upsertStreamingReply({
+              body: visible,
+              progressText: undefined
+            });
+          }
+        });
+        upsertStreamingReply({
+          failed: true,
+          progressText: undefined
+        });
+      })
+      .finally(async () => {
+        await waitForStreamingTextDrained({
+          buffers: inboxStreamBuffersRef.current,
+          bufferKey: threadKey,
+          scheduler: inboxStreamScheduler,
+          setVisible: (_key, visible) => {
+            upsertStreamingReply({
+              body: visible,
+              progressText: undefined
+            });
+          }
+        });
+        clearStreamingTextBuffer(inboxStreamBuffersRef.current, threadKey, inboxStreamScheduler);
+        setStreamingThreadKeys((current) => {
+          const next = new Set(current);
+          next.delete(threadKey);
+          return next;
+        });
+        void Promise.resolve(onInboxThreadStreamDone?.()).finally(() => {
+          setPendingHarnessReplies((current) => {
+            if (!current[threadKey] || current[threadKey].failed) return current;
+            const next = { ...current };
+            delete next[threadKey];
+            return next;
+          });
+        });
+      });
   };
 
   const approveSelectedThread = () => {
     const comment = selectedReplyDraft.trim() || undefined;
-    if (selectedInboxItem && !selectedInboxApproved) {
+    if (selectedInboxItem && !selectedInboxProcessed) {
       onApproveInboxItem(selectedInboxItem.id, comment);
       clearReplyDraft();
       return;
@@ -1443,13 +1766,18 @@ export function ApprovalsPage({
   };
 
   const selectApprovalSolution = (solutionId: string) => {
-    if (!selectedApproval || selectedApproval.canApprove === false) return;
-    onSelectApprovalReply(selectedApproval.blueprintRunId, selectedApproval.nodeRunId, solutionId);
+    if (!selectedApproval || !selectedApprovalCanPass) return;
+    const target = resolveApprovalReplySelectionTarget(selectedApproval);
+    if (target?.kind === "run") {
+      onSelectRunApprovalReply(target.blueprintRunId, target.nodeRunId, solutionId);
+    } else if (target?.kind === "request") {
+      onSelectApprovalRequestReply(target.approvalRequestId, solutionId);
+    }
   };
 
   const rejectSelectedThread = () => {
     const comment = selectedReplyDraft.trim() || undefined;
-    if (selectedInboxItem && !selectedInboxApproved) {
+    if (selectedInboxItem && !selectedInboxProcessed) {
       onRejectInboxItem(selectedInboxItem.id, comment);
       clearReplyDraft();
       return;
@@ -1522,7 +1850,7 @@ export function ApprovalsPage({
                   if (thread.kind === "inbox") {
                     const item = thread.item;
                     const selected = selectedThread?.kind === "inbox" && item.id === selectedThread.id;
-                    const processed = item.status === "approved";
+                    const processed = item.status !== "pending";
                     return (
                       <article
                         key={item.id}
@@ -1539,39 +1867,22 @@ export function ApprovalsPage({
                           <span className="inbox-row-content">
                             <span className="inbox-row-topline">
                               <strong>{item.title}</strong>
-                              <span className={`status-pill ${inboxStatusClassName(item.status)}`}>
-                                {inboxStatusLabel(item.status, language)}
+                              <span className="inbox-row-badges">
+                                <span className={`inbox-type-tag ${inboxTypeTagClassName(item.type)}`}>
+                                  {inboxDisplayTypeLabel(item.type, language)}
+                                </span>
+                                <span className={`status-pill ${inboxStatusClassName(item.status)}`}>
+                                  {inboxStatusLabel(item.status, language)}
+                                </span>
                               </span>
                             </span>
                             <span className="inbox-row-preview">{item.summary}</span>
                             <span className="inbox-row-meta">
-                              <span>{inboxItemContextLabel(item, language)}</span>
+                              <span>{inboxItemContextLabel(item)}</span>
                               <time dateTime={item.createdAt}>{formatDateTime(item.createdAt, language)}</time>
                             </span>
                           </span>
                         </button>
-                        <div className="inbox-row-actions">
-                          <button
-                            type="button"
-                            className="inbox-row-action primary-action"
-                            title={processed ? inboxCopy.processedAction : t.actions.approve}
-                            aria-label={t.actions.approve}
-                            disabled={processed || actionPending}
-                            onClick={() => onApproveInboxItem(item.id)}
-                          >
-                            <BadgeCheck size={16} />
-                          </button>
-                          <button
-                            type="button"
-                            className="inbox-row-action danger-action"
-                            title={processed ? inboxCopy.processedAction : inboxCopy.reject}
-                            aria-label={inboxCopy.reject}
-                            disabled={processed || actionPending}
-                            onClick={() => onRejectInboxItem(item.id)}
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
                       </article>
                     );
                   }
@@ -1579,8 +1890,6 @@ export function ApprovalsPage({
                   const approval = thread.approval;
                   const selected = selectedThread?.kind === "approval" && thread.id === selectedThread.id;
                   const processed = !isActionableApprovalThread(approval);
-                  const canApproveOrComplete = approval.canApprove !== false || approval.canComplete === true;
-                  const approveOrCompleteLabel = approval.canApprove === false && approval.canComplete ? inboxCopy.complete : t.actions.approve;
                   return (
                     <article
                       key={thread.id}
@@ -1597,55 +1906,22 @@ export function ApprovalsPage({
                         <span className="inbox-row-content">
                           <span className="inbox-row-topline">
                             <strong>{approvalSubject(approval)}</strong>
-                            <span className={`status-pill ${approvalStatusClassName(approval)}`}>
-                              {approvalStatusLabel(approval, language, t)}
+                            <span className="inbox-row-badges">
+                              <span className={`inbox-type-tag ${inboxTypeTagClassName(approval.kind)}`}>
+                                {approvalDisplayTypeLabel(approval.kind, language)}
+                              </span>
+                              <span className={`status-pill ${approvalStatusClassName(approval)}`}>
+                                {approvalStatusLabel(approval, language, t)}
+                              </span>
                             </span>
                           </span>
                           <span className="inbox-row-preview">{approvalPreviewText(approval, inboxCopy, t)}</span>
                           <span className="inbox-row-meta">
-                            <span>{approval.blueprintName}</span>
+                            <span>{approvalContextLabel(approval)}</span>
                             <time dateTime={approval.requestedAt}>{formatDateTime(approval.requestedAt, language)}</time>
                           </span>
                         </span>
                       </button>
-                      <div className="inbox-row-actions">
-                        <button
-                          type="button"
-                          className="inbox-row-action primary-action"
-                          title={canApproveOrComplete ? approveOrCompleteLabel : inboxCopy.processedAction}
-                          aria-label={approveOrCompleteLabel}
-                          disabled={!canApproveOrComplete || actionPending}
-                          onClick={() => {
-                            if (approval.canApprove === false && approval.canComplete && approval.approvalRequestId) {
-                              onComplete(approval.approvalRequestId);
-                              return;
-                            }
-                            if (approval.approvalRequestId) {
-                              onApproveApprovalRequest(approval.approvalRequestId, undefined, approval.selectedReplyId);
-                              return;
-                            }
-                            onApprove(approval.blueprintRunId, approval.nodeRunId, undefined, approval.selectedReplyId);
-                          }}
-                        >
-                          <BadgeCheck size={16} />
-                        </button>
-                        <button
-                          type="button"
-                          className="inbox-row-action danger-action"
-                          title={inboxCopy.reject}
-                          aria-label={inboxCopy.reject}
-                          disabled={!approval.canReject || actionPending}
-                          onClick={() => {
-                            if (approval.approvalRequestId) {
-                              onRejectApprovalRequest(approval.approvalRequestId);
-                              return;
-                            }
-                            onReject(approval.blueprintRunId, approval.nodeRunId);
-                          }}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
                     </article>
                   );
                 })}
@@ -1666,18 +1942,19 @@ export function ApprovalsPage({
             language={language}
             messages={selectedMessages}
             onApprove={approveSelectedThread}
-            approveLabel={selectedApproval?.canApprove === false && selectedApproval.canComplete ? inboxCopy.complete : inboxCopy.approve}
+            approveLabel={inboxCopy.approve}
             canApprove={canApproveSelection}
             canReject={canRejectSelection}
             canReply={canReplyToSelection}
             canRequestChanges={canRequestChangesSelection}
+            disabledReasons={disabledReasons}
             onReject={rejectSelectedThread}
             onReplyDraftChange={updateReplyDraft}
             onRequestChanges={requestChangesSelectedThread}
             onSelectSolution={selectApprovalSolution}
             onSendReply={sendLocalReply}
             replyDraft={selectedReplyDraft}
-            requestChangesLabel={selectedApproval?.canRevise ? inboxCopy.regenerate : inboxCopy.requestChanges}
+            requestChangesLabel={inboxCopy.modify}
           />
         </div>
       </section>
@@ -1735,25 +2012,156 @@ type InboxPendingHarnessReply = {
   id: string;
   harnessLabel: string;
   createdAt: string;
+  body?: string;
+  progressText?: string;
+  failed?: boolean;
+  solutionId?: string;
+  canUseAsSolution?: boolean;
 };
 
-type InboxConversationMessage = {
+export type ReadOnlyConversationMessage = {
   id: string;
-  role: "assistant" | "user";
+  role: "assistant" | "system" | "user";
   speaker: string;
-  body: string;
+  body?: string;
   createdAt?: string;
   progressText?: string;
   pending?: boolean;
+  failed?: boolean;
+};
+
+export function ReadOnlyConversationThread({
+  className,
+  emptyBody,
+  emptyTitle,
+  language,
+  messages,
+  renderMessageActions,
+  waitingText,
+  youAvatar
+}: {
+  className?: string;
+  emptyBody: string;
+  emptyTitle: string;
+  language: Language;
+  messages: ReadOnlyConversationMessage[];
+  renderMessageActions?: (message: ReadOnlyConversationMessage) => ReactNode;
+  waitingText: string;
+  youAvatar: string;
+}) {
+  const threadRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    thread.scrollTop = thread.scrollHeight;
+  }, [messages]);
+
+  return (
+    <div className={`chat-thread${className ? ` ${className}` : ""}`} ref={threadRef}>
+      {messages.length === 0 ? (
+        <div className="chat-empty-state">
+          <MessageSquareText size={22} />
+          <strong>{emptyTitle}</strong>
+          <span>{emptyBody}</span>
+        </div>
+      ) : (
+        messages.map((message) => {
+          const body = message.body ?? "";
+          const messageActions = renderMessageActions?.(message);
+          return (
+            <article key={message.id} className={`chat-message-row chat-message-row-${message.role}`}>
+              <div className={`chat-avatar chat-avatar-${message.role}`} aria-label={message.speaker}>
+                {message.role === "user" ? youAvatar : <MessageSquareText size={16} />}
+              </div>
+              <div className={`chat-message chat-message-${message.role}${message.failed ? " failed" : ""}`}>
+                <div className="chat-message-speaker">
+                  <strong>{message.speaker}</strong>
+                  {message.createdAt && <span>{formatDateTime(message.createdAt, language)}</span>}
+                </div>
+                {body ? <MarkdownRenderer value={body} className="chat-message-body" /> : null}
+                {message.pending && !body ? (
+                  <div className="chat-message-pending">
+                    <Loader2 className="spin" size={15} />
+                    {message.progressText ?? waitingText}
+                  </div>
+                ) : null}
+                {(!message.pending || body) && message.progressText ? (
+                  <div className="chat-message-pending">
+                    <Loader2 className="spin" size={15} />
+                    {message.progressText}
+                  </div>
+                ) : null}
+                {messageActions}
+              </div>
+            </article>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+type InboxConversationMessage = ReadOnlyConversationMessage & {
+  role: "assistant" | "user";
+  body: string;
   solutionId?: string;
   selectedSolution?: boolean;
   canUseAsSolution?: boolean;
 };
 
+type InboxActionKey = "approve" | "reject" | "reply" | "modify";
+type InboxActionDisabledReason =
+  | "empty_reply"
+  | "empty_revision_request"
+  | "content_incomplete"
+  | "processed"
+  | "executing"
+  | "replying"
+  | "approval_only"
+  | "no_executor"
+  | "no_revisable_content"
+  | "no_revisable_executor"
+  | "run_ended"
+  | "data_anomaly";
+type InboxActionDisabledReasons = Partial<Record<InboxActionKey, InboxActionDisabledReason>>;
+
+function InboxConversationActionButton({
+  className,
+  disabled,
+  icon,
+  label,
+  onClick,
+  tooltip
+}: {
+  className?: string;
+  disabled: boolean;
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  tooltip: string;
+}) {
+  const disabledTooltip = disabled ? tooltip : undefined;
+  return (
+    <span
+      className="inbox-action-tooltip"
+      data-disabled={disabled ? "true" : undefined}
+      data-tooltip={disabledTooltip}
+      title={disabledTooltip}
+    >
+      <button type="button" className={className} disabled={disabled} aria-label={label} onClick={onClick}>
+        {icon}
+        {label}
+      </button>
+    </span>
+  );
+}
+
 function InboxConversationPanel({
   approval,
   approveLabel,
   copy,
+  disabledReasons,
   inboxItem,
   language,
   messages,
@@ -1773,6 +2181,7 @@ function InboxConversationPanel({
   approval?: PendingApprovalItem;
   approveLabel: string;
   copy: InboxCopy;
+  disabledReasons: InboxActionDisabledReasons;
   inboxItem?: InboxItem;
   language: Language;
   messages: InboxConversationMessage[];
@@ -1789,11 +2198,7 @@ function InboxConversationPanel({
   onSendReply: () => void;
   requestChangesLabel: string;
 }) {
-  const threadRef = useRef<HTMLDivElement | null>(null);
   const hasSelection = Boolean(inboxItem || approval);
-  const requestChangesDescription = requestChangesLabel === copy.regenerate
-    ? copy.regenerateDescription
-    : copy.requestChangesDescription;
   const title = inboxItem?.title ?? (approval ? approvalSubject(approval) : copy.noSelectionTitle);
   const subtitle = inboxItem
     ? inboxItem.blueprintName ?? inboxItem.targetRoleId ?? inboxItem.createdByRoleId
@@ -1801,13 +2206,11 @@ function InboxConversationPanel({
       ? approval.blueprintName
       : "";
   const statusLabel = inboxItem ? inboxStatusLabel(inboxItem.status, language) : approval ? copy.approvalRequest : "";
-  const typeLabel = inboxItem ? formalInboxTypeLabel(inboxItem.type, language) : undefined;
-
-  useEffect(() => {
-    const thread = threadRef.current;
-    if (!thread) return;
-    thread.scrollTop = thread.scrollHeight;
-  }, [messages.length]);
+  const typeLabel = inboxItem
+    ? inboxDisplayTypeLabel(inboxItem.type, language)
+    : approval
+      ? approvalDisplayTypeLabel(approval.kind, language)
+      : undefined;
 
   return (
     <section className="content-card inbox-workspace-column inbox-conversation-card" aria-label={copy.detailTitle}>
@@ -1818,55 +2221,41 @@ function InboxConversationPanel({
         </div>
         <div className="chat-context-strip">
           {statusLabel && <span className="bound">{statusLabel}</span>}
-          {typeLabel && <span>{typeLabel}</span>}
+          {typeLabel && (
+            <span className={`inbox-type-tag ${inboxTypeTagClassName(inboxItem?.type ?? approval?.kind)}`}>
+              {typeLabel}
+            </span>
+          )}
           {subtitle && <span>{subtitle}</span>}
         </div>
       </div>
 
-      <div className="chat-thread inbox-conversation-thread" ref={threadRef}>
-        {!hasSelection ? (
-          <div className="chat-empty-state">
-            <MessageSquareText size={22} />
-            <strong>{copy.noSelectionTitle}</strong>
-            <span>{copy.noSelectionBody}</span>
-          </div>
-        ) : (
-          messages.map((message) => (
-            <article key={message.id} className={`chat-message-row chat-message-row-${message.role}`}>
-              <div className={`chat-avatar chat-avatar-${message.role}`} aria-label={message.speaker}>
-                {message.role === "user" ? copy.youAvatar : <MessageSquareText size={16} />}
-              </div>
-              <div className={`chat-message chat-message-${message.role}`}>
-                <div className="chat-message-speaker">
-                  <strong>{message.speaker}</strong>
-                  {message.createdAt && <span>{formatDateTime(message.createdAt, language)}</span>}
-                </div>
-                {message.pending ? (
-                  <div className="chat-message-pending">
-                    <Loader2 className="spin" size={15} />
-                    {message.progressText ?? copy.waitingHarness(message.speaker)}
-                  </div>
-                ) : (
-                  <MarkdownRenderer value={message.body} className="chat-message-body" />
-                )}
-                {message.canUseAsSolution && message.solutionId && (
-                  <div className="inbox-message-actions">
-                    <button
-                      type="button"
-                      className={`inbox-solution-button${message.selectedSolution ? " selected" : ""}`}
-                      disabled={!canApprove || message.selectedSolution}
-                      onClick={() => onSelectSolution(message.solutionId!)}
-                    >
-                      <Check size={14} />
-                      {message.selectedSolution ? copy.solutionSelected : copy.useSolution}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </article>
-          ))
-        )}
-      </div>
+      <ReadOnlyConversationThread
+        className="inbox-conversation-thread"
+        emptyBody={copy.noSelectionBody}
+        emptyTitle={copy.noSelectionTitle}
+        language={language}
+        messages={hasSelection ? messages : []}
+        waitingText={copy.waitingHarness(copy.system)}
+        youAvatar={copy.youAvatar}
+        renderMessageActions={(message) => {
+          const inboxMessage = message as InboxConversationMessage;
+          if (!inboxMessage.canUseAsSolution || !inboxMessage.solutionId) return undefined;
+          return (
+            <div className="inbox-message-actions">
+              <button
+                type="button"
+                className={`inbox-solution-button${inboxMessage.selectedSolution ? " selected" : ""}`}
+                disabled={!canApprove || inboxMessage.selectedSolution}
+                onClick={() => onSelectSolution(inboxMessage.solutionId!)}
+              >
+                <Check size={14} />
+                {inboxMessage.selectedSolution ? copy.solutionSelected : copy.useSolution}
+              </button>
+            </div>
+          );
+        }}
+      />
 
       <div className="chat-composer inbox-conversation-composer">
         <textarea
@@ -1882,28 +2271,42 @@ function InboxConversationPanel({
           }}
         />
         <div className="inbox-conversation-actions">
-          <button type="button" disabled={!canReply || !replyDraft.trim()} onClick={onSendReply}>
-            <Send size={15} />
-            {copy.sendReply}
-          </button>
-          <button
-            type="button"
-            disabled={!canRequestChanges || !replyDraft.trim()}
-            title={requestChangesDescription}
-            aria-label={requestChangesDescription}
-            onClick={onRequestChanges}
-          >
-            <RefreshCw size={15} />
-            {requestChangesLabel}
-          </button>
-          <button type="button" className="primary-action" disabled={!canApprove} onClick={onApprove}>
-            <BadgeCheck size={15} />
-            {approveLabel}
-          </button>
-          <button type="button" className="danger-action" disabled={!canReject} onClick={onReject}>
-            <Trash2 size={15} />
-            {copy.reject}
-          </button>
+          <div className="inbox-action-group inbox-action-group-decision" role="group" aria-label={copy.decisionActions}>
+            <span className="inbox-action-group-label">{copy.decisionActions}</span>
+            <InboxConversationActionButton
+              className="primary-action"
+              disabled={!canApprove}
+              icon={<BadgeCheck size={15} />}
+              label={approveLabel}
+              onClick={onApprove}
+              tooltip={inboxActionTitle(copy.approve, disabledReasons.approve, copy)}
+            />
+            <InboxConversationActionButton
+              className="danger-action"
+              disabled={!canReject}
+              icon={<Trash2 size={15} />}
+              label={copy.reject}
+              onClick={onReject}
+              tooltip={inboxActionTitle(copy.reject, disabledReasons.reject, copy)}
+            />
+          </div>
+          <div className="inbox-action-group inbox-action-group-agent" role="group" aria-label={copy.agentActions}>
+            <span className="inbox-action-group-label">{copy.agentActions}</span>
+            <InboxConversationActionButton
+              disabled={!canReply || !replyDraft.trim()}
+              icon={<Send size={15} />}
+              label={copy.sendReply}
+              onClick={onSendReply}
+              tooltip={inboxActionTitle(copy.sendReply, disabledReasons.reply, copy)}
+            />
+            <InboxConversationActionButton
+              disabled={!canRequestChanges || !replyDraft.trim()}
+              icon={<RefreshCw size={15} />}
+              label={requestChangesLabel}
+              onClick={onRequestChanges}
+              tooltip={inboxActionTitle(requestChangesLabel, disabledReasons.modify, copy)}
+            />
+          </div>
         </div>
       </div>
     </section>
@@ -1911,6 +2314,7 @@ function InboxConversationPanel({
 }
 
 type InboxCopy = {
+  agentActions: string;
   allBlueprints: string;
   approvalRequest: string;
   approve: string;
@@ -1919,6 +2323,7 @@ type InboxCopy = {
   conversation: string;
   decidedAt: string;
   decisionComment: string;
+  decisionActions: string;
   detailTitle: string;
   emptyFilterBody: string;
   emptyFilterTitle: string;
@@ -1927,6 +2332,7 @@ type InboxCopy = {
   from: string;
   listTitle: string;
   listMetric: (visibleCount: number, totalCount: number, pendingCount: number) => string;
+  modify: string;
   noSelectionBody: string;
   noSelectionTitle: string;
   noUpstreamOutput: string;
@@ -1934,13 +2340,10 @@ type InboxCopy = {
   payload: string;
   processedAction: string;
   processedPlaceholder: string;
-  regenerate: string;
-  regenerateDescription: string;
   reject: string;
   replyPlaceholder: string;
-  requestChanges: string;
-  requestChangesDescription: string;
   sendReply: string;
+  disabledReasons: Record<InboxActionDisabledReason, string>;
   solutionSelected: string;
   status: string;
   system: string;
@@ -1962,13 +2365,15 @@ function getInboxCopy(language: Language): InboxCopy {
   if (language === "zh-CN") {
     return {
       allBlueprints: "全部蓝图",
+      agentActions: "Agent 要求",
       approvalRequest: "\u5ba1\u6279\u8bf7\u6c42",
-      approve: "\u6279\u51c6",
+      approve: "通过",
       complete: "\u5b8c\u6210",
       blueprintFilter: "蓝图",
       conversation: "\u5bf9\u8bdd",
       decidedAt: "处理时间",
       decisionComment: "处理备注",
+      decisionActions: "流程裁决",
       detailTitle: "\u5bf9\u8bdd\u8be6\u60c5",
       emptyFilterBody: "调整蓝图或时间筛选后可以继续查看历史收件。",
       emptyFilterTitle: "当前筛选没有收件",
@@ -1978,41 +2383,54 @@ function getInboxCopy(language: Language): InboxCopy {
       listTitle: "\u6536\u4ef6",
       listMetric: (visibleCount, totalCount, pendingCount) =>
         `显示 ${visibleCount}/${totalCount} 封，${pendingCount} 封待处理`,
+      modify: "修改",
       noSelectionBody: "\u4ece\u5de6\u4fa7\u9009\u62e9\u4e00\u5c01\u90ae\u4ef6\u540e\uff0c\u8fd9\u91cc\u4f1a\u663e\u793a\u5b83\u7684\u5bf9\u8bdd\u548c\u7559\u8a00\u6846\u3002",
       noSelectionTitle: "\u9009\u62e9\u4e00\u5c01\u90ae\u4ef6",
       noUpstreamOutput: "\u6ca1\u6709\u62ff\u5230\u4e0a\u4e00\u4e2a\u8282\u70b9\u8f93\u51fa\u3002",
       openedAt: "\u53d1\u8d77\u65f6\u95f4",
       payload: "\u8be6\u7ec6\u5185\u5bb9",
-      processedAction: "已处理，不能重复操作",
-      processedPlaceholder: "这封收件已经处理，不能继续留言或再次审批。",
-      regenerate: "\u91cd\u65b0\u751f\u6210",
-      regenerateDescription: "\u91cd\u65b0\u8fd0\u884c\u5e76\u751f\u6210\u65b0\u7248\u672c",
-      reject: "\u9a73\u56de",
-      replyPlaceholder: "\u8f93\u5165\u7559\u8a00\uff0c\u4e0d\u4f1a\u6539\u53d8\u6d41\u7a0b\uff1bShift+Enter \u6362\u884c...",
-      requestChanges: "\u8bf7\u6c42\u4fee\u6539",
-      requestChangesDescription: "\u8981\u6c42 Agent \u6839\u636e\u7559\u8a00\u751f\u6210\u65b0\u7248\u672c",
-      sendReply: "\u7559\u8a00",
-      solutionSelected: "\u5df2\u9009\u7528",
+      processedAction: "当前邮件已经处理完成，不能重复操作。",
+      processedPlaceholder: "当前邮件已经处理完成，不能继续操作。",
+      reject: "拒绝",
+      replyPlaceholder: "输入回复或修改要求；Shift+Enter 换行...",
+      sendReply: "回复",
+      disabledReasons: {
+        content_incomplete: "当前邮件信息不全，暂时不能通过。",
+        empty_reply: "请先输入回复内容。",
+        empty_revision_request: "请先输入修改要求。",
+        processed: "当前邮件已经处理完成，不能重复操作。",
+        executing: "节点正在执行，请等待结果返回。",
+        replying: "执行人正在回复，请等待当前回复完成。",
+        approval_only: "当前邮件为审批邮件，不支持对话。",
+        no_executor: "当前为通知邮件，仅支持留言，不会调用 Agent。",
+        no_revisable_content: "当前没有可重做内容。",
+        no_revisable_executor: "当前没有可重做执行人。",
+        run_ended: "运行已经结束，不能继续推进。",
+        data_anomaly: "邮件缺少必要流程信息，不能操作。"
+      },
+      solutionSelected: "已选中",
       status: "状态",
       system: "HiveWard",
       timeFilter: "时间",
       to: "\u53d1\u7ed9",
-      useSolution: "\u4f7f\u7528\u6b64\u65b9\u6848",
-      waitingHarness: (harnessLabel) => `\u6b63\u5728\u7b49\u5f85 ${harnessLabel} \u8f93\u51fa...`,
+      useSolution: "使用此方案",
+      waitingHarness: () => "\u6b63\u5728\u601d\u8003...",
       you: "\u4f60",
       youAvatar: "\u4f60"
     };
   }
 
   return {
+    agentActions: "Agent requests",
     allBlueprints: "All blueprints",
     approvalRequest: "Approval request",
-    approve: "Approve",
+    approve: "Pass",
     complete: "Complete",
     blueprintFilter: "Blueprint",
     conversation: "Conversation",
     decidedAt: "Decided",
     decisionComment: "Decision note",
+    decisionActions: "Workflow decision",
     detailTitle: "Conversation detail",
     emptyFilterBody: "Change the blueprint or time filter to view more inbox history.",
     emptyFilterTitle: "No inbox items match this filter",
@@ -2022,6 +2440,7 @@ function getInboxCopy(language: Language): InboxCopy {
     listTitle: "Messages",
     listMetric: (visibleCount, totalCount, pendingCount) =>
       `${visibleCount}/${totalCount} shown, ${pendingCount} pending`,
+    modify: "Revise",
     noSelectionBody: "Select a message on the left to show its conversation and comment box here.",
     noSelectionTitle: "Select a message",
     noUpstreamOutput: "No previous node output was captured.",
@@ -2029,23 +2448,94 @@ function getInboxCopy(language: Language): InboxCopy {
     payload: "Payload",
     processedAction: "Already processed",
     processedPlaceholder: "This inbox item has already been processed.",
-    regenerate: "Regenerate",
-    regenerateDescription: "Rerun this step and generate a new version",
     reject: "Reject",
-    replyPlaceholder: "Add a comment; comments do not change the workflow. Shift+Enter for a new line...",
-    requestChanges: "Request changes",
-    requestChangesDescription: "Ask the Agent to create a revised version from this comment",
-    sendReply: "Comment",
+    replyPlaceholder: "Add a reply or revision request. Shift+Enter for a new line...",
+    sendReply: "Reply",
+    disabledReasons: {
+      content_incomplete: "This message is missing required information and cannot pass yet.",
+      empty_reply: "Please enter a reply first.",
+      empty_revision_request: "Please enter a revision request first.",
+      processed: "This message has already been handled and cannot be repeated.",
+      executing: "The node is running. Wait for the result to return.",
+      replying: "The executor is replying. Wait for the current reply to finish.",
+      approval_only: "This approval message does not support conversation.",
+      no_executor: "This is notification mail. It only supports notes and will not call an Agent.",
+      no_revisable_content: "There is no content that can be revised.",
+      no_revisable_executor: "There is no executor that can revise this message.",
+      run_ended: "The run has ended and cannot continue.",
+      data_anomaly: "This message is missing required workflow information."
+    },
     solutionSelected: "Selected",
     status: "Status",
     system: "HiveWard",
     timeFilter: "Time",
     to: "To",
-    useSolution: "Use this option",
-    waitingHarness: (harnessLabel) => `Waiting for ${harnessLabel} output...`,
+    useSolution: "Use this solution",
+    waitingHarness: () => "Thinking...",
     you: "You",
     youAvatar: "You"
   };
+}
+
+function inboxActionTitle(label: string, reason: InboxActionDisabledReason | undefined, copy: InboxCopy): string {
+  return reason ? copy.disabledReasons[reason] : label;
+}
+
+function buildInboxActionDisabledReasons(input: {
+  actionPending: boolean;
+  approval?: PendingApprovalItem;
+  canApprove: boolean;
+  canModify: boolean;
+  canReject: boolean;
+  canReply: boolean;
+  hasDraft: boolean;
+  inboxItem?: InboxItem;
+  streaming: boolean;
+}): InboxActionDisabledReasons {
+  return {
+    approve: input.canApprove ? undefined : resolveInboxActionDisabledReason("approve", input),
+    reject: input.canReject ? undefined : resolveInboxActionDisabledReason("reject", input),
+    reply: input.canReply ? undefined : resolveInboxActionDisabledReason("reply", input),
+    modify: input.canModify ? undefined : resolveInboxActionDisabledReason("modify", input)
+  };
+}
+
+function resolveInboxActionDisabledReason(
+  action: InboxActionKey,
+  input: {
+    actionPending: boolean;
+    approval?: PendingApprovalItem;
+    hasDraft: boolean;
+    inboxItem?: InboxItem;
+    streaming: boolean;
+  }
+): InboxActionDisabledReason {
+  const hasSelection = Boolean(input.approval || input.inboxItem);
+  if (!hasSelection) return "content_incomplete";
+  if (input.actionPending) return "executing";
+  if (input.streaming || input.approval?.status === "replying") return "replying";
+  if (input.inboxItem && input.inboxItem.status !== "pending") return "processed";
+  if (input.approval && !isActionableApprovalThread(input.approval)) return "processed";
+
+  if (action === "reply") {
+    if (input.approval?.canReply === false) {
+      return input.approval.kind === "function_node" ? "no_executor" : "approval_only";
+    }
+    return input.hasDraft ? "no_executor" : "empty_reply";
+  }
+
+  if (action === "modify") {
+    if (!input.approval) return "no_revisable_content";
+    if (input.approval.canRequestChanges || input.approval.canRevise) {
+      return input.hasDraft ? "data_anomaly" : "empty_revision_request";
+    }
+    return input.approval.kind === "function_node"
+      ? "no_revisable_executor"
+      : "no_revisable_content";
+  }
+
+  if (action === "reject") return "approval_only";
+  return "content_incomplete";
 }
 
 function buildInboxBlueprintFilterOptions(
@@ -2131,11 +2621,12 @@ function inboxItemBlueprintKey(item: InboxItem): string {
   return item.blueprintId || item.blueprintName || "";
 }
 
-function inboxItemContextLabel(item: InboxItem, language: Language): string {
-  return [
-    item.blueprintName ?? item.blueprintId ?? item.targetRoleId ?? item.createdByRoleId,
-    formalInboxTypeLabel(item.type, language)
-  ].filter(Boolean).join(" / ");
+function inboxItemContextLabel(item: InboxItem): string {
+  return item.blueprintName ?? item.blueprintId ?? item.targetRoleId ?? item.createdByRoleId;
+}
+
+function approvalContextLabel(approval: PendingApprovalItem): string {
+  return approval.blueprintName || approval.blueprintId || approval.startedBy || approval.nodeId || approval.nodeRunId;
 }
 
 function inboxStatusClassName(status: InboxItem["status"]): string {
@@ -2214,24 +2705,101 @@ function isInboxTimestampInTimeFilter(timestamp: string, filter: InboxTimeFilter
   return value >= addDays(new Date(today), -29).getTime();
 }
 
+function inboxDisplayTypeLabel(type: InboxItem["type"], language: Language): string {
+  const labels =
+    language === "zh-CN"
+      ? {
+          leader_delegation: "\u59d4\u6d3e\u901a\u77e5",
+          blueprint_proposal: "\u84dd\u56fe\u63d0\u4ea4",
+          run_request: "\u8fd0\u884c\u8bf7\u6c42",
+          company_config: "\u516c\u53f8\u914d\u7f6e"
+        }
+      : {
+          leader_delegation: "Delegation notice",
+          blueprint_proposal: "Blueprint submission",
+          run_request: "Run request",
+          company_config: "Company config"
+        };
+  return labels[type];
+}
+
+function approvalDisplayTypeLabel(kind: string | undefined, language: Language): string {
+  const labels =
+    language === "zh-CN"
+      ? {
+          agent_proposal: "\u8282\u70b9\u65b9\u6848",
+          iteration_requirement_plan: "\u6267\u884c\u8ba1\u5212",
+          manager_release_report: "\u9636\u6bb5\u6c47\u62a5",
+          function_node: "\u901a\u77e5\u90ae\u4ef6",
+          blueprint_proposal: "\u84dd\u56fe\u63d0\u4ea4",
+          leader_delegation: "\u59d4\u6d3e\u901a\u77e5",
+          run_request: "\u8fd0\u884c\u8bf7\u6c42",
+          company_config: "\u516c\u53f8\u914d\u7f6e"
+        }
+      : {
+          agent_proposal: "Node proposal",
+          iteration_requirement_plan: "Execution plan",
+          manager_release_report: "Phase report",
+          function_node: "Notification mail",
+          blueprint_proposal: "Blueprint submission",
+          leader_delegation: "Delegation notice",
+          run_request: "Run request",
+          company_config: "Company config"
+        };
+  return kind && kind in labels
+    ? labels[kind as keyof typeof labels]
+    : labels.function_node;
+}
+
+function inboxTypeTagClassName(type: string | undefined): string {
+  const normalized = type || "function_node";
+  return `inbox-type-tag-${normalized.replace(/[^a-z0-9_-]/gi, "_")}`;
+}
+
 function formalInboxTypeLabel(type: InboxItem["type"], language: Language): string {
   const labels =
     language === "zh-CN"
       ? {
-          leader_delegation: "召集 Leader",
-          blueprint_proposal: "蓝图内容包",
+          leader_delegation: "委派通知",
+          blueprint_proposal: "蓝图提交",
           run_request: "运行请求",
-          report: "报告",
           company_config: "公司配置"
         }
       : {
-          leader_delegation: "Leader delegation",
-          blueprint_proposal: "Blueprint package",
+          leader_delegation: "Delegation notice",
+          blueprint_proposal: "Blueprint submission",
           run_request: "Run request",
-          report: "Report",
           company_config: "Company config"
         };
   return labels[type];
+}
+
+function approvalTypeLabel(kind: string | undefined, language: Language): string {
+  const labels =
+    language === "zh-CN"
+      ? {
+          agent_proposal: "节点方案",
+          iteration_requirement_plan: "执行计划",
+          manager_release_report: "阶段汇报",
+          function_node: "通知邮件",
+          blueprint_proposal: "蓝图提交",
+          leader_delegation: "委派通知",
+          run_request: "运行请求",
+          company_config: "公司配置"
+        }
+      : {
+          agent_proposal: "Node proposal",
+          iteration_requirement_plan: "Execution plan",
+          manager_release_report: "Phase report",
+          function_node: "Notification mail",
+          blueprint_proposal: "Blueprint submission",
+          leader_delegation: "Delegation notice",
+          run_request: "Run request",
+          company_config: "Company config"
+        };
+  return kind && kind in labels
+    ? labels[kind as keyof typeof labels]
+    : labels.function_node;
 }
 
 function approvalSubject(approval: PendingApprovalItem): string {
@@ -2322,8 +2890,33 @@ function hasAssistantReplyAfter(approval: PendingApprovalItem, createdAt: string
   );
 }
 
+export function shouldRefreshInboxThreadImmediately(event: StreamInboxThreadMessageEvent): boolean {
+  return event.type === "inbox_message_created";
+}
+
+export function resolveApprovalReplySelectionTarget(
+  approval: Pick<PendingApprovalItem, "approvalRequestId" | "blueprintRunId" | "kind" | "nodeRunId">
+): { kind: "run"; blueprintRunId: string; nodeRunId: string } | { kind: "request"; approvalRequestId: string } | undefined {
+  if (approval.kind === "agent_proposal" && approval.nodeRunId) {
+    return { kind: "run", blueprintRunId: approval.blueprintRunId, nodeRunId: approval.nodeRunId };
+  }
+  if (approval.approvalRequestId) {
+    return { kind: "request", approvalRequestId: approval.approvalRequestId };
+  }
+  if (approval.nodeRunId) {
+    return { kind: "run", blueprintRunId: approval.blueprintRunId, nodeRunId: approval.nodeRunId };
+  }
+  return undefined;
+}
+
 function formatInboxHarnessLabel(harnessId: string | undefined): string {
   return harnessLikeDisplayLabel(harnessId);
+}
+
+function formatInboxRuntimeState(event: Extract<ChatStreamEvent, { type: "runtime_state" }>): string {
+  const label = event.label.trim();
+  if (!label) return formatInboxHarnessLabel(event.source);
+  return label;
 }
 
 function makeLocalInboxReplyId(): string {
@@ -2370,7 +2963,7 @@ function buildInboxConversationMessages({
             ? {
                 solutionId: reply.id,
                 selectedSolution: approval?.selectedReplyId === reply.id || reply.selected === true,
-                canUseAsSolution: true
+                canUseAsSolution: reply.canUseAsSolution !== false
               }
             : {})
         }))
@@ -2384,16 +2977,19 @@ function buildInboxConversationMessages({
   );
   const visibleLocalReplies = replies.filter((reply) => !serverUserReplyBodies.has(reply.body.trim()));
   const pendingMessages =
-    pendingHarnessReply && selection.kind === "approval"
+    pendingHarnessReply
       ? [
           {
             id: pendingHarnessReply.id,
             role: "assistant" as const,
             speaker: pendingHarnessReply.harnessLabel,
-            body: "",
+            body: pendingHarnessReply.body ?? "",
             createdAt: pendingHarnessReply.createdAt,
-            progressText: copy.waitingHarness(pendingHarnessReply.harnessLabel),
-            pending: true
+            progressText: pendingHarnessReply.progressText ?? copy.waitingHarness(pendingHarnessReply.harnessLabel),
+            pending: !pendingHarnessReply.body && !pendingHarnessReply.failed,
+            failed: pendingHarnessReply.failed,
+            solutionId: pendingHarnessReply.solutionId,
+            canUseAsSolution: pendingHarnessReply.canUseAsSolution
           }
         ]
       : [];
@@ -2462,6 +3058,7 @@ function buildApprovalConversation(
   t: Messages
 ): InboxConversationMessage[] {
   const selectedReplyId = approval.selectedReplyId ?? approvalReviewOutputSolutionId;
+  const canSelectReviewOutput = resolveApprovalReplySelectionTarget(approval)?.kind === "run";
   return approvalContentBlocks(approval, copy, t).map((block) => ({
     id: block.key,
     role: "assistant" as const,
@@ -2470,7 +3067,7 @@ function buildApprovalConversation(
     createdAt: approval.requestedAt,
     solutionId: approvalReviewOutputSolutionId,
     selectedSolution: selectedReplyId === approvalReviewOutputSolutionId,
-    canUseAsSolution: true
+    canUseAsSolution: canSelectReviewOutput || selectedReplyId === approvalReviewOutputSolutionId
   }));
 }
 
@@ -4017,7 +4614,11 @@ function buildNodeRunTimelineItemMap(
 ): Map<string, RunTimelineTraceItem[]> {
   const itemsByNodeRunId = new Map<string, RunTimelineTraceItem[]>();
   for (const item of activeRun.runTimeline ?? []) {
-    if ((item.kind !== "node_started" && item.kind !== "node_output") || !item.payloadRef || !nodeRunIds.has(item.payloadRef)) {
+    if (
+      (item.kind !== "node_started" && item.kind !== "node_runtime" && item.kind !== "node_output") ||
+      !item.payloadRef ||
+      !nodeRunIds.has(item.payloadRef)
+    ) {
       continue;
     }
     const existing = itemsByNodeRunId.get(item.payloadRef) ?? [];
@@ -4058,6 +4659,86 @@ function buildRunTimelineTraceItems(
     ? buildRunEventTimelineFallbackItems(activeRun, nodeRunIds, language)
     : [];
   return [...visible, ...eventFallback];
+}
+
+export type RuntimeConversationSourceMessage = ReadOnlyConversationMessage & {
+  streamKey: string;
+  sourceBody: string;
+  sequence: number;
+};
+
+export function buildRuntimeConversationMessages(activeRun: BlueprintRunView, language: Language): RuntimeConversationSourceMessage[] {
+  const nodeRunsById = new Map(activeRun.nodeRuns.map((nodeRun) => [nodeRun.id, nodeRun]));
+  return (activeRun.runTimeline ?? [])
+    .filter((item) => item.kind === "node_runtime")
+    .sort((left, right) => left.sequence - right.sequence || toSafeTimestamp(left.createdAt) - toSafeTimestamp(right.createdAt))
+    .map((item) => {
+      const nodeRun = item.payloadRef ? nodeRunsById.get(item.payloadRef) : undefined;
+      const sourceBody = localizeTimelineBody(item.body, language)?.trim() ?? "";
+      const speaker = item.actorLabel || nodeRun?.nodeLabel || item.title;
+      const runtimeLabel = nodeRun?.runtimeRef?.source ? harnessLikeDisplayLabel(nodeRun.runtimeRef.source) : undefined;
+      return {
+        id: item.id,
+        role: "assistant" as const,
+        speaker,
+        createdAt: item.createdAt,
+        body: "",
+        sourceBody,
+        progressText: sourceBody ? [runtimeLabel, item.title].filter(Boolean).join(" · ") : runtimeThinkingText(language),
+        pending: !sourceBody,
+        failed: isRuntimeConversationMessageFailed(item, nodeRun),
+        sequence: item.sequence,
+        streamKey: `run:${activeRun.run.id}:runtime:${item.id}`
+      };
+    });
+}
+
+export function syncRuntimeConversationBuffers(input: {
+  messages: Array<Pick<RuntimeConversationSourceMessage, "sourceBody" | "streamKey">>;
+  receivedBodies: Record<string, string>;
+  buffers: Record<string, StreamingTextBuffer>;
+  scheduler: StreamingTextBufferScheduler;
+  setVisible: (bufferKey: string, visible: string) => void;
+}): void {
+  const liveKeys = new Set(input.messages.map((message) => message.streamKey));
+  for (const bufferKey of Object.keys(input.receivedBodies)) {
+    if (liveKeys.has(bufferKey)) continue;
+    delete input.receivedBodies[bufferKey];
+    clearStreamingTextBuffer(input.buffers, bufferKey, input.scheduler);
+  }
+
+  for (const message of input.messages) {
+    const previousBody = input.receivedBodies[message.streamKey] ?? "";
+    const nextBody = message.sourceBody;
+    if (nextBody === previousBody) continue;
+
+    input.receivedBodies[message.streamKey] = nextBody;
+    if (!nextBody) {
+      clearStreamingTextBuffer(input.buffers, message.streamKey, input.scheduler);
+      input.setVisible(message.streamKey, "");
+      continue;
+    }
+
+    const canAppendSuffix = nextBody.startsWith(previousBody);
+    appendStreamingTextDelta({
+      buffers: input.buffers,
+      bufferKey: message.streamKey,
+      text: canAppendSuffix ? nextBody.slice(previousBody.length) : nextBody,
+      replace: !canAppendSuffix,
+      scheduler: input.scheduler,
+      setVisible: input.setVisible
+    });
+  }
+}
+
+function runtimeThinkingText(language: Language): string {
+  return language === "zh-CN" ? "正在思考..." : "Thinking...";
+}
+
+function isRuntimeConversationMessageFailed(item: RunTimelineTraceItem, nodeRun?: BlueprintNodeRun): boolean {
+  if (nodeRun?.status === "failed" || nodeRun?.status === "cancelled") return true;
+  const content = `${item.title}\n${item.body ?? ""}`;
+  return /\b(failed|cancelled|error)\b/i.test(content) || /失败|取消|错误/.test(content);
 }
 
 function buildRunEventTimelineFallbackItems(
@@ -4154,6 +4835,8 @@ function createNodeTraceIssue(
   const contextSnapshotBody = preflightModeFromNodeRunId(nodeRun.id) === "context_snapshot"
     ? buildContextSnapshotReadableBody(nodeRun.output, humanReport?.bodyMd, language)
     : undefined;
+  const nodeEvents = context.eventsByNodeRunId.get(nodeRun.id) ?? [];
+  const runtimeStatusBody = buildNodeRuntimeStatusBody(nodeRun, timelineItems, nodeEvents, language);
   const readableSource = contextSnapshotBody ?? (humanReport
     ? humanReport.bodyMd
     : buildReadableNodeOutputBody(nodeRun.output, nodeRun.error, t) ?? buildRunningNodeProgressBody(nodeRun, language));
@@ -4168,6 +4851,7 @@ function createNodeTraceIssue(
         language,
         actorKind,
         reason: managerReason,
+        runtimeStatusBody,
         timelineDetails: nodeTimelineDetailBodies(timelineItems, language)
       })
     : undefined;
@@ -4193,7 +4877,7 @@ function createNodeTraceIssue(
     timestamp: traceTimestampForNodeRun(nodeRun),
     outputPreview: summarizeOutput(previewSource ?? nodeRun.output, t),
     outputBody,
-    events: context.eventsByNodeRunId.get(nodeRun.id) ?? []
+    events: nodeEvents
   };
 }
 
@@ -4205,6 +4889,51 @@ function nodeTimelineDetailBodies(
     .filter((item) => item.kind === "node_output")
     .map((item) => localizeTimelineBody(item.body, language)?.trim())
     .filter((body): body is string => Boolean(body));
+}
+
+function buildNodeRuntimeStatusBody(
+  nodeRun: BlueprintNodeRun,
+  timelineItems: RunTimelineTraceItem[],
+  events: BlueprintNodeEvent[],
+  language: Language
+): string {
+  const zh = language === "zh-CN";
+  const lines = [
+    `- ${zh ? "状态" : "Status"}: ${statusLabelForNodeRunPlain(nodeRun.status, language)}`
+  ];
+  const runtimeRef = nodeRun.runtimeRef;
+  if (runtimeRef) {
+    lines.push(`- ${zh ? "执行器" : "Runtime"}: ${harnessLikeDisplayLabel(runtimeRef.source)}`);
+    if (runtimeRef.taskId || runtimeRef.runId || runtimeRef.sessionKey) {
+      lines.push(`- ${zh ? "运行引用" : "Runtime ref"}: ${[runtimeRef.taskId, runtimeRef.runId, runtimeRef.sessionKey].filter(Boolean).join(" / ")}`);
+    }
+    if (runtimeRef.sourceUpdatedAt) {
+      lines.push(`- ${zh ? "最近更新" : "Updated"}: ${formatTraceTime(runtimeRef.sourceUpdatedAt, language)}`);
+    }
+  }
+  const startedAt = nodeRun.startedAt ?? nodeRun.queuedAt;
+  if (startedAt) lines.push(`- ${zh ? "started" : "started"}: ${formatTraceTime(startedAt, language)}`);
+  const activeProgress = buildRunningNodeProgressBody(nodeRun, language);
+  if (activeProgress) lines.push(`- ${zh ? "runtime_state" : "runtime_state"}: ${activeProgress}`);
+  if (nodeRun.endedAt && nodeRun.status === "succeeded") {
+    lines.push(`- done: ${formatTraceTime(nodeRun.endedAt, language)}`);
+  }
+  if (nodeRun.status === "failed" || nodeRun.status === "cancelled") {
+    lines.push(`- error: ${nodeRun.error ?? statusLabelForNodeRunPlain(nodeRun.status, language)}`);
+  }
+  const recentTimeline = timelineItems
+    .slice(-3)
+    .map((item) => item.body || item.title)
+    .map((value) => localizeTimelineBody(value, language)?.trim())
+    .filter((value): value is string => Boolean(value));
+  const recentEvents = recentTimeline.length
+    ? []
+    : events.slice(-3).map((event) => event.message.trim()).filter(Boolean);
+  const details = recentTimeline.length ? recentTimeline : recentEvents;
+  if (details.length) {
+    lines.push(`- ${zh ? "阶段输出" : "Stage output"}: ${details.join(" / ")}`);
+  }
+  return lines.join("\n");
 }
 
 function createReportTraceIssue(
@@ -4850,6 +5579,7 @@ function timelineKindDescription(kind: RunTimelineTraceItem["kind"], language: L
   if (kind === "requirement_published") return zh ? "Manager 已经把本轮执行计划送到审批流程。" : "The manager has published the round execution plan for approval.";
   if (kind === "decision_created") return zh ? "审批动作已经记录。" : "The approval decision has been recorded.";
   if (kind === "node_started") return zh ? "该步骤正在运行。" : "This step is running.";
+  if (kind === "node_runtime") return zh ? "该步骤正在实时工作。" : "This step is streaming runtime work.";
   if (kind === "node_output") return zh ? "该步骤已经产生输出。" : "This step produced output.";
   if (kind === "artifact_published") return zh ? "产物已经发布。" : "An artifact was published.";
   if (kind === "release_report_published") return zh ? "Manager 已经发布本轮报告。" : "The manager has published the round report.";
@@ -4899,6 +5629,31 @@ function traceRunFrameState(status?: BlueprintRunStatus): "static" | "running" |
 
 function statusLabelForNodeRun(status: BlueprintNodeRunStatus | undefined, t: Messages): string {
   return status ? t.status[status] : t.trace.pending;
+}
+
+function statusLabelForNodeRunPlain(status: BlueprintNodeRunStatus | undefined, language: Language): string {
+  const zh = language === "zh-CN";
+  if (!status) return zh ? "待运行" : "Pending";
+  const labels: Record<BlueprintNodeRunStatus, string> = zh
+    ? {
+        queued: "已排队",
+        running: "运行中",
+        succeeded: "已完成",
+        failed: "失败",
+        cancelled: "已取消",
+        skipped: "已跳过",
+        waiting_approval: "等待审批"
+      }
+    : {
+        queued: "Queued",
+        running: "Running",
+        succeeded: "Done",
+        failed: "Failed",
+        cancelled: "Cancelled",
+        skipped: "Skipped",
+        waiting_approval: "Waiting for approval"
+      };
+  return labels[status];
 }
 
 function summarizeOutput(output: unknown, t: Messages): string {

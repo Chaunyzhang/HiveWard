@@ -57,6 +57,7 @@ import type {
   RejectBlueprintRunRequest,
   ReplyBlueprintRunApprovalRequest,
   SelectBlueprintRunApprovalRequest,
+  SelectApprovalRequestReplyRequest,
   ReplyInboxItemRequest,
   ChatSessionHistoryResponse,
   ChatSessionMessagesResponse,
@@ -69,6 +70,9 @@ import type {
   SaveClaudeCodeModelProfileRequest,
   UpdateClaudeCodeModelConfigRequest,
   SendChatSessionMessageRequest,
+  StreamInboxThreadMessageEvent,
+  StreamInboxThreadMessageRequest,
+  InboxThreadType,
   ChatStreamEvent,
   HivewardChatSession,
   HivewardChatSessionResponse,
@@ -110,6 +114,10 @@ export function isClosedApprovalConflictError(error: unknown): boolean {
 
 export interface ChatStreamHandlers {
   onEvent: (event: ChatStreamEvent) => void;
+}
+
+export interface InboxThreadStreamHandlers {
+  onEvent: (event: StreamInboxThreadMessageEvent) => void;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -166,7 +174,10 @@ function isAbortError(error: unknown): boolean {
   return typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError";
 }
 
-async function consumeChatStreamResponse(response: Response, handlers: ChatStreamHandlers): Promise<void> {
+async function consumeChatStreamResponse<T extends { type: string }>(
+  response: Response,
+  handlers: { onEvent: (event: T) => void }
+): Promise<void> {
   if (!response.body) {
     throw new Error("Chat stream response did not include a body.");
   }
@@ -243,6 +254,39 @@ export const api = {
 
     if (!response.body) {
       throw new Error("Chat stream response did not include a body.");
+    }
+
+    await consumeChatStreamResponse(response, handlers);
+  },
+
+  async streamInboxThreadMessage(
+    threadType: InboxThreadType,
+    threadId: string,
+    input: StreamInboxThreadMessageRequest,
+    handlers: InboxThreadStreamHandlers,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const response = await fetchApi(
+      `/api/inbox/threads/${encodeURIComponent(threadType)}/${encodeURIComponent(threadId)}/messages/stream`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        signal,
+        body: JSON.stringify(input)
+      }
+    );
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => undefined);
+      const message = body?.error?.message ?? `Request failed: ${response.status}`;
+      const code = typeof body?.error?.code === "string" ? body.error.code : undefined;
+      throw new ApiRequestError(message, response.status, code);
+    }
+
+    if (!response.body) {
+      throw new Error("Inbox thread stream response did not include a body.");
     }
 
     await consumeChatStreamResponse(response, handlers);
@@ -537,6 +581,13 @@ export const api = {
     });
   },
 
+  async selectApprovalRequestReply(approvalRequestId: string, selectedReplyId: string): Promise<ApprovalRequestResponse> {
+    return request<ApprovalRequestResponse>(`/api/approval-requests/${encodeURIComponent(approvalRequestId)}/select-reply`, {
+      method: "POST",
+      body: JSON.stringify({ selectedReplyId } satisfies SelectApprovalRequestReplyRequest)
+    });
+  },
+
   async getRoleDirectory(): Promise<RoleDirectoryResponse> {
     return request<RoleDirectoryResponse>("/api/roles");
   },
@@ -708,22 +759,25 @@ export const api = {
   }
 };
 
-function consumeChatStreamBuffer(buffer: string, handlers: ChatStreamHandlers): string {
+function consumeChatStreamBuffer<T extends { type: string }>(
+  buffer: string,
+  handlers: { onEvent: (event: T) => void }
+): string {
   const frames = buffer.split(/\n\n/);
   const remainder = frames.pop() ?? "";
   for (const frame of frames) {
-    const event = readChatStreamFrame(frame);
+    const event = readChatStreamFrame<T>(frame);
     if (event) handlers.onEvent(event);
   }
   return remainder;
 }
 
-function readChatStreamFrame(frame: string): ChatStreamEvent | undefined {
+function readChatStreamFrame<T extends { type: string }>(frame: string): T | undefined {
   const data = frame
     .split(/\n/)
     .filter((line) => line.startsWith("data:"))
     .map((line) => line.slice(5).trimStart())
     .join("\n");
   if (!data) return undefined;
-  return JSON.parse(data) as ChatStreamEvent;
+  return JSON.parse(data) as T;
 }

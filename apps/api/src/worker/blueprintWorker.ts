@@ -3,6 +3,8 @@ import { nanoid } from "nanoid";
 import type { RuntimeAdapter } from "@hiveward/adapter";
 import {
   isAgentBlueprintNode,
+  approvalThreadFromRequest,
+  approvalThreadIdForRequest,
   resolveAgentRuntimeSource,
   isManagerSlotInnerInHandle,
   isManagerSlotInnerOutHandle,
@@ -10,10 +12,15 @@ import {
   resolveManagerSlotExecutionMode,
   type AgentHandoff,
   type AgentHumanReport,
+  type ChatStreamEvent,
   type AgentNodeConfig,
+  type ApprovalReply,
   type AgentRuntimeId,
   type AgentTaskResult,
   type ConditionNodeConfig,
+  type HarnessId,
+  type HarnessSkillId,
+  type HivewardChatSession,
   type LoopNodeConfig,
   type IterationRound,
   type IterationSession,
@@ -21,6 +28,8 @@ import {
   type ManagerSlotNodeConfig,
   type RuntimeObjectRef,
   type StartAgentTaskInput,
+  type InboxThreadType,
+  type StreamInboxThreadMessageEvent,
   type Artifact,
   type ApprovalRequest,
   type ReleaseReport,
@@ -56,6 +65,7 @@ const managerInHandlePrefix = "manager-in-";
 const managerOutHandlePrefix = "manager-out-";
 const defaultManagerAgentName = "manager";
 const selfIterationPreparationSlotCount = 2;
+const selfIterationRequirementInterfaceSlot = 2;
 const managerRosterPromptBudget = 24000;
 const managerRosterItemPromptBudget = 6000;
 const managerReceiptPromptBudget = 6000;
@@ -165,15 +175,16 @@ const preflightOutputSchema: Record<string, unknown> = {
 };
 const agentOutputContractLines = [
   "Output contract:",
-  "- Return an AgentOutputEnvelope JSON object when you produce a result. This platform contract overrides earlier task wording such as \"return only JSON\" or \"do not return markdown\".",
-  "- AgentOutputEnvelope is a transport wrapper. It adds stable fields for Hiveward handoff, artifacts, and UI links; it must not flatten your answer into a rigid checklist.",
-  "- Include humanReportMd: a Markdown report written for a human reader. This field is required, and humanReportMd is your free-form human answer.",
+  "- Return an AgentOutputEnvelope JSON object when you produce a formal result. This prompt-level contract overrides earlier task wording such as \"return only JSON\" or \"do not return markdown\".",
+  "- AgentOutputEnvelope is a transport wrapper. HiveWard preserves your answer even if the shape is imperfect, but you must still follow this output contract whenever the fields are available.",
+  "- Include humanReportMd: a Markdown report written for a human reader. This field is required by the prompt contract, and humanReportMd is your free-form human answer.",
   "- Write humanReportMd in the natural style needed by the task. Keep useful narrative, judgment, reasoning, recommendations, and caveats instead of only filling fixed fields.",
   "- Write humanReportMd in the user's working language. If the user request, blueprint title, agent label, or runContext is Chinese, write Simplified Chinese. Do not default to English for human-facing reports.",
   "- All visible headings, labels, and prose inside humanReportMd must use that language. For Chinese reports, do not use English headings such as Decision, Summary, Validation, or Delivery location.",
   "- humanReportMd must be literal human-readable Markdown, not a JSON-encoded string, not an escaped string, and not a dump of the output envelope. Do not include visible escape sequences such as \\n, \\t, or JSON braces unless the task itself is to show JSON.",
-  "- humanReportMd must start with a visible summary section. For Chinese reports, use \"## \u6458\u8981\"; for English reports, use \"## Summary\". Write the summary yourself in plain human language, target 100-150 Chinese characters or similarly brief English, and do not describe internal program phases, raw workflow status, or generic process labels.",
-  "- humanReportMd must include a visible delivery-location section immediately after the summary. For Chinese reports, use \"## \u4ea4\u4ed8\u4f4d\u7f6e\"; for English reports, use \"## Delivery location\". If this step created a deliverable, write a real file path, browser URL, or exact artifacts[] reference that a reviewer can use to open it. Do not paste the deliverable body in this section. If there is no deliverable, write only \"\u65e0\" for Chinese or \"None\" for English.",
+  "- Before any other visible final content, humanReportMd must start with a visible summary section. For Chinese reports, use \"## \u6458\u8981\"; for English reports, use \"## Summary\". Write the summary yourself in plain human language, target 100-150 Chinese characters or similarly brief English, and do not describe internal program phases, raw workflow status, or generic process labels.",
+  "- Immediately after the summary, humanReportMd must include a visible delivery-location section. For Chinese reports, use \"## \u4ea4\u4ed8\u4f4d\u7f6e\"; for English reports, use \"## Delivery location\". If this step created any deliverable, write a real file path, browser URL, or exact artifacts[] reference for each deliverable. Do not paste the deliverable body in this section. If there is no deliverable, write only \"\u65e0\" for Chinese or \"None\" for English.",
+  "- When platform fields are available, fill them: humanReportMd for the human report, artifacts[] for generated artifact addresses, result for task-specific structured content, and handoffJson for downstream continuation context.",
   "- Include result for the task-specific result or artifact-producing content. If the task asked for strict JSON, put that strict JSON inside result while keeping humanReportMd readable.",
   "- When the task schema allows it, include concise hard fields in result such as status, summary, artifacts, and handoff. Do not embed large file bodies there.",
   "- If another agent, manager, or downstream node may continue from your work, include handoffJson with structured facts, decisions, artifact references, assumptions, risks, and suggested next steps.",
@@ -223,6 +234,22 @@ interface ManagerReceiptRoleContext {
   agentWorkspace?: AgentWorkspaceRef;
 }
 
+interface ExecutorDiscussionTarget {
+  actor: "agent" | "manager";
+  taskInput: StartAgentTaskInput;
+  metadata: Record<string, unknown>;
+}
+
+type InboxDiscussionMode = "reply" | "candidate";
+
+interface InboxDiscussionChatResult {
+  status: Extract<ChatStreamEvent, { type: "done" }>["status"];
+  output?: string;
+  error?: string;
+  doneEvent?: Extract<ChatStreamEvent, { type: "done" }>;
+  runtime: Record<string, unknown>;
+}
+
 interface ManagerResultReceipt {
   nodeRunId: string;
   nodeId: string;
@@ -265,6 +292,7 @@ interface AgentApprovalReply {
   body: string;
   createdAt: string;
   selected?: boolean;
+  canUseAsSolution?: boolean;
 }
 
 interface AgentApprovalWaitingOutput {
@@ -280,6 +308,8 @@ interface AgentApprovalChatInput {
   latestUserReply: string;
   conversation: AgentApprovalReply[];
   instruction: string;
+  requestedOutput: InboxDiscussionMode;
+  candidateRequested: boolean;
 }
 
 interface ApprovedAgentOutputEnvelope {
@@ -381,6 +411,40 @@ interface BlueprintWorkerOptions {
   nodeRunLeaseMs?: number;
 }
 
+export class InboxDiscussionInProgressError extends Error {
+  readonly statusCode = 409;
+  readonly code = "inbox_discussion_in_progress";
+
+  constructor() {
+    super("Inbox discussion is already streaming for this thread.");
+    this.name = "InboxDiscussionInProgressError";
+  }
+}
+
+interface StreamInboxThreadMessageInput {
+  threadType: InboxThreadType;
+  threadId: string;
+  message: string;
+  onEvent: (event: StreamInboxThreadMessageEvent) => void;
+}
+
+interface StreamInboxThreadMessageResult {
+  threadType: InboxThreadType;
+  threadId: string;
+  userMessageId: string;
+  assistantMessageId?: string;
+}
+
+interface NodeRuntimeTimelineState {
+  id: string;
+  sequence?: number;
+  output: string;
+  runtimeStatus?: string;
+  runtimeLabel?: string;
+  error?: string;
+  completedAt?: string;
+}
+
 export class BlueprintWorker {
   private readonly activeRuns = new Map<string, Promise<void>>();
   private readonly pendingRunSchedules = new Map<string, { blueprint: BlueprintDefinition; run: BlueprintRun }>();
@@ -398,6 +462,7 @@ export class BlueprintWorker {
   private readonly nodeRunLeaseMs: number;
   private readonly nodeRunClaims = new Map<string, { owner: string; workerEpoch: number }>();
   private readonly pendingApprovalRevisionContexts = new Map<string, PendingApprovalRevisionContext>();
+  private readonly activeInboxThreadStreams = new Set<string>();
 
   constructor(
     private readonly store: HivewardStore,
@@ -509,6 +574,9 @@ export class BlueprintWorker {
       if (request.kind === "iteration_requirement_plan") {
         const draft = await this.buildRequirementDecisionRevision(blueprint, currentRun, request, message);
         requirementRevisionMetadata = draft.metadata;
+        result = await this.approvalService.revise(approvalRequestId, message, draft);
+      } else if (request.kind === "manager_release_report") {
+        const draft = await this.buildManagerReleaseReportRevision(blueprint, currentRun, request, message);
         result = await this.approvalService.revise(approvalRequestId, message, draft);
       } else {
         result = await this.approvalService.revise(approvalRequestId, message);
@@ -1153,13 +1221,17 @@ export class BlueprintWorker {
     ].join("\n");
   }
 
-  private resolveManagerReleaseReportPrompt(config: ManagerNodeConfig): string {
+  private resolveManagerReleaseReportPrompt(config: ManagerNodeConfig, options: { revision?: boolean } = {}): string {
     return [
       config.instructions?.trim() || "You are a Hiveward manager writing a self-iteration round release report.",
       "",
-      "This is the base release report step for the current self-iteration round. It is one Manager run.",
+      options.revision
+        ? "This is a release report revision for the current self-iteration round. It is one new Manager run triggered by explicit human feedback."
+        : "This is the base release report step for the current self-iteration round. It is one Manager run.",
       "Write the report yourself from the provided structured facts. Do not mechanically concatenate each node report, do not dump every Agent output, and do not expose raw JSON/logs as the human report.",
-      "This report is before human confirmation. Do not include post-confirmation review deposition, future memory, or human feedback that is not present in the input.",
+      options.revision
+        ? "Address input.revision.feedback directly. Use input.revision.previousReport only as context, and return a full replacement report instead of an appendix or acknowledgement."
+        : "This report is before human confirmation. Do not include post-confirmation review deposition, future memory, or human feedback that is not present in the input.",
       "The report should help a human decide whether to approve continuing, complete the run, leave a comment, or use an explicit revise action. Include the useful outcome, delivered artifacts, verification status, important problems, and recommended next action.",
       "The release report itself belongs in humanReportMd. Do not declare top-level artifacts[] unless this Manager run actually creates a separate new file.",
       ...agentOutputContractLines,
@@ -1207,6 +1279,99 @@ export class BlueprintWorker {
         researchSummary: preflight.researchSummary,
         researchArtifactIds: preflight.researchArtifactIds,
         planSource: "revised_from_feedback"
+      }
+    };
+  }
+
+  private async buildManagerReleaseReportRevision(
+    blueprint: BlueprintDefinition,
+    run: BlueprintRun,
+    request: ApprovalRequest,
+    message: string
+  ): Promise<ApprovalRevisionDraft> {
+    const feedback = message.trim();
+    if (!feedback) throw new Error("Release report revision message is required.");
+    if (!request.roundId) throw new Error("Release report revision requires an iteration round.");
+
+    const topManager = this.iterationService.findTopSelfIterationManager(blueprint);
+    if (!topManager) throw new Error("Self-iteration manager not found.");
+
+    const round = (await this.store.listIterationRounds({ runId: run.id }))
+      .find((candidate) => candidate.id === request.roundId);
+    if (!round) throw new Error("Iteration round not found for release report revision.");
+
+    const [reports, nodeRuns, allArtifacts, agentReports, agentHandoffs, approvedPlanRequest] = await Promise.all([
+      this.store.listReleaseReports(run.id).then((items) => items.filter((report) => report.roundId === round.id)),
+      this.store.listNodeRuns(run.id),
+      this.store.listArtifacts(run.id),
+      this.store.listAgentHumanReports(run.id).then((items) => items.filter((report) => report.roundId === round.id)),
+      this.store.listAgentHandoffs(run.id).then((items) => items.filter((handoff) => handoff.roundId === round.id)),
+      round.approvedRequirementRequestId
+        ? this.store.getApprovalRequest(round.approvedRequirementRequestId)
+        : Promise.resolve(undefined)
+    ]);
+    const currentReport = reports.find((report) => report.approvalRequestId === request.id || report.id === request.payloadRef) ?? reports.at(-1);
+    const version = Math.max(0, ...reports.map((report) => report.version)) + 1;
+    const reportId = `release-report-${nanoid(10)}`;
+    const title = `Round ${round.roundNumber} Release Report v${version}`;
+    const artifactRefs = currentReport?.artifactRefs ?? artifactsToReleaseReportRefs(
+      allArtifacts.filter((artifact) => artifact.roundId === round.id && (artifact.status ?? "current") === "current")
+    );
+    const artifactIds = new Set(artifactRefs.map((ref) => ref.artifactId));
+    const artifacts = allArtifacts.filter((artifact) =>
+      artifact.roundId === round.id &&
+      (artifact.status ?? "current") === "current" &&
+      (artifactIds.size === 0 || artifactIds.has(artifact.id))
+    );
+    const nodeRunsById = new Map(nodeRuns.map((nodeRun) => [nodeRun.id, nodeRun]));
+    const releaseAgentReports = agentReports.filter((report) => {
+      const nodeRun = nodeRunsById.get(report.nodeRunId);
+      return !(nodeRun?.nodeType === "manager" && report.source === "fallback");
+    });
+    const body = await this.writeSelfIterationReleaseReport({
+      blueprint,
+      run,
+      round,
+      managerNode: topManager,
+      roundNumber: round.roundNumber,
+      approvedPlan: approvedPlanRequest ? {
+        title: approvedPlanRequest.title,
+        revision: round.approvedRequirementRevision ?? approvedPlanRequest.revision,
+        body: approvedPlanRequest.body
+      } : undefined,
+      research: {
+        status: round.researchStatus,
+        summary: round.researchSummary
+      },
+      artifacts,
+      agentReports: releaseAgentReports,
+      agentHandoffs,
+      revision: {
+        feedback,
+        previousReport: currentReport ? {
+          title: currentReport.title,
+          summary: currentReport.summary,
+          version: currentReport.version
+        } : undefined
+      }
+    });
+
+    return {
+      title,
+      body,
+      payloadRef: reportId,
+      capabilities: request.capabilities,
+      releaseReport: {
+        id: reportId,
+        runId: run.id,
+        roundId: round.id,
+        approvalRequestId: "",
+        version,
+        title,
+        summary: body,
+        artifactRefs,
+        supersedesReportId: currentReport?.id,
+        createdAt: ""
       }
     };
   }
@@ -1318,6 +1483,965 @@ export class BlueprintWorker {
     const nextRun = { ...run, status: "waiting_approval" as const };
     await this.store.updateBlueprintRun(nextRun);
     return nextRun;
+  }
+
+  isInboxThreadStreamActive(threadType: InboxThreadType, threadId: string): boolean {
+    return this.activeInboxThreadStreams.has(inboxThreadStreamKey(threadType, threadId));
+  }
+
+  async streamInboxThreadMessage(input: StreamInboxThreadMessageInput): Promise<StreamInboxThreadMessageResult> {
+    const message = input.message.trim();
+    if (!message) {
+      throw new Error("Inbox discussion message is required.");
+    }
+    const lockKey = inboxThreadStreamKey(input.threadType, input.threadId);
+    if (this.activeInboxThreadStreams.has(lockKey)) {
+      throw new InboxDiscussionInProgressError();
+    }
+    this.activeInboxThreadStreams.add(lockKey);
+    try {
+      if (input.threadType === "inbox") {
+        return await this.streamPlainInboxThreadMessage(input.threadId, message, input.onEvent);
+      }
+      return await this.streamApprovalInboxThreadMessage(input.threadId, message, input.onEvent);
+    } finally {
+      this.activeInboxThreadStreams.delete(lockKey);
+    }
+  }
+
+  private async streamPlainInboxThreadMessage(
+    threadId: string,
+    message: string,
+    onEvent: (event: StreamInboxThreadMessageEvent) => void
+  ): Promise<StreamInboxThreadMessageResult> {
+    const item = await this.store.replyToInboxItem(threadId, message);
+    const userMessageId = item.replies?.at(-1)?.id ?? threadId;
+    onEvent({ type: "inbox_message_created", messageId: userMessageId, threadType: "inbox", threadId });
+    onEvent(inboxDiscussionDoneEvent("inbox", threadId, userMessageId));
+    return { threadType: "inbox", threadId, userMessageId };
+  }
+
+  private async streamApprovalInboxThreadMessage(
+    threadId: string,
+    message: string,
+    onEvent: (event: StreamInboxThreadMessageEvent) => void
+  ): Promise<StreamInboxThreadMessageResult> {
+    const discussionMode: InboxDiscussionMode = "reply";
+    const request = await this.resolveApprovalThreadRequest(threadId);
+    if (!request) {
+      throw new Error(`Approval thread not found: ${threadId}`);
+    }
+    if (await this.isExecutorBackedApprovalRequest(request, "agent_approval")) {
+      return this.streamAgentMailDiscussion(request, message, discussionMode, onEvent);
+    }
+    const userReply = await this.appendApprovalDiscussionReply(request, "user", message);
+    onEvent({ type: "inbox_message_created", messageId: userReply.id, threadType: "approval", threadId });
+    if (request.runId) {
+      await this.managerMailProjector.refresh(request.runId);
+    }
+    const target = await this.resolveExecutorDiscussionTarget(request, userReply, discussionMode);
+    if (target) {
+      return this.streamExecutorMailDiscussion(request, userReply, target, discussionMode, onEvent);
+    }
+    onEvent(inboxDiscussionDoneEvent("approval", threadId, userReply.id));
+    return { threadType: "approval", threadId, userMessageId: userReply.id };
+  }
+
+  private async streamAgentMailDiscussion(
+    request: ApprovalRequest,
+    message: string,
+    discussionMode: InboxDiscussionMode,
+    onEvent: (event: StreamInboxThreadMessageEvent) => void
+  ): Promise<StreamInboxThreadMessageResult> {
+    if (request.status !== "pending") {
+      throw new Error("Agent approval request is no longer pending.");
+    }
+    if (!request.runId || !request.nodeRunId) {
+      throw new Error("Agent approval request is missing run or node context.");
+    }
+    const run = await this.store.getBlueprintRun(request.runId);
+    if (!run) {
+      throw new Error(`Blueprint run not found: ${request.runId}`);
+    }
+    if (this.isTerminalRunStatus(run.status)) {
+      throw new Error("Run is already finished.");
+    }
+    const archive = await this.store.getRunArchive(run.id);
+    const blueprint = archive?.blueprintSnapshot;
+    if (!blueprint) {
+      throw new Error("Blueprint snapshot was not found for this approval thread.");
+    }
+    const nodeRuns = await this.store.listNodeRuns(run.id);
+    const waiting = nodeRuns.find((nodeRun) => nodeRun.id === request.nodeRunId && nodeRun.status === "waiting_approval");
+    if (!waiting) {
+      throw new Error("Requested approval is no longer waiting.");
+    }
+    if (!isAgentApprovalWaitingOutput(waiting.output)) {
+      throw new Error("Only Agent approval requests can stream Agent discussion.");
+    }
+    const node = blueprint.nodes.find((candidate) => candidate.id === waiting.nodeId);
+    if (!node || !isAgentBlueprintNode(node)) {
+      throw new Error("Agent approval node was not found.");
+    }
+
+    const now = new Date().toISOString();
+    const threadId = approvalThreadIdForRequest(request);
+    await this.store.upsertApprovalThread(approvalThreadFromRequest({ ...request, updatedAt: now }));
+    const userReply: AgentApprovalReply = {
+      id: `approval-reply-${nanoid(10)}`,
+      role: "user",
+      body: message,
+      createdAt: now
+    };
+    await this.store.appendApprovalReply({
+      id: userReply.id,
+      threadId,
+      approvalRequestId: request.id,
+      actor: "user",
+      body: userReply.body,
+      createdAt: userReply.createdAt,
+      metadata: {
+        source: "inbox_thread_stream",
+        nodeRunId: waiting.id
+      }
+    });
+    const nodeRunWithUserReply: BlueprintNodeRun = {
+      ...waiting,
+      output: {
+        ...waiting.output,
+        replies: markSelectedApprovalReplies([...waiting.output.replies, userReply], waiting.output.selectedReplyId)
+      }
+    };
+    await this.store.upsertNodeRun(nodeRunWithUserReply);
+    await this.migrationService.migratePendingNodeApproval({
+      runId: run.id,
+      nodeRun: nodeRunWithUserReply,
+      requestedByLabel: waiting.nodeLabel
+    });
+    await this.managerMailProjector.refresh(run.id);
+    onEvent({ type: "inbox_message_created", messageId: userReply.id, threadType: "approval", threadId });
+
+    const config = node.config as AgentNodeConfig;
+    const runtimeId: AgentRuntimeId = waiting.runtimeRef?.source ?? node.runtimeId ?? "openclaw";
+    const replyInput = buildAgentApprovalReplyInput(waiting.input, waiting.output.reviewOutput, waiting.output.replies, userReply, discussionMode);
+    const inputWithWorkspace = await this.withAgentWorkspaceInput(blueprint, node, replyInput);
+    const crossRoundInput = await this.withNodeCrossRoundContext({
+      run,
+      node,
+      nodeRun: nodeRunWithUserReply,
+      input: inputWithWorkspace,
+      prompt: this.resolveAgentPrompt(config, { requiresHandoff: this.hasDownstreamConsumers(blueprint, node) })
+    });
+    const taskInput: StartAgentTaskInput = {
+      blueprintRunId: run.id,
+      nodeRunId: waiting.id,
+      source: resolveAgentRuntimeSource(runtimeId),
+      agentId: runtimeId === "openclaw" ? config.openclawAgentId ?? "main" : undefined,
+      profileId: runtimeId === "hermes" ? config.profileId : undefined,
+      agentName: config.agentName,
+      prompt: crossRoundInput.prompt,
+      modelId: config.modelId,
+      permissionProfile: config.permissionProfile,
+      runtimeAccessPolicy: config.runtimeAccessPolicy,
+      workingDirectory: config.workingDirectory,
+      timeoutMs: config.timeoutMs,
+      outputSchema: buildAgentOutputEnvelopeSchema(config.outputSchema),
+      input: crossRoundInput.input,
+      skillIds: config.skillIds,
+      tools: config.tools
+    };
+
+    const result = await this.streamInboxDiscussionChat(request, userReply.id, userReply.body, taskInput, discussionMode, onEvent);
+    if (result.status !== "succeeded") {
+      await this.appendApprovalDiscussionReply(
+        request,
+        "system",
+        result.error ?? `Agent discussion ${result.status}.`,
+        {
+          source: "inbox_thread_stream",
+          nodeRunId: waiting.id,
+          status: "failed",
+          runtime: result.runtime
+        }
+      );
+      await this.managerMailProjector.refresh(run.id);
+      return { threadType: "approval", threadId, userMessageId: userReply.id };
+    }
+
+    const assistantReply: AgentApprovalReply = {
+      id: `approval-reply-${nanoid(10)}`,
+      role: "assistant",
+      body: formatAgentApprovalDiscussionBody(result.output),
+      createdAt: new Date().toISOString(),
+      canUseAsSolution: discussionMode === "candidate"
+    };
+    await this.store.appendApprovalReply({
+      id: assistantReply.id,
+      threadId,
+      approvalRequestId: request.id,
+      actor: "agent",
+      body: assistantReply.body,
+      createdAt: assistantReply.createdAt,
+      metadata: {
+        source: "inbox_thread_stream",
+        nodeRunId: waiting.id,
+        inboxDiscussionMode: discussionMode,
+        candidate: discussionMode === "candidate",
+        agentOutput: result.output,
+        runtime: result.runtime
+      }
+    });
+    const latestWaiting = (await this.store.listNodeRuns(run.id))
+      .find((nodeRun) => nodeRun.id === waiting.id && nodeRun.status === "waiting_approval");
+    const output = latestWaiting?.output;
+    if (!latestWaiting || !isAgentApprovalWaitingOutput(output)) {
+      throw new Error("Agent approval was resolved before the discussion reply could be saved.");
+    }
+    const nodeRunWithAssistantReply: BlueprintNodeRun = {
+      ...latestWaiting,
+      output: {
+        ...output,
+        replies: markSelectedApprovalReplies([...output.replies, assistantReply], output.selectedReplyId)
+      },
+      usage: result.doneEvent?.usage ?? latestWaiting.usage
+    };
+    await this.store.upsertNodeRun(nodeRunWithAssistantReply);
+    await this.migrationService.migratePendingNodeApproval({
+      runId: run.id,
+      nodeRun: nodeRunWithAssistantReply,
+      requestedByLabel: waiting.nodeLabel
+    });
+    await this.managerMailProjector.refresh(run.id);
+    if (discussionMode === "candidate") {
+      onEvent({ type: "inbox_candidate_created", replyId: assistantReply.id, threadType: "approval", threadId });
+    }
+    return { threadType: "approval", threadId, userMessageId: userReply.id, assistantMessageId: assistantReply.id };
+  }
+
+  private async resolveApprovalThreadRequest(threadId: string): Promise<ApprovalRequest | undefined> {
+    const requests = await this.store.listApprovalRequests();
+    const matching = requests.filter((request) => request.id === threadId || approvalThreadIdForRequest(request) === threadId);
+    return matching
+      .sort((left, right) => {
+        if (left.status === "pending" && right.status !== "pending") return -1;
+        if (right.status === "pending" && left.status !== "pending") return 1;
+        return right.revision - left.revision || approvalRequestTimestamp(right) - approvalRequestTimestamp(left);
+      })[0];
+  }
+
+  private async streamExecutorMailDiscussion(
+    request: ApprovalRequest,
+    userReply: ApprovalReply,
+    target: ExecutorDiscussionTarget,
+    discussionMode: InboxDiscussionMode,
+    onEvent: (event: StreamInboxThreadMessageEvent) => void
+  ): Promise<StreamInboxThreadMessageResult> {
+    const threadId = approvalThreadIdForRequest(request);
+    const result = await this.streamInboxDiscussionChat(request, userReply.id, userReply.body, target.taskInput, discussionMode, onEvent);
+    if (result.status !== "succeeded") {
+      await this.appendApprovalDiscussionReply(
+        request,
+        "system",
+        result.error ?? `Executor discussion ${result.status}.`,
+        {
+          ...target.metadata,
+          status: "failed",
+          runtime: result.runtime
+        }
+      );
+      if (request.runId) {
+        await this.managerMailProjector.refresh(request.runId);
+      }
+      return { threadType: "approval", threadId, userMessageId: userReply.id };
+    }
+
+    const assistantReply = await this.appendApprovalDiscussionReply(
+      request,
+      target.actor,
+      formatAgentApprovalDiscussionBody(result.output),
+      {
+        ...target.metadata,
+        status: "succeeded",
+        inboxDiscussionMode: discussionMode,
+        candidate: discussionMode === "candidate",
+        agentOutput: result.output,
+        runtime: result.runtime
+      }
+    );
+    if (request.runId) {
+      await this.managerMailProjector.refresh(request.runId);
+    }
+    if (discussionMode === "candidate") {
+      onEvent({ type: "inbox_candidate_created", replyId: assistantReply.id, threadType: "approval", threadId });
+    }
+    return { threadType: "approval", threadId, userMessageId: userReply.id, assistantMessageId: assistantReply.id };
+  }
+
+  private async streamInboxDiscussionChat(
+    request: ApprovalRequest,
+    userMessageId: string,
+    visibleUserMessage: string,
+    taskInput: StartAgentTaskInput,
+    discussionMode: InboxDiscussionMode,
+    onEvent: (event: StreamInboxThreadMessageEvent) => void
+  ): Promise<InboxDiscussionChatResult> {
+    const threadId = approvalThreadIdForRequest(request);
+    const chatSession = await this.ensureApprovalDiscussionChatSession(request, taskInput);
+    const prompt = formatInboxDiscussionChatPrompt(request, taskInput, {
+      chatSession,
+      discussionMode,
+      visibleUserMessage
+    });
+    const userChatMessage = await this.store.appendChatMessage({
+      sessionId: chatSession.id,
+      role: "user",
+      content: formatInboxDiscussionVisibleUserMessage(visibleUserMessage),
+      harnessId: chatSession.harnessId,
+      modelId: taskInput.modelId,
+      status: "sent",
+      id: `chat-${userMessageId}`
+    });
+    const assistantChatMessage = await this.store.appendChatMessage({
+      sessionId: chatSession.id,
+      role: "assistant",
+      content: "",
+      harnessId: chatSession.harnessId,
+      modelId: taskInput.modelId,
+      status: "streaming"
+    });
+    let session = chatSession;
+    let sessionKey = session.nativeSessionId ?? "";
+    const attemptedNativeResume = Boolean(sessionKey);
+    let streamedOutput = "";
+    let doneEvent: Extract<ChatStreamEvent, { type: "done" }> | undefined;
+
+    try {
+      if (session.harnessId === "openclaw" && !sessionKey) {
+        const nativeSession = await this.adapter.createChatSession({ agentId: session.agentId });
+        sessionKey = nativeSession.sessionKey;
+        session = await this.store.updateChatSession(session.id, {
+          nativeSessionId: sessionKey,
+          nativeSessionState: "resumable",
+          status: "active"
+        }) ?? session;
+        await this.updateApprovalDiscussionSessionFromChat(request, session);
+      }
+
+      await this.adapter.streamChatMessage(
+        {
+          sessionKey,
+          source: taskInput.source,
+          message: prompt,
+          attachments: [],
+          modelId: taskInput.modelId,
+          permissionMode: chatPermissionModeForTaskInput(taskInput),
+          idempotencyKey: userChatMessage.id,
+          timeoutMs: taskInput.timeoutMs,
+          skillIds: taskInput.skillIds as HarnessSkillId[] | undefined
+        },
+        (event) => {
+          if (event.type === "delta") {
+            streamedOutput = event.replace ? event.text : `${streamedOutput}${event.text}`;
+          }
+          if (event.type === "done") {
+            doneEvent = event;
+          }
+          onEvent(event);
+        }
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Inbox discussion chat failed.";
+      const nativeMissing = attemptedNativeResume && isNativeResumeFailure(message);
+      await this.store.updateChatMessage(chatSession.id, assistantChatMessage.id, {
+        content: message,
+        status: "failed"
+      });
+      session = await this.store.updateChatSession(chatSession.id, {
+        status: nativeMissing ? "native_missing" : "failed",
+        nativeSessionState: nativeMissing ? "missing" : session.nativeSessionState
+      }) ?? session;
+      await this.updateApprovalDiscussionSessionFromChat(request, session);
+      onEvent({ type: "error", message });
+      return {
+        status: "failed",
+        error: message,
+        runtime: {
+          source: taskInput.source,
+          status: "failed",
+          error: message,
+          nativeSessionState: nativeMissing ? "missing" : session.nativeSessionState
+        }
+      };
+    }
+
+    if (!doneEvent) {
+      const message = "Inbox discussion chat completed without a final runtime event.";
+      await this.store.updateChatMessage(chatSession.id, assistantChatMessage.id, {
+        content: streamedOutput || message,
+        status: streamedOutput ? "sent" : "failed"
+      });
+      session = await this.store.updateChatSession(chatSession.id, {
+        status: streamedOutput ? "active" : "failed"
+      }) ?? session;
+      await this.updateApprovalDiscussionSessionFromChat(request, session);
+      return {
+        status: streamedOutput ? "succeeded" : "failed",
+        output: streamedOutput,
+        error: streamedOutput ? undefined : message,
+        runtime: {
+          source: taskInput.source,
+          status: streamedOutput ? "succeeded" : "failed",
+          error: streamedOutput ? undefined : message
+        }
+      };
+    }
+
+    const output = doneEvent.output ?? streamedOutput ?? doneEvent.error;
+    const nativeMissing = attemptedNativeResume && doneEvent.status === "failed" && isNativeResumeFailure(doneEvent.error);
+    await this.store.updateChatMessage(chatSession.id, assistantChatMessage.id, {
+      content: output ?? "",
+      status: doneEvent.status === "failed" || doneEvent.status === "cancelled" ? "failed" : "sent",
+      modelId: taskInput.modelId,
+      runtimeRef: {
+        taskId: doneEvent.taskId,
+        runId: doneEvent.runId,
+        sessionKey: doneEvent.sessionKey,
+        source: doneEvent.source,
+        status: doneEvent.status,
+        updatedAt: doneEvent.updatedAt,
+        error: doneEvent.error,
+        usage: doneEvent.usage,
+        timings: doneEvent.timings
+      }
+    });
+    session = await this.store.updateChatSession(chatSession.id, {
+      status: nativeMissing ? "native_missing" : "active",
+      nativeSessionState: nativeMissing ? "missing" : doneEvent.sessionKey ? "resumable" : session.nativeSessionState,
+      ...(doneEvent.sessionKey ? { nativeSessionId: doneEvent.sessionKey } : {})
+    }) ?? session;
+    await this.updateApprovalDiscussionSessionFromChat(request, session);
+    return {
+      status: doneEvent.status,
+      output,
+      error: doneEvent.error,
+      doneEvent,
+      runtime: chatDoneRuntimeMetadata(doneEvent)
+    };
+  }
+
+  private async ensureApprovalDiscussionChatSession(
+    request: ApprovalRequest,
+    taskInput: StartAgentTaskInput
+  ): Promise<HivewardChatSession> {
+    const threadId = approvalThreadIdForRequest(request);
+    const thread = (await this.store.listApprovalThreads()).find((candidate) => candidate.id === threadId);
+    const existingSessionId = thread?.discussionSession?.chatSessionId;
+    const existing = existingSessionId ? await this.store.getChatSession(existingSessionId) : undefined;
+    if (existing) return existing;
+
+    const chatSession = await this.store.createChatSession({
+      harnessId: harnessIdForRuntimeSource(taskInput.source),
+      title: `Inbox discussion: ${request.title}`,
+      nativeSessionId: thread?.discussionSession?.nativeSessionId,
+      modelId: taskInput.modelId,
+      agentId: taskInput.agentId,
+      permissionMode: chatPermissionModeForTaskInput(taskInput),
+      mode: "chat"
+    });
+    await this.updateApprovalDiscussionSessionFromChat(request, chatSession);
+    return chatSession;
+  }
+
+  private async updateApprovalDiscussionSessionFromChat(
+    request: ApprovalRequest,
+    chatSession: HivewardChatSession
+  ): Promise<void> {
+    const threadId = approvalThreadIdForRequest(request);
+    const now = new Date().toISOString();
+    const existing = (await this.store.listApprovalThreads()).find((candidate) => candidate.id === threadId);
+    await this.store.upsertApprovalThread({
+      ...(existing ?? approvalThreadFromRequest(request)),
+      updatedAt: now,
+      discussionSession: {
+        threadType: "approval",
+        threadId,
+        chatSessionId: chatSession.id,
+        harnessId: chatSession.harnessId,
+        agentId: chatSession.agentId,
+        modelId: chatSession.modelId,
+        nativeSessionId: chatSession.nativeSessionId,
+        nativeSessionState: chatSession.nativeSessionState ?? (chatSession.nativeSessionId ? "resumable" : "unknown"),
+        status: chatSession.status === "ended" || chatSession.status === "failed" || chatSession.status === "native_missing"
+          ? chatSession.status
+          : "active",
+        createdAt: existing?.discussionSession?.createdAt ?? chatSession.createdAt,
+        updatedAt: now
+      }
+    });
+  }
+
+  private async isExecutorBackedApprovalRequest(
+    request: ApprovalRequest,
+    targetKind?: "agent_approval"
+  ): Promise<boolean> {
+    const target = await this.resolveExecutorDiscussionTarget(request);
+    return targetKind ? target?.metadata.executorKind === targetKind : Boolean(target);
+  }
+
+  private async resolveExecutorDiscussionTarget(
+    request: ApprovalRequest,
+    userReply?: ApprovalReply,
+    discussionMode: InboxDiscussionMode = "reply"
+  ): Promise<ExecutorDiscussionTarget | undefined> {
+    if (request.status !== "pending") return undefined;
+    if (!request.runId) return undefined;
+
+    const run = await this.store.getBlueprintRun(request.runId);
+    if (!run) return undefined;
+    if (this.isTerminalRunStatus(run.status)) {
+      throw new Error("Run is already finished.");
+    }
+    const archive = await this.store.getRunArchive(run.id);
+    const blueprint = archive?.blueprintSnapshot;
+    if (!blueprint) return undefined;
+
+    const nodeRuns = await this.store.listNodeRuns(run.id);
+    if (request.kind === "agent_proposal") {
+      const waiting = request.nodeRunId
+        ? nodeRuns.find((nodeRun) => nodeRun.id === request.nodeRunId && nodeRun.status === "waiting_approval")
+        : undefined;
+      const node = waiting ? blueprint.nodes.find((candidate) => candidate.id === waiting.nodeId) : undefined;
+      return waiting && isAgentApprovalWaitingOutput(waiting.output) && node && isAgentBlueprintNode(node)
+        ? {
+            actor: "agent",
+            taskInput: {} as StartAgentTaskInput,
+            metadata: {
+              executorKind: "agent_approval",
+              nodeRunId: waiting.id,
+              nodeId: waiting.nodeId
+            }
+          }
+        : undefined;
+    }
+
+    if (!userReply) return undefined;
+    if (request.kind === "iteration_requirement_plan") {
+      return this.resolveRequirementPlanDiscussionTarget(blueprint, run, request, userReply, discussionMode);
+    }
+    if (request.kind === "manager_release_report") {
+      return this.resolveManagerReleaseReportDiscussionTarget(blueprint, run, request, userReply, discussionMode);
+    }
+    if (request.kind === "function_node") {
+      return this.resolveFunctionNodeDiscussionTarget(blueprint, run, request, userReply, discussionMode, nodeRuns);
+    }
+    return undefined;
+  }
+
+  private async resolveRequirementPlanDiscussionTarget(
+    blueprint: BlueprintDefinition,
+    run: BlueprintRun,
+    request: ApprovalRequest,
+    userReply: ApprovalReply,
+    discussionMode: InboxDiscussionMode
+  ): Promise<ExecutorDiscussionTarget | undefined> {
+    if (!request.roundId) return undefined;
+    const topManager = this.iterationService.findTopSelfIterationManager(blueprint);
+    if (!topManager) return undefined;
+    const round = (await this.store.listIterationRounds({ runId: run.id }))
+      .find((candidate) => candidate.id === request.roundId);
+    if (!round) return undefined;
+    const session = (await this.store.listIterationSessions(run.id))
+      .find((candidate) => candidate.id === round.sessionId);
+    const managerConfig = topManager.config as ManagerNodeConfig;
+    const requirementAgent = this.resolveConfiguredPreflightAgent(blueprint, managerConfig.requirementAgentNodeId)
+      ?? this.resolveSystemInterfaceAgent(blueprint, topManager, selfIterationRequirementInterfaceSlot);
+    const context = session
+      ? await this.managerContextService.buildRoundStartContext({
+          run,
+          session,
+          round,
+          managerNode: topManager,
+          humanFeedback: userReply.body
+        })
+      : undefined;
+    const runContext = context
+      ? this.managerContextService.buildManagerInjectedContext(context, {
+          mode: "revise_plan",
+          roundStatus: round.status,
+          research: {
+            status: round.researchStatus,
+            summary: round.researchSummary,
+            source: round.researchStatus
+          }
+        })
+      : undefined;
+    const discussion = await this.buildApprovalExecutorDiscussionInput(request, userReply, discussionMode);
+    const baseInput = {
+      ...discussion,
+      task: "approval_thread_discussion",
+      approvalKind: request.kind,
+      roundNumber: round.roundNumber,
+      previousRequirement: request.body,
+      revisionFeedback: userReply.body,
+      runContext
+    };
+
+    if (requirementAgent) {
+      const config = requirementAgent.config;
+      const runtimeId = requirementAgent.runtimeId ?? "openclaw";
+      return {
+        actor: "agent",
+        taskInput: {
+          blueprintRunId: run.id,
+          nodeRunId: request.nodeRunId ?? `approval-discussion-${request.id}`,
+          source: resolveAgentRuntimeSource(runtimeId),
+          agentId: runtimeId === "openclaw" ? config.openclawAgentId ?? "main" : undefined,
+          profileId: runtimeId === "hermes" ? config.profileId : undefined,
+          agentName: config.agentName,
+          prompt: this.resolveApprovalDiscussionPrompt(
+            this.resolveAgentPrompt(config, { requiresHandoff: true }),
+            request.kind,
+            discussionMode
+          ),
+          modelId: config.modelId,
+          permissionProfile: config.permissionProfile,
+          runtimeAccessPolicy: config.runtimeAccessPolicy,
+          workingDirectory: config.workingDirectory,
+          timeoutMs: config.timeoutMs,
+          outputSchema: config.outputSchema ? buildAgentOutputEnvelopeSchema(config.outputSchema) : humanReportEnvelopeSchemaBase,
+          input: baseInput,
+          skillIds: config.skillIds,
+          tools: config.tools
+        },
+        metadata: {
+          executorKind: "requirement_agent",
+          nodeId: requirementAgent.id,
+          roundId: round.id
+        }
+      };
+    }
+
+    return this.buildManagerDiscussionTarget({
+      blueprint,
+      run,
+      request,
+      node: topManager,
+      userReply,
+      input: baseInput,
+      prompt: this.resolveManagerPreflightPrompt(managerConfig, "revise_plan"),
+      executorKind: "requirement_manager",
+      discussionMode
+    });
+  }
+
+  private async resolveManagerReleaseReportDiscussionTarget(
+    blueprint: BlueprintDefinition,
+    run: BlueprintRun,
+    request: ApprovalRequest,
+    userReply: ApprovalReply,
+    discussionMode: InboxDiscussionMode
+  ): Promise<ExecutorDiscussionTarget | undefined> {
+    const managerNode = request.requestedBy.nodeId
+      ? blueprint.nodes.find((node) => node.id === request.requestedBy.nodeId)
+      : undefined;
+    const topManager = managerNode?.type === "manager"
+      ? managerNode
+      : this.iterationService.findTopSelfIterationManager(blueprint);
+    if (!topManager || topManager.type !== "manager") return undefined;
+
+    const round = request.roundId
+      ? (await this.store.listIterationRounds({ runId: run.id })).find((candidate) => candidate.id === request.roundId)
+      : undefined;
+    const session = round
+      ? (await this.store.listIterationSessions(run.id)).find((candidate) => candidate.id === round.sessionId)
+      : undefined;
+    const context = round && session
+      ? await this.managerContextService.buildRoundStartContext({
+          run,
+          session,
+          round,
+          managerNode: topManager,
+          humanFeedback: userReply.body
+        })
+      : undefined;
+    const runContext = context && round
+      ? this.managerContextService.buildManagerInjectedContext(context, {
+          mode: "revise_report",
+          roundStatus: round.status
+        })
+      : undefined;
+    const reports = request.roundId
+      ? (await this.store.listReleaseReports(run.id)).filter((report) => report.roundId === request.roundId)
+      : [];
+    const currentReport = reports.find((report) => report.approvalRequestId === request.id || report.id === request.payloadRef) ?? reports.at(-1);
+    const discussion = await this.buildApprovalExecutorDiscussionInput(request, userReply, discussionMode);
+    const config = topManager.config as ManagerNodeConfig;
+    return this.buildManagerDiscussionTarget({
+      blueprint,
+      run,
+      request,
+      node: topManager,
+      userReply,
+      input: {
+        ...discussion,
+        task: "approval_thread_discussion",
+        approvalKind: request.kind,
+        roundNumber: round?.roundNumber,
+        releaseReport: currentReport,
+        previousReport: request.body,
+        revisionFeedback: userReply.body,
+        runContext
+      },
+      prompt: this.resolveManagerReleaseReportPrompt(config, { revision: true }),
+      executorKind: "release_report_manager",
+      discussionMode
+    });
+  }
+
+  private async resolveFunctionNodeDiscussionTarget(
+    blueprint: BlueprintDefinition,
+    run: BlueprintRun,
+    request: ApprovalRequest,
+    userReply: ApprovalReply,
+    discussionMode: InboxDiscussionMode,
+    nodeRuns: BlueprintNodeRun[]
+  ): Promise<ExecutorDiscussionTarget | undefined> {
+    const nodeRun = request.nodeRunId
+      ? nodeRuns.find((candidate) => candidate.id === request.nodeRunId)
+      : undefined;
+    const node = nodeRun
+      ? blueprint.nodes.find((candidate) => candidate.id === nodeRun.nodeId)
+      : request.requestedBy.nodeId
+        ? blueprint.nodes.find((candidate) => candidate.id === request.requestedBy.nodeId)
+        : undefined;
+    if (!node || node.disabled) return undefined;
+    const discussion = await this.buildApprovalExecutorDiscussionInput(request, userReply, discussionMode);
+    const input = {
+      ...discussion,
+      task: "approval_thread_discussion",
+      approvalKind: request.kind,
+      node: {
+        id: node.id,
+        label: node.config.label,
+        type: node.type
+      },
+      nodeRun: nodeRun ? {
+        id: nodeRun.id,
+        status: nodeRun.status,
+        input: nodeRun.input,
+        output: nodeRun.output,
+        error: nodeRun.error,
+        runtimeRef: nodeRun.runtimeRef
+      } : undefined
+    };
+
+    if (node.type === "manager" && this.isAgentDrivenManager(node)) {
+      return this.buildManagerDiscussionTarget({
+        blueprint,
+        run,
+        request,
+        node,
+        userReply,
+        input,
+        prompt: this.resolveManagerPrompt(node.config as ManagerNodeConfig),
+        executorKind: "function_manager",
+        discussionMode
+      });
+    }
+
+    if (node.type === "summary" && isHarnessSummaryMode(node.config as SummaryNodeConfig)) {
+      const config = node.config as SummaryNodeConfig;
+      const runtimeId = resolveSummaryRuntimeId(config);
+      return {
+        actor: "agent",
+        taskInput: {
+          blueprintRunId: run.id,
+          nodeRunId: nodeRun?.id ?? `approval-discussion-${request.id}`,
+          source: resolveAgentRuntimeSource(runtimeId),
+          agentId: runtimeId === "openclaw" ? "main" : undefined,
+          profileId: runtimeId === "hermes" ? config.profileId : undefined,
+          agentName: "summary-agent",
+          prompt: this.resolveApprovalDiscussionPrompt(config.prompt?.trim() || defaultSummaryHarnessPrompt, request.kind, discussionMode),
+          modelId: config.modelId,
+          runtimeAccessPolicy: config.runtimeAccessPolicy,
+          outputSchema: humanReportEnvelopeSchemaBase,
+          input,
+          tools: []
+        },
+        metadata: {
+          executorKind: "function_summary",
+          nodeId: node.id,
+          ...(nodeRun ? { nodeRunId: nodeRun.id } : {})
+        }
+      };
+    }
+
+    return undefined;
+  }
+
+  private async buildManagerDiscussionTarget(input: {
+    blueprint: BlueprintDefinition;
+    run: BlueprintRun;
+    request: ApprovalRequest;
+    node: BlueprintNode;
+    userReply: ApprovalReply;
+    input: Record<string, unknown>;
+    prompt: string;
+    executorKind: string;
+    discussionMode: InboxDiscussionMode;
+  }): Promise<ExecutorDiscussionTarget> {
+    const config = input.node.config as ManagerNodeConfig;
+    const runtimeId = this.resolveManagerRuntimeId(input.node);
+    return {
+      actor: "manager",
+      taskInput: {
+        blueprintRunId: input.run.id,
+        nodeRunId: input.request.nodeRunId ?? `approval-discussion-${input.request.id}`,
+        source: resolveAgentRuntimeSource(runtimeId),
+        agentId: runtimeId === "openclaw" ? config.openclawAgentId ?? "main" : undefined,
+        profileId: runtimeId === "hermes" ? config.profileId : undefined,
+        agentName: config.agentName?.trim() || defaultManagerAgentName,
+        prompt: this.resolveApprovalDiscussionPrompt(input.prompt, input.request.kind, input.discussionMode),
+        modelId: config.modelId,
+        permissionProfile: config.permissionProfile,
+        runtimeAccessPolicy: config.runtimeAccessPolicy,
+        workingDirectory: config.workingDirectory,
+        timeoutMs: config.timeoutMs,
+        outputSchema: humanReportEnvelopeSchemaBase,
+        input: input.input,
+        skillIds: config.skillIds,
+        tools: config.tools ?? []
+      },
+      metadata: {
+        executorKind: input.executorKind,
+        nodeId: input.node.id,
+        ...(input.request.roundId ? { roundId: input.request.roundId } : {})
+      }
+    };
+  }
+
+  private async buildApprovalExecutorDiscussionInput(
+    request: ApprovalRequest,
+    userReply: ApprovalReply,
+    discussionMode: InboxDiscussionMode
+  ): Promise<Record<string, unknown>> {
+    const replies = await this.store.listApprovalReplies({ threadId: approvalThreadIdForRequest(request) });
+    const conversation = replies.map((reply) => ({
+      id: reply.id,
+      role: reply.actor,
+      body: reply.body,
+      createdAt: reply.createdAt
+    }));
+    return {
+      approvalThread: {
+        threadId: approvalThreadIdForRequest(request),
+        requestId: request.id,
+        kind: request.kind,
+        title: request.title,
+        body: request.body,
+        revision: request.revision,
+        status: request.status
+      },
+      approvalChat: {
+        latestUserReply: userReply.body,
+        conversation,
+        requestedOutput: discussionMode,
+        candidateRequested: discussionMode === "candidate",
+        instruction: [
+          "This is a HiveWard inbox discussion reply.",
+          discussionMode === "candidate"
+            ? "The human explicitly asked for a formal candidate artifact. Produce a full replacement candidate draft for this approval thread."
+            : "The human did not explicitly ask for a formal candidate artifact. Reply as a normal short conversation, clarification, explanation, or tradeoff discussion.",
+          "Do not approve, reject, rerun, schedule, complete, terminate, or otherwise advance workflow lifecycle.",
+          discussionMode === "candidate"
+            ? "The platform will publish your answer as an assistant candidate; the human must explicitly select it and use Pass/Reject/Revise controls for lifecycle actions."
+            : "The platform will persist your answer as a discussion reply, not as a selectable candidate. You may naturally offer to prepare a formal candidate if the direction is confirmed."
+        ].join(" ")
+      }
+    };
+  }
+
+  private resolveApprovalDiscussionPrompt(basePrompt: string, kind: ApprovalRequest["kind"], discussionMode: InboxDiscussionMode): string {
+    return [
+      basePrompt,
+      "",
+      "Inbox discussion contract:",
+      `- Approval kind: ${kind}.`,
+      "- This call is caused by the human pressing Reply, not by Pass, Reject, or Revise.",
+      `- Discussion mode: ${discussionMode}.`,
+      discussionMode === "candidate"
+        ? "- The latest inbox reply explicitly asks for a formal candidate artifact. Return the full candidate draft in humanReportMd."
+        : "- The latest inbox reply is ordinary discussion. Return a concise conversational answer in humanReportMd, not a full candidate/report/final artifact.",
+      "- Do not claim that the approval has passed or that execution has advanced.",
+      "- Return an AgentOutputEnvelope. Put the human-readable answer or candidate draft in humanReportMd.",
+      discussionMode === "candidate"
+        ? "- Write the full candidate draft, not a one-line acknowledgement."
+        : "- If the direction seems viable, you may end by offering to produce a formal candidate after the human confirms."
+    ].join("\n");
+  }
+
+  private resolveConfiguredPreflightAgent(
+    blueprint: BlueprintDefinition,
+    nodeId: string | undefined
+  ): BlueprintNode & { type: "agent"; config: AgentNodeConfig } | undefined {
+    const targetId = nodeId?.trim();
+    if (!targetId) return undefined;
+    const target = blueprint.nodes.find((node) => node.id === targetId);
+    if (!target || target.disabled || !isAgentBlueprintNode(target)) return undefined;
+    return target;
+  }
+
+  private resolveSystemInterfaceAgent(
+    blueprint: BlueprintDefinition,
+    managerNode: BlueprintNode,
+    interfaceSlot: number
+  ): BlueprintNode & { type: "agent"; config: AgentNodeConfig } | undefined {
+    const target = this.resolveManagerSystemInterfaceTarget(blueprint, managerNode, interfaceSlot);
+    if (!target || target.disabled) return undefined;
+    if (isAgentBlueprintNode(target)) return target;
+    if (target.type !== "manager_slot") return undefined;
+
+    const childAgents = blueprint.nodes.filter(
+      (node): node is BlueprintNode & { type: "agent"; config: AgentNodeConfig } =>
+        node.parentId === target.id && !node.disabled && isAgentBlueprintNode(node)
+    );
+    if (childAgents.length === 0) return undefined;
+
+    const entryEdge = blueprint.edges.find(
+      (edge) => edge.source === target.id && isManagerSlotInnerOutHandle(edge.sourceHandle)
+    );
+    return childAgents.find((node) => node.id === entryEdge?.target) ?? childAgents[0];
+  }
+
+  private resolveManagerSystemInterfaceTarget(
+    blueprint: BlueprintDefinition,
+    managerNode: BlueprintNode,
+    interfaceSlot: number
+  ): BlueprintNode | undefined {
+    const edge = blueprint.edges.find(
+      (candidate) => candidate.source === managerNode.id && candidate.sourceHandle === `${managerOutHandlePrefix}${interfaceSlot}`
+    );
+    return edge ? blueprint.nodes.find((node) => node.id === edge.target) : undefined;
+  }
+
+  private async appendApprovalDiscussionReply(
+    request: ApprovalRequest,
+    actor: "user" | "agent" | "manager" | "system",
+    body: string,
+    metadata?: Record<string, unknown>
+  ) {
+    const now = new Date().toISOString();
+    const threadId = approvalThreadIdForRequest(request);
+    await this.store.upsertApprovalThread(approvalThreadFromRequest({ ...request, updatedAt: now }));
+    return this.store.appendApprovalReply({
+      id: `approval-reply-${nanoid(10)}`,
+      threadId,
+      approvalRequestId: request.id,
+      actor,
+      body,
+      createdAt: now,
+      ...(metadata ? { metadata } : {})
+    });
   }
 
   private async rerunAgentApprovalForRequestedChanges(
@@ -1694,6 +2818,14 @@ export class BlueprintWorker {
     artifacts: Array<{ id: string; title?: string; kind: string; downloadUrl?: string; relativePath?: string; storagePath?: string }>;
     agentReports: AgentHumanReport[];
     agentHandoffs: AgentHandoff[];
+    revision?: {
+      feedback: string;
+      previousReport?: {
+        title: string;
+        summary: string;
+        version: number;
+      };
+    };
   }): Promise<string> {
     const config = input.managerNode.config as ManagerNodeConfig;
     const runtimeId = this.resolveManagerRuntimeId(input.managerNode);
@@ -1723,7 +2855,8 @@ export class BlueprintWorker {
       agentHandoffs: input.agentHandoffs.map((handoff) => ({
         nodeId: handoff.nodeId,
         payload: handoff.payload
-      }))
+      })),
+      revision: input.revision
     };
     let nodeRun = await this.createRunningNodeRun(input.blueprint, input.run, input.managerNode, taskInput);
     const { result, runtimeRef } = await this.runAgentTask({
@@ -1733,7 +2866,7 @@ export class BlueprintWorker {
       agentId: runtimeId === "openclaw" ? config.openclawAgentId ?? "main" : undefined,
       profileId: runtimeId === "hermes" ? config.profileId : undefined,
       agentName: config.agentName?.trim() || defaultManagerAgentName,
-      prompt: this.resolveManagerReleaseReportPrompt(config),
+      prompt: this.resolveManagerReleaseReportPrompt(config, { revision: Boolean(input.revision) }),
       modelId: config.modelId,
       permissionProfile: config.permissionProfile,
       runtimeAccessPolicy: config.runtimeAccessPolicy,
@@ -4577,39 +5710,40 @@ export class BlueprintWorker {
     input: StartAgentTaskInput,
     onStarted?: (runtimeRef: RuntimeObjectRef) => Promise<void>
   ): Promise<{ result: AgentTaskResult; runtimeRef: RuntimeObjectRef }> {
-    const started = await this.adapter.startAgentTask(input);
-    const source = started.source;
-    const runtimeRef: RuntimeObjectRef = {
-      source,
-      sourceId: started.taskId,
-      sourceUpdatedAt: started.updatedAt,
-      taskId: started.taskId,
-      runId: started.runId,
-      sessionKey: started.sessionKey,
-      usageRef: undefined
+    let runtimeRef: RuntimeObjectRef | undefined;
+    const timelineState: NodeRuntimeTimelineState = {
+      id: `timeline-${input.nodeRunId}-runtime`,
+      output: ""
     };
-    await onStarted?.(runtimeRef);
+    let eventWriteError: unknown;
+    let eventWrites = Promise.resolve();
+    const enqueueEventWrite = (write: () => Promise<void>) => {
+      eventWrites = eventWrites.then(write).catch((error) => {
+        eventWriteError ??= error;
+      });
+    };
 
-    if (started.status === "failed" || started.status === "cancelled") {
-      return {
-        result: {
-          ...started,
-          output: undefined,
-          usage: undefined
-        },
-        runtimeRef
-      };
+    const result = await this.adapter.streamAgentTask(input, (event) => {
+      if (event.type === "started") {
+        runtimeRef = runtimeRefFromStartedEvent(event);
+        enqueueEventWrite(async () => {
+          await onStarted?.(runtimeRef!);
+          await this.appendNodeRuntimeTimelineItem(input, timelineState, event, runtimeRef!);
+        });
+        return;
+      }
+      if (event.type === "runtime_state" || event.type === "delta" || event.type === "done") {
+        enqueueEventWrite(async () => {
+          await this.appendNodeRuntimeTimelineItem(input, timelineState, event, runtimeRef);
+        });
+      }
+    });
+    await eventWrites;
+    if (eventWriteError) {
+      throw eventWriteError;
     }
 
-    const result = await this.adapter.waitForAgentTask({
-      nodeRunId: input.nodeRunId,
-      taskId: started.taskId,
-      runId: started.runId,
-      sessionKey: started.sessionKey,
-      source,
-      agentId: input.agentId,
-      modelId: input.modelId
-    });
+    runtimeRef ??= runtimeRefFromTaskResult(result);
 
     return {
       result,
@@ -4623,6 +5757,31 @@ export class BlueprintWorker {
         usageRef: result.usage?.id
       }
     };
+  }
+
+  private async appendNodeRuntimeTimelineItem(
+    input: StartAgentTaskInput,
+    state: NodeRuntimeTimelineState,
+    event: Extract<ChatStreamEvent, { type: "started" | "runtime_state" | "delta" | "done" }>,
+    runtimeRef: RuntimeObjectRef | undefined
+  ): Promise<void> {
+    updateNodeRuntimeTimelineState(state, event);
+    if (state.sequence === undefined) {
+      const existing = (await this.store.listRunTimeline(input.blueprintRunId)).find((item) => item.id === state.id);
+      state.sequence = existing?.sequence;
+    }
+    const item = await this.store.appendRunTimelineItem({
+      id: state.id,
+      ...(state.sequence !== undefined ? { sequence: state.sequence } : {}),
+      runId: input.blueprintRunId,
+      createdAt: new Date().toISOString(),
+      actorLabel: input.agentName,
+      kind: "node_runtime",
+      title: nodeRuntimeTimelineTitle(input, state),
+      body: nodeRuntimeTimelineBody(input, state, runtimeRef),
+      payloadRef: input.nodeRunId
+    });
+    state.sequence = item.sequence;
   }
 
   private async event(
@@ -4696,7 +5855,7 @@ function isAgentApprovalSelectionAvailable(replies: AgentApprovalReply[], select
 function assertAgentApprovalSelection(output: AgentApprovalWaitingOutput, selectedReplyId: string): void {
   if (isReviewOutputSelectionId(selectedReplyId)) return;
   if (output.replies.some((reply) => reply.id === selectedReplyId && reply.role === "assistant")) return;
-  throw new Error("Only assistant approval replies can be selected.");
+  throw new Error("Only assistant approval replies can be selected as candidates.");
 }
 
 function applyAgentApprovalSelection(
@@ -4748,34 +5907,269 @@ function markSelectedApprovalReplies(
   return replies.map((reply) => {
     const { selected: _selected, ...unselectedReply } = reply;
     return selectedReplyId && reply.id === selectedReplyId
-      ? { ...unselectedReply, selected: true }
+      ? { ...unselectedReply, canUseAsSolution: true, selected: true }
       : unselectedReply;
   });
+}
+
+function inboxThreadStreamKey(threadType: InboxThreadType, threadId: string): string {
+  return `${threadType}:${threadId}`;
+}
+
+function harnessIdForRuntimeSource(source: StartAgentTaskInput["source"]): HarnessId {
+  return source === "claude" ? "claudeCode" : source;
+}
+
+function chatPermissionModeForTaskInput(input: StartAgentTaskInput): "safe" | "full_access" {
+  return input.permissionProfile === "workspace_write" || input.runtimeAccessPolicy?.filesystem === "workspace_write"
+    ? "full_access"
+    : "safe";
+}
+
+const inboxDiscussionPromptBodyMaxChars = 1_200;
+
+function formatInboxDiscussionChatPrompt(
+  request: ApprovalRequest,
+  input: StartAgentTaskInput,
+  options: {
+    chatSession: HivewardChatSession;
+    discussionMode: InboxDiscussionMode;
+    visibleUserMessage: string;
+  }
+): string {
+  const needsWorkPrompt = options.discussionMode === "candidate" || options.chatSession.nativeSessionState === "missing";
+  return needsWorkPrompt
+    ? formatInboxDiscussionWorkPrompt(input)
+    : formatInboxDiscussionReplyPrompt(request, options.visibleUserMessage, options.chatSession);
+}
+
+function formatInboxDiscussionWorkPrompt(input: StartAgentTaskInput): string {
+  return [
+    input.prompt,
+    "",
+    "HiveWard inbox discussion payload:",
+    formatJsonForApprovalReply(input.input),
+    "",
+    "Session contract:",
+    "- Continue this same native chat session when a session key is provided.",
+    "- Treat the latest approvalChat.latestUserReply as the user's newest message.",
+    "- Do not approve, reject, schedule, rerun, complete, or advance workflow lifecycle from this chat turn.",
+    "- If this turn is producing a formal candidate or final report, apply the report writing rules from the node prompt again: start with a summary, then list delivery locations for any generated artifacts, and fill available platform fields such as humanReportMd, artifacts, result, and handoffJson.",
+    "- Return only the human-visible discussion answer or candidate content."
+  ].join("\n");
+}
+
+function formatInboxDiscussionReplyPrompt(
+  request: ApprovalRequest,
+  visibleUserMessage: string,
+  chatSession: HivewardChatSession
+): string {
+  const latestMessage = formatInboxDiscussionVisibleUserMessage(visibleUserMessage);
+  const summaryLines = [
+    `- Title: ${request.title}`,
+    `- Type: ${request.kind}`,
+    `- Status: ${request.status}`,
+    request.nodeRunId ? `- Node run: ${request.nodeRunId}` : undefined,
+    request.roundId ? `- Round: ${request.roundId}` : undefined,
+    request.body ? `- Current mail body: ${trimInboxDiscussionPromptText(request.body, inboxDiscussionPromptBodyMaxChars)}` : undefined,
+    chatSession.nativeSessionId
+      ? "- Native session: continue the existing session history; do not restate all prior context."
+      : "- Native session: this may be the first chat turn, so use only this compact mail summary as context."
+  ];
+  return [
+    "This is an ordinary reply in a HiveWard inbox discussion.",
+    "Continue the current native session conversation when a session key is provided.",
+    "Do not approve, reject, rerun, schedule, complete, terminate, publish candidates, or otherwise advance workflow lifecycle.",
+    "Return only the human-visible discussion answer. Do not produce a selectable candidate unless this turn is explicitly routed as candidate mode.",
+    "",
+    "Latest user message:",
+    latestMessage,
+    "",
+    "Current mail summary:",
+    ...summaryLines.filter((line): line is string => Boolean(line))
+  ].join("\n");
+}
+
+function formatInboxDiscussionVisibleUserMessage(value: string): string {
+  return value.trim();
+}
+
+function trimInboxDiscussionPromptText(value: string, maxChars: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxChars ? `${normalized.slice(0, maxChars)}...` : normalized;
+}
+
+function chatDoneRuntimeMetadata(event: Extract<ChatStreamEvent, { type: "done" }>): Record<string, unknown> {
+  return {
+    taskId: event.taskId,
+    runId: event.runId,
+    sessionKey: event.sessionKey,
+    source: event.source,
+    status: event.status,
+    updatedAt: event.updatedAt,
+    ...(event.error ? { error: event.error } : {}),
+    ...(event.usage ? { usage: event.usage } : {}),
+    ...(event.timings ? { timings: event.timings } : {})
+  };
+}
+
+function isNativeResumeFailure(message: string | undefined): boolean {
+  if (!message) return false;
+  const normalized = message.toLowerCase();
+  return (
+    /(resume|resum|session|thread).*(missing|not found|invalid|expired|deleted|unavailable|cannot|could not|failed)/.test(normalized) ||
+    /(missing|not found|invalid|expired|deleted).*(session|thread)/.test(normalized) ||
+    normalized.includes("no conversation found")
+  );
+}
+
+const nodeRuntimeOutputMaxChars = 2_000;
+
+function runtimeRefFromStartedEvent(event: Extract<ChatStreamEvent, { type: "started" }>): RuntimeObjectRef {
+  return {
+    source: event.source,
+    sourceId: event.taskId,
+    sourceUpdatedAt: event.updatedAt,
+    taskId: event.taskId,
+    runId: event.runId,
+    sessionKey: event.sessionKey,
+    usageRef: undefined
+  };
+}
+
+function runtimeRefFromTaskResult(result: AgentTaskResult): RuntimeObjectRef {
+  return {
+    source: result.source,
+    sourceId: result.taskId,
+    sourceUpdatedAt: result.updatedAt,
+    taskId: result.taskId,
+    runId: result.runId,
+    sessionKey: result.sessionKey,
+    usageRef: result.usage?.id
+  };
+}
+
+function updateNodeRuntimeTimelineState(
+  state: NodeRuntimeTimelineState,
+  event: Extract<ChatStreamEvent, { type: "started" | "runtime_state" | "delta" | "done" }>
+): void {
+  if (event.type === "started") {
+    state.runtimeLabel = `${event.source} task started`;
+    state.runtimeStatus = event.status;
+    return;
+  }
+  if (event.type === "runtime_state") {
+    state.runtimeLabel = event.label;
+    state.runtimeStatus = [event.phase, event.status].filter(Boolean).join(" ");
+    return;
+  }
+  if (event.type === "delta") {
+    state.output = trimRuntimeOutput(event.replace ? event.text : `${state.output}${event.text}`);
+    return;
+  }
+  state.runtimeStatus = event.status;
+  state.completedAt = event.updatedAt;
+  state.error = event.error;
+  if (!state.output && event.output) {
+    state.output = trimRuntimeOutput(event.output);
+  }
+}
+
+function nodeRuntimeTimelineTitle(input: StartAgentTaskInput, state: NodeRuntimeTimelineState): string {
+  const status = state.completedAt ? "done" : state.runtimeStatus ?? "running";
+  return `${input.agentName}: ${state.runtimeLabel ?? status}`;
+}
+
+function nodeRuntimeTimelineBody(
+  input: StartAgentTaskInput,
+  state: NodeRuntimeTimelineState,
+  runtimeRef: RuntimeObjectRef | undefined
+): string {
+  const lines = [
+    `nodeRunId: ${input.nodeRunId}`,
+    `runtime: ${runtimeRef?.source ?? input.source}`,
+    state.runtimeStatus ? `runtime_state: ${state.runtimeStatus}` : undefined,
+    state.runtimeLabel ? `activity: ${state.runtimeLabel}` : undefined,
+    state.output ? `recent_output:\n${state.output}` : undefined,
+    state.error ? `error: ${state.error}` : undefined,
+    state.completedAt ? `done: ${state.completedAt}` : undefined
+  ];
+  return lines.filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function trimRuntimeOutput(output: string): string {
+  return output.length > nodeRuntimeOutputMaxChars
+    ? output.slice(output.length - nodeRuntimeOutputMaxChars)
+    : output;
+}
+
+function approvalRequestTimestamp(request: ApprovalRequest): number {
+  return new Date(request.updatedAt ?? request.requestedAt).getTime();
+}
+
+function inboxDiscussionDoneEvent(threadType: InboxThreadType, threadId: string, messageId: string): StreamInboxThreadMessageEvent {
+  const now = new Date().toISOString();
+  return {
+    type: "done",
+    taskId: messageId,
+    runId: threadId,
+    sessionKey: inboxThreadStreamKey(threadType, threadId),
+    status: "succeeded",
+    updatedAt: now,
+    threadType,
+    threadId,
+    messageId
+  };
+}
+
+function formatAgentApprovalDiscussionBody(output: unknown): string {
+  const record = readOutputRecord(output);
+  const humanReportMd = readString(record?.humanReportMd);
+  if (humanReportMd) return humanReportMd;
+  if (typeof output === "string" && output.trim()) return output.trim();
+  return formatJsonForApprovalReply(output);
+}
+
+function formatJsonForApprovalReply(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function buildAgentApprovalReplyInput(
   originalInput: unknown,
   previousOutput: unknown,
   previousReplies: AgentApprovalReply[],
-  userReply: AgentApprovalReply
+  userReply: AgentApprovalReply,
+  discussionMode: InboxDiscussionMode
 ): Record<string, unknown> {
   const conversation = [...previousReplies, userReply];
   const instruction = [
     "This node is paused at a human approval checkpoint.",
-    "Treat approvalChat.conversation and approvalChat.latestUserReply as an in-progress meeting with the human, not as a command to produce a formal report every turn.",
-    "Infer the user's immediate intent from the latest reply and the conversation history.",
-    "When the user is clarifying, asking for simpler wording, exploring options, or steering direction, answer conversationally in plain language and move the discussion forward.",
+    discussionMode === "candidate"
+      ? "The human explicitly asked for a formal candidate artifact in the latest inbox reply."
+      : "The latest inbox reply is ordinary discussion, not a request to publish a candidate artifact.",
+    "Treat approvalChat.conversation and approvalChat.latestUserReply as an in-progress meeting with the human.",
+    discussionMode === "candidate"
+      ? "Produce the full reviewable candidate for this node in humanReportMd."
+      : "When the user is clarifying, asking for simpler wording, exploring options, or steering direction, answer conversationally in plain language and move the discussion forward.",
     "Use the user's language and match their requested tone unless a formal artifact is being finalized.",
-    "When the user explicitly asks to finalize, generate a report, use a proposal, wrap up, or indicates the discussion is settled, produce the final reviewable artifact for this node.",
+    discussionMode === "candidate"
+      ? "Do not return only an acknowledgement; write the complete candidate draft."
+      : "Do not repeat the previous formal template or produce a final report unless approvalChat.requestedOutput is candidate.",
     "If the user asks whether something is feasible, give the feasible path, tradeoffs, and any blocker before offering a final artifact.",
-    "Do not repeat the previous formal template unless the latest user intent calls for a formal artifact.",
-    "If required information is still missing, ask only the specific missing question."
+    "If required information is still missing, ask only the specific missing question.",
+    "Do not claim the approval has passed, been selected, or advanced downstream."
   ].join(" ");
   const approvalChat: AgentApprovalChatInput = {
     previousOutput,
     latestUserReply: userReply.body,
     conversation,
-    instruction
+    instruction,
+    requestedOutput: discussionMode,
+    candidateRequested: discussionMode === "candidate"
   };
 
   return {
@@ -4945,6 +6339,15 @@ function buildAgentOutputEnvelopeSchema(resultSchema: Record<string, unknown> | 
       result: resultSchema ?? flexibleJsonObjectSchema
     }
   };
+}
+
+function artifactsToReleaseReportRefs(artifacts: Artifact[]): ReleaseReport["artifactRefs"] {
+  return artifacts.map((artifact) => ({
+    artifactId: artifact.id,
+    title: artifact.title ?? artifact.id,
+    location: artifact.storagePath ?? artifact.downloadUrl ?? artifact.relativePath ?? artifact.id,
+    current: (artifact.status ?? "current") === "current"
+  }));
 }
 
 function readRecommendedNextStep(value: unknown): ManagerSnapshotDraft["recommendedNextStep"] | undefined {

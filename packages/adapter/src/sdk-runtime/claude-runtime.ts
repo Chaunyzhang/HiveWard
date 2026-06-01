@@ -17,7 +17,7 @@ import type {
 import { AgentSdkError, formatAgentSdkError, formatAgentSdkProviderError, getErrorMessage, isAbortLikeError } from "./errors";
 import { mapClaudeAvailableTools, mapClaudePermission, mapClaudeTools, normalizeTaskRuntimeAccessPolicy } from "./permissions";
 import { buildSdkChatPrompt, mapClaudeEffort, mapClaudeThinking } from "./chat-envelope";
-import { buildPromptEnvelope, formatStructuredOutput, validateOutputSchema } from "./prompt-envelope";
+import { buildPromptEnvelope, formatStructuredOutput } from "./prompt-envelope";
 import { isRecord, readString, runtimeLabelFromRecord } from "./runtime-state";
 import { createTerminalTaskResult, AgentSdkTaskRegistry } from "./task-registry";
 import type { AgentSdkChatStreamInput, AgentSdkRuntime } from "./types";
@@ -208,6 +208,60 @@ export class ClaudeAgentSdkRuntime implements AgentSdkRuntime {
     };
   }
 
+  async streamTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    const now = new Date().toISOString();
+    const taskId = `claude-task-${nanoid(10)}`;
+    const runId = `claude-run-${nanoid(10)}`;
+    const initialSessionKey = `claude-session-${input.nodeRunId}`;
+
+    let workingDirectory: string;
+    try {
+      requireConfiguredModel(input.modelId);
+      workingDirectory = resolveSdkWorkingDirectory(input.workingDirectory, this.options.workspaceRoot);
+    } catch (error) {
+      const failed = this.failedStart(taskId, runId, initialSessionKey, getErrorMessage(error), now);
+      onEvent({ ...failed, type: "started" });
+      const terminal: AgentTaskResult = { ...failed, output: undefined, usage: undefined };
+      onEvent(toAgentTaskDoneEvent(terminal));
+      return terminal;
+    }
+
+    onEvent({
+      type: "started",
+      taskId,
+      runId,
+      sessionKey: initialSessionKey,
+      source: "claude",
+      status: "running",
+      updatedAt: now
+    });
+
+    const timeoutMs = normalizeTimeout(input.timeoutMs, this.options.defaultTimeoutMs);
+    const abortController = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      abortController.abort("timeout");
+    }, timeoutMs);
+
+    try {
+      const result = await this.runClaudeTask({
+        input,
+        taskId,
+        runId,
+        initialSessionKey,
+        workingDirectory,
+        abortController,
+        isTimedOut: () => timedOut,
+        onEvent
+      });
+      onEvent(toAgentTaskDoneEvent(result, stringifyStreamOutput(result.output)));
+      return result;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   waitForTask(input: WaitForAgentTaskInput): Promise<AgentTaskResult> {
     return this.registry.waitForTask(input);
   }
@@ -223,7 +277,8 @@ export class ClaudeAgentSdkRuntime implements AgentSdkRuntime {
     initialSessionKey,
     workingDirectory,
     abortController,
-    isTimedOut
+    isTimedOut,
+    onEvent
   }: {
     input: StartAgentTaskInput;
     taskId: string;
@@ -232,9 +287,11 @@ export class ClaudeAgentSdkRuntime implements AgentSdkRuntime {
     workingDirectory: string;
     abortController: AbortController;
     isTimedOut: () => boolean;
+    onEvent?: (event: ChatStreamEvent) => void;
   }): Promise<AgentTaskResult> {
     let sessionKey = initialSessionKey;
     let finalMessage: SDKResultMessage | undefined;
+    let streamedOutput = "";
 
     try {
       if (abortController.signal.aborted) {
@@ -250,13 +307,22 @@ export class ClaudeAgentSdkRuntime implements AgentSdkRuntime {
         permissionMode: mapClaudePermission(permissionProfile),
         tools: mapClaudeAvailableTools(permissionProfile, input.tools),
         allowedTools: mapClaudeTools(permissionProfile, input.tools),
-        skills: input.skillIds?.length ? input.skillIds : undefined,
-        outputFormat: input.outputSchema ? { type: "json_schema", schema: input.outputSchema } : undefined
+        skills: input.skillIds?.length ? input.skillIds : undefined
       };
 
       for await (const message of this.queryFn({ prompt: buildPromptEnvelope(input), options: sdkOptions })) {
         if (hasSessionId(message)) {
           sessionKey = message.session_id;
+        }
+        const deltaText = onEvent ? readClaudePartialDeltaText(message) : undefined;
+        if (deltaText) {
+          streamedOutput = `${streamedOutput}${deltaText}`;
+          onEvent?.({ type: "delta", text: deltaText });
+          continue;
+        }
+        if (onEvent && shouldEmitClaudeRuntimeEvent(message)) {
+          onEvent(toClaudeRuntimeState(message));
+          continue;
         }
         if (message.type === "result") {
           finalMessage = message;
@@ -313,18 +379,14 @@ export class ClaudeAgentSdkRuntime implements AgentSdkRuntime {
       finalMessage.structured_output === undefined
         ? finalMessage.result
         : formatStructuredOutput(finalMessage.structured_output);
-    if (!validateOutputSchema(output, input.outputSchema)) {
-      return createTerminalTaskResult({
-        taskId,
-        runId,
-        sessionKey,
-        source: "claude",
-        status: "failed",
-        error: formatAgentSdkError("invalid_output", "SDK output does not match outputSchema."),
-        usage: mapClaudeUsage(input, finalMessage)
-      });
+    if (onEvent && output && output !== streamedOutput) {
+      if (!streamedOutput || output.startsWith(streamedOutput)) {
+        const delta = output.slice(streamedOutput.length);
+        if (delta) onEvent({ type: "delta", text: delta });
+      } else {
+        onEvent({ type: "delta", text: output, replace: true });
+      }
     }
-
     return {
       taskId,
       runId,
@@ -451,6 +513,27 @@ function readUsageNumber(usage: unknown, keys: string[]): number {
 
 function hasSessionId(message: SDKMessage): message is SDKMessage & { session_id: string } {
   return "session_id" in message && typeof message.session_id === "string";
+}
+
+function stringifyStreamOutput(output: unknown): string | undefined {
+  if (typeof output === "string") return output;
+  if (output === undefined) return undefined;
+  return JSON.stringify(output, null, 2);
+}
+
+function toAgentTaskDoneEvent(result: AgentTaskResult, output?: string): Extract<ChatStreamEvent, { type: "done" }> {
+  return {
+    type: "done",
+    taskId: result.taskId,
+    runId: result.runId,
+    sessionKey: result.sessionKey,
+    source: result.source,
+    status: result.status,
+    output,
+    error: result.error,
+    usage: result.usage,
+    updatedAt: result.updatedAt
+  };
 }
 
 function normalizeTimeout(value: number | undefined, defaultValue: number): number {

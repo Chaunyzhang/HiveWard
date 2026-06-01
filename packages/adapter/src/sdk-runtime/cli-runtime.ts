@@ -12,7 +12,7 @@ import type {
 import { buildSdkChatPrompt } from "./chat-envelope";
 import { formatAgentSdkError, formatAgentSdkProviderError, getErrorMessage, isAbortLikeError } from "./errors";
 import { normalizePermissionProfile } from "./permissions";
-import { buildPromptEnvelope, validateOutputSchema } from "./prompt-envelope";
+import { buildPromptEnvelope } from "./prompt-envelope";
 import { createTerminalTaskResult, AgentSdkTaskRegistry } from "./task-registry";
 import type { AgentSdkChatStreamInput, AgentSdkRuntime } from "./types";
 import { resolveSdkWorkingDirectory } from "./workspace";
@@ -219,6 +219,59 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
     };
   }
 
+  async streamTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
+    const now = new Date().toISOString();
+    const taskId = `${this.harnessId}-task-${nanoid(10)}`;
+    const runId = `${this.harnessId}-run-${nanoid(10)}`;
+    const sessionKey = `${this.harnessId}-session-${input.nodeRunId}`;
+
+    let workingDirectory: string;
+    try {
+      workingDirectory = resolveSdkWorkingDirectory(input.workingDirectory, this.options.workspaceRoot);
+    } catch (error) {
+      const failed = this.failedStart(taskId, runId, sessionKey, getErrorMessage(error), now);
+      onEvent({ ...failed, type: "started" });
+      const terminal: AgentTaskResult = { ...failed, output: undefined, usage: undefined };
+      onEvent(toAgentTaskDoneEvent(terminal));
+      return terminal;
+    }
+
+    onEvent({
+      type: "started",
+      taskId,
+      runId,
+      sessionKey,
+      source: this.harnessId,
+      status: "running",
+      updatedAt: now
+    });
+
+    const timeoutMs = normalizeTimeout(input.timeoutMs, this.options.defaultTimeoutMs);
+    const abortController = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      abortController.abort("timeout");
+    }, timeoutMs);
+
+    try {
+      const result = await this.runCliTask({
+        input,
+        taskId,
+        runId,
+        sessionKey,
+        workingDirectory,
+        abortController,
+        isTimedOut: () => timedOut,
+        onEvent
+      });
+      onEvent(toAgentTaskDoneEvent(result, stringifyStreamOutput(result.output)));
+      return result;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   waitForTask(input: WaitForAgentTaskInput): Promise<AgentTaskResult> {
     return this.registry.waitForTask(input);
   }
@@ -234,7 +287,8 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
     sessionKey,
     workingDirectory,
     abortController,
-    isTimedOut
+    isTimedOut,
+    onEvent
   }: {
     input: StartAgentTaskInput;
     taskId: string;
@@ -243,6 +297,7 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
     workingDirectory: string;
     abortController: AbortController;
     isTimedOut: () => boolean;
+    onEvent?: (event: ChatStreamEvent) => void;
   }): Promise<AgentTaskResult> {
     try {
       if (abortController.signal.aborted) {
@@ -255,6 +310,18 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
         profileId: input.profileId,
         cwd: workingDirectory,
         signal: abortController.signal
+      });
+      const streamParser = onEvent ? createCliStreamParser(this.harnessId) : undefined;
+      let streamedOutput = "";
+      const commandActivityId = `${runId}:command`;
+      onEvent?.({
+        type: "runtime_state",
+        source: this.harnessId,
+        phase: "command",
+        label: command,
+        id: commandActivityId,
+        status: "started",
+        updatedAt: new Date().toISOString()
       });
       const result = await this.runCliCommand({
         command,
@@ -269,9 +336,26 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
         }),
         cwd: workingDirectory,
         env: this.env,
-        signal: abortController.signal
+        signal: abortController.signal,
+        onStdout: streamParser
+          ? (chunk) => {
+              for (const delta of streamParser.push(chunk)) {
+                streamedOutput = `${streamedOutput}${delta}`;
+                onEvent?.({ type: "delta", text: delta });
+              }
+            }
+          : undefined
       });
       if (result.exitCode !== 0) {
+        onEvent?.({
+          type: "runtime_state",
+          source: this.harnessId,
+          phase: "command",
+          label: command,
+          id: commandActivityId,
+          status: "completed",
+          updatedAt: new Date().toISOString()
+        });
         return createTerminalTaskResult({
           taskId,
           runId,
@@ -282,20 +366,26 @@ export class CliAgentSdkRuntime implements AgentSdkRuntime {
         });
       }
 
-      const parsed = parseCliCommandOutput(this.harnessId, result.stdout);
+      onEvent?.({
+        type: "runtime_state",
+        source: this.harnessId,
+        phase: "command",
+        label: command,
+        id: commandActivityId,
+        status: "completed",
+        updatedAt: new Date().toISOString()
+      });
+      const parsed = streamParser ? streamParser.finish(result.stdout) : parseCliCommandOutput(this.harnessId, result.stdout);
       const output = parsed.output;
       const finalSessionKey = parsed.sessionKey ?? extractCliSessionKey(result.stdout, sessionKey);
-      if (!validateOutputSchema(output, input.outputSchema)) {
-        return createTerminalTaskResult({
-          taskId,
-          runId,
-          sessionKey: finalSessionKey,
-          source: this.harnessId,
-          status: "failed",
-          error: formatAgentSdkError("invalid_output", "CLI output does not match outputSchema.")
-        });
+      if (onEvent && output && output !== streamedOutput) {
+        if (!streamedOutput || output.startsWith(streamedOutput)) {
+          const delta = output.slice(streamedOutput.length);
+          if (delta) onEvent({ type: "delta", text: delta });
+        } else {
+          onEvent({ type: "delta", text: output, replace: true });
+        }
       }
-
       return {
         taskId,
         runId,
@@ -730,6 +820,27 @@ function formatCliHarnessLabel(harnessId: CliHarnessId): string {
 
 function normalizeTimeout(value: number | undefined, defaultValue: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : defaultValue;
+}
+
+function stringifyStreamOutput(output: unknown): string | undefined {
+  if (typeof output === "string") return output;
+  if (output === undefined) return undefined;
+  return JSON.stringify(output, null, 2);
+}
+
+function toAgentTaskDoneEvent(result: AgentTaskResult, output?: string): Extract<ChatStreamEvent, { type: "done" }> {
+  return {
+    type: "done",
+    taskId: result.taskId,
+    runId: result.runId,
+    sessionKey: result.sessionKey,
+    source: result.source,
+    status: result.status,
+    output,
+    error: result.error,
+    usage: result.usage,
+    updatedAt: result.updatedAt
+  };
 }
 
 function readString(value: unknown): string | undefined {

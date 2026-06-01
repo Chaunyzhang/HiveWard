@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ApprovalDecision, ApprovalRequest, BlueprintDefinition, BlueprintNode, BlueprintNodeRun } from "@hiveward/shared";
 import { createBlankBlueprint } from "@hiveward/shared";
 import { FileHivewardStore } from "./fileHivewardStore";
@@ -53,7 +53,7 @@ describe("FileHivewardStore blueprint node sanitization", () => {
     ]);
   });
 
-  it("normalizes legacy OpenClaw refs into runtime refs when reading run archives", async () => {
+  it("persists canonical runtime refs in run archives", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
     const storePath = join(dir, "hiveward-store.json");
     const store = new FileHivewardStore(storePath);
@@ -62,7 +62,50 @@ describe("FileHivewardStore blueprint node sanitization", () => {
     const now = new Date().toISOString();
     const blueprint = await store.saveBlueprint(createDirtyBlueprint(now));
     const run = await store.createBlueprintRun(blueprint, "tester");
-    const legacyRuntimeRef = {
+    const runtimeRef = {
+      source: "codex",
+      sourceId: "codex-task-1",
+      sourceUpdatedAt: now,
+      taskId: "codex-task-1",
+      runId: "codex-run-1",
+      sessionKey: "codex-session-1"
+    } as const;
+    await store.upsertNodeRun({
+      ...createNodeRun(run.id, blueprint.id, "draft", "agent", "succeeded"),
+      runtimeRef
+    });
+    await store.appendEvent({
+      id: "event-draft",
+      blueprintRunId: run.id,
+      nodeRunId: "node-run-draft",
+      type: "node.run.completed",
+      message: "Draft completed.",
+      createdAt: now,
+      runtimeRef
+    });
+
+    const view = await store.getRunView(run.id);
+    const archiveText = readFileSync(join(dir, "runs", `${run.id}.json`), "utf8");
+
+    expect(view?.run.runtimeRefs).toEqual([expect.objectContaining({ source: "codex", runId: "codex-run-1" })]);
+    expect(view?.nodeRuns[0]?.runtimeRef).toMatchObject({ source: "codex", sessionKey: "codex-session-1" });
+    expect(view?.events[0]?.runtimeRef).toMatchObject({ source: "codex", taskId: "codex-task-1" });
+    expect(archiveText).toContain("\"runtimeRef\"");
+    expect(archiveText).toContain("\"runtimeRefs\"");
+    expect(archiveText).not.toContain("openclawRef");
+    expect(archiveText).not.toContain("openclawRefs");
+  });
+
+  it("drops obsolete OpenClaw runtime aliases without using them as runtime refs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
+    const storePath = join(dir, "hiveward-store.json");
+    const store = new FileHivewardStore(storePath);
+    await store.init();
+
+    const now = new Date().toISOString();
+    const blueprint = await store.saveBlueprint(createDirtyBlueprint(now));
+    const run = await store.createBlueprintRun(blueprint, "tester");
+    const obsoleteRef = {
       source: "codex",
       sourceId: "codex-task-1",
       sourceUpdatedAt: now,
@@ -77,34 +120,124 @@ describe("FileHivewardStore blueprint node sanitization", () => {
       events: Array<Record<string, unknown>>;
     };
     delete archive.run.runtimeRefs;
-    delete archive.run.openclawRefs;
-    archive.nodeRuns = [
-      {
-        ...createNodeRun(run.id, blueprint.id, "draft", "agent", "succeeded"),
-        openclawRef: legacyRuntimeRef
-      }
-    ];
-    archive.events = [
-      {
-        id: "event-draft",
-        blueprintRunId: run.id,
-        nodeRunId: "node-run-draft",
-        type: "node.run.completed",
-        message: "Draft completed.",
-        createdAt: now,
-        openclawRef: legacyRuntimeRef
-      }
-    ];
+    archive.run.openclawRefs = [obsoleteRef];
+    archive.nodeRuns = [{
+      ...createNodeRun(run.id, blueprint.id, "draft", "agent", "succeeded"),
+      openclawRef: obsoleteRef
+    }];
+    archive.events = [{
+      id: "event-draft",
+      blueprintRunId: run.id,
+      nodeRunId: "node-run-draft",
+      type: "node.run.completed",
+      message: "Draft completed.",
+      createdAt: now,
+      openclawRef: obsoleteRef
+    }];
     writeFileSync(archivePath, JSON.stringify(archive, null, 2));
 
     const view = await store.getRunView(run.id);
 
-    expect(view?.run.runtimeRefs).toEqual([expect.objectContaining({ source: "codex", runId: "codex-run-1" })]);
-    expect(view?.run).not.toHaveProperty("openclawRefs");
-    expect(view?.nodeRuns[0]?.runtimeRef).toMatchObject({ source: "codex", sessionKey: "codex-session-1" });
-    expect(view?.nodeRuns[0]).not.toHaveProperty("openclawRef");
-    expect(view?.events[0]?.runtimeRef).toMatchObject({ source: "codex", taskId: "codex-task-1" });
-    expect(view?.events[0]).not.toHaveProperty("openclawRef");
+    expect(view?.run.runtimeRefs).toEqual([]);
+    expect(view?.nodeRuns[0]?.runtimeRef).toBeUndefined();
+    expect(view?.events[0]?.runtimeRef).toBeUndefined();
+    expect(JSON.stringify(view)).not.toContain("openclawRef");
+    expect(JSON.stringify(view)).not.toContain("openclawRefs");
+  });
+
+  it("exposes pending approval runtime source from the paused node", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
+    const store = new FileHivewardStore(join(dir, "hiveward-store.json"));
+    await store.init();
+
+    const now = new Date().toISOString();
+    const blueprint = await store.saveBlueprint(createDirtyBlueprint(now));
+    const run = await store.createBlueprintRun(blueprint, "tester");
+    const nodeRun = {
+      ...createNodeRun(run.id, blueprint.id, "draft", "agent", "waiting_approval"),
+      output: {
+        approvalType: "agent",
+        reviewOutput: "Draft answer",
+        replies: []
+      },
+      runtimeRef: {
+        source: "claude",
+        sourceId: "claude-task-1",
+        sourceUpdatedAt: now,
+        taskId: "claude-task-1",
+        runId: "claude-run-1",
+        sessionKey: "claude-session-1"
+      }
+    } as const;
+    await store.upsertNodeRun(nodeRun);
+    await store.upsertApprovalRequest({
+      id: "approval-runtime-source",
+      runId: run.id,
+      nodeRunId: nodeRun.id,
+      kind: "agent_proposal",
+      status: "pending",
+      title: "Review draft",
+      body: "Review the draft.",
+      revision: 1,
+      capabilities: { approve: true, reject: true, reply: true, complete: false, terminate: false },
+      requestedBy: { type: "node", label: "Draft Agent", nodeId: nodeRun.nodeId },
+      requestedAt: now
+    });
+
+    await expect(store.listPendingApprovals()).resolves.toEqual([
+      expect.objectContaining({
+        approvalRequestId: "approval-runtime-source",
+        harnessId: "claude"
+      })
+    ]);
+  });
+
+  it("returns saved request-level selected candidates in pending approval views", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
+    const store = new FileHivewardStore(join(dir, "hiveward-store.json"));
+    await store.init();
+
+    const now = new Date().toISOString();
+    const blueprint = await store.saveBlueprint(createDirtyBlueprint(now));
+    const run = await store.createBlueprintRun(blueprint, "tester");
+    const request = await store.upsertApprovalRequest({
+      id: "approval-selected-candidate",
+      runId: run.id,
+      kind: "iteration_requirement_plan",
+      status: "pending",
+      title: "Round plan",
+      body: "Original plan",
+      threadId: "thread-selected-candidate",
+      revision: 1,
+      selectedReplyId: "reply-selected-candidate",
+      capabilities: { approve: true, reject: true, reply: true, complete: false, terminate: false },
+      requestedBy: { type: "node", label: "Manager", nodeId: "manager" },
+      requestedAt: now,
+      updatedAt: now
+    });
+    await store.appendApprovalReply({
+      id: "reply-selected-candidate",
+      threadId: request.threadId ?? request.id,
+      approvalRequestId: request.id,
+      actor: "agent",
+      body: "Candidate plan",
+      createdAt: now,
+      metadata: { inboxDiscussionMode: "candidate", candidate: true }
+    });
+
+    await expect(store.listPendingApprovals()).resolves.toEqual([
+      expect.objectContaining({
+        approvalRequestId: request.id,
+        selectedReplyId: "reply-selected-candidate",
+        replies: [
+          expect.objectContaining({
+            id: "reply-selected-candidate",
+            selected: true,
+            canUseAsSolution: true
+          })
+        ]
+      })
+    ]);
   });
 
   it("backfills approval thread facts and manager mail projection from legacy index facts", async () => {
@@ -189,6 +322,84 @@ describe("FileHivewardStore blueprint node sanitization", () => {
     await expect(store.listManagerMail(approvalRequest.runId)).resolves.toEqual([
       expect.objectContaining({ id: `mail-${approvalRequest.id}`, sourceId: approvalRequest.id, status: "pending" })
     ]);
+  });
+
+  it("drops illegal report and unknown inbox item types during index normalization", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hiveward-store-"));
+    const storePath = join(dir, "hiveward-store.json");
+    const now = "2026-05-31T00:00:00.000Z";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    writeFileSync(storePath, JSON.stringify({
+      schema: "hiveward.store-index/v1",
+      companies: [{ id: "company-1", name: "Company", createdAt: now, updatedAt: now }],
+      selectedCompanyId: "company-1",
+      blueprintIndex: [],
+      runIndex: [],
+      companyDashboards: {},
+      roleDirectories: {},
+      inboxItems: {
+        "company-1": [
+          {
+            id: "inbox-report",
+            companyId: "company-1",
+            type: "report",
+            status: "pending",
+            title: "Legacy report",
+            summary: "Should not appear in inbox.",
+            createdByRoleId: "ceo",
+            createdAt: now,
+            updatedAt: now
+          },
+          {
+            id: "inbox-unknown",
+            companyId: "company-1",
+            type: "unknown",
+            status: "pending",
+            title: "Unknown",
+            summary: "Should not be coerced to report.",
+            createdByRoleId: "ceo",
+            createdAt: now,
+            updatedAt: now
+          },
+          {
+            id: "inbox-delegation",
+            companyId: "company-1",
+            type: "leader_delegation",
+            status: "pending",
+            title: "Delegate",
+            summary: "Valid inbox item.",
+            createdByRoleId: "ceo",
+            createdAt: now,
+            updatedAt: now
+          }
+        ]
+      },
+      iterationSessions: [],
+      iterationRounds: [],
+      approvalThreads: [],
+      approvalReplies: [],
+      approvalRequests: [],
+      approvalDecisions: [],
+      artifacts: [],
+      releaseReports: [],
+      agentHumanReports: [],
+      agentHandoffs: [],
+      managerContextSnapshots: [],
+      runTimeline: [],
+      managerMail: []
+    }, null, 2));
+
+    try {
+      const store = new FileHivewardStore(storePath);
+      await store.init();
+
+      await expect(store.listInboxItems()).resolves.toEqual([
+        expect.objectContaining({ id: "inbox-delegation", type: "leader_delegation" })
+      ]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("unsupported inbox item type"));
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

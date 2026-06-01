@@ -61,6 +61,7 @@ import {
   readPortableBlueprintPackage,
   approvalThreadFromRequest,
   approvalThreadIdForRequest,
+  normalizeApprovalRequestKind,
   resolveApprovalCapabilities,
   resolveFinalRunResult
 } from "@hiveward/shared";
@@ -86,19 +87,11 @@ import {
 } from "../services/agentWorkspaceService";
 
 const storeIndexSchema = "hiveward.store-index/v1";
+const reportedInboxDataAnomalies = new Set<string>();
 
-type LegacyRuntimeRefFields = {
-  openclawRef?: RuntimeObjectRef;
-};
-
-type LegacyRuntimeRefsField = {
-  openclawRefs?: RuntimeObjectRef[];
-};
-
-type RunArchiveWithLegacyRuntimeRefs = Omit<BlueprintRunArchive, "run" | "nodeRuns" | "events"> & {
-  run: BlueprintRunSummary & LegacyRuntimeRefsField;
-  nodeRuns: Array<BlueprintNodeRun & LegacyRuntimeRefFields>;
-  events: Array<BlueprintNodeEvent & LegacyRuntimeRefFields>;
+type ObsoleteRuntimeRefAliasFields = {
+  openclawRef?: unknown;
+  openclawRefs?: unknown;
 };
 
 export interface BlueprintIndexEntry {
@@ -761,9 +754,6 @@ export class FileHivewardStore implements HivewardStore {
       const itemIndex = items.findIndex((item) => item.id === itemId);
       if (itemIndex < 0) throw new Error(`Inbox item not found: ${itemId}`);
       const item = items[itemIndex]!;
-      if (item.status === "approved") {
-        return item;
-      }
 
       const now = new Date().toISOString();
       const replied: InboxItem = {
@@ -1221,7 +1211,7 @@ export class FileHivewardStore implements HivewardStore {
             ? archivesByRunId.get(request.runId)?.nodeRuns.find((candidate) => candidate.id === request.nodeRunId)
             : undefined;
           const output = isRecord(nodeRun?.output) && nodeRun.output.approvalType === "agent" ? nodeRun.output : undefined;
-          const selectedReplyId = readString(output?.selectedReplyId);
+          const selectedReplyId = readString(output?.selectedReplyId) ?? request.selectedReplyId;
           const replies = mergePendingApprovalReplies(
             pendingApprovalRepliesFromApprovalReplies(listApprovalRepliesFromIndex(index, { approvalRequestId: request.id }), selectedReplyId),
             readPendingApprovalReplies(output?.replies, selectedReplyId)
@@ -1237,6 +1227,7 @@ export class FileHivewardStore implements HivewardStore {
             nodeRunId: request.nodeRunId ?? request.id,
             nodeId: request.requestedBy.nodeId ?? request.id,
             nodeLabel: request.requestedBy.label,
+            ...(nodeRun?.runtimeRef?.source ? { harnessId: nodeRun.runtimeRef.source } : {}),
             startedBy: run.startedBy,
             startedAt: run.startedAt,
             requestedAt: request.requestedAt,
@@ -1276,9 +1267,11 @@ export class FileHivewardStore implements HivewardStore {
   async upsertApprovalThread(thread: ApprovalThread): Promise<ApprovalThread> {
     return this.enqueue(async () => {
       const index = await this.readIndexUnlocked();
-      upsertById(index.approvalThreads, thread);
+      const existing = index.approvalThreads.find((candidate) => candidate.id === thread.id);
+      const next = existing ? { ...existing, ...thread } : thread;
+      upsertById(index.approvalThreads, next);
       await this.writeIndexUnlocked(index);
-      return thread;
+      return next;
     });
   }
 
@@ -1293,7 +1286,9 @@ export class FileHivewardStore implements HivewardStore {
     return this.enqueue(async () => {
       const index = await this.readIndexUnlocked();
       upsertById(index.approvalRequests, request);
-      upsertById(index.approvalThreads, approvalThreadFromRequest(request));
+      const thread = approvalThreadFromRequest(request);
+      const existingThread = index.approvalThreads.find((candidate) => candidate.id === thread.id);
+      upsertById(index.approvalThreads, existingThread ? { ...existingThread, ...thread } : thread);
       await this.writeIndexUnlocked(index);
       return request;
     });
@@ -2032,9 +2027,9 @@ export class FileHivewardStore implements HivewardStore {
       inboxItems: normalizeInboxItems(rawIndex.inboxItems, companies, now),
       iterationSessions: normalizeArray<IterationSession>(rawIndex.iterationSessions),
       iterationRounds: normalizeArray<IterationRound>(rawIndex.iterationRounds),
-      approvalThreads: normalizeArray<ApprovalThread>(rawIndex.approvalThreads),
+      approvalThreads: normalizeApprovalThreads(rawIndex.approvalThreads),
       approvalReplies: normalizeArray<ApprovalReply>(rawIndex.approvalReplies),
-      approvalRequests: normalizeArray<ApprovalRequest>(rawIndex.approvalRequests),
+      approvalRequests: normalizeApprovalRequests(rawIndex.approvalRequests),
       approvalDecisions: normalizeArray<ApprovalDecision>(rawIndex.approvalDecisions),
       artifacts: normalizeArray<Artifact>(rawIndex.artifacts),
       releaseReports: normalizeArray<ReleaseReport>(rawIndex.releaseReports),
@@ -2042,7 +2037,7 @@ export class FileHivewardStore implements HivewardStore {
       agentHandoffs: normalizeArray<AgentHandoff>(rawIndex.agentHandoffs),
       managerContextSnapshots: normalizeArray<ManagerContextSnapshot>(rawIndex.managerContextSnapshots),
       runTimeline: normalizeArray<RunTimelineItem>(rawIndex.runTimeline),
-      managerMail: normalizeArray<ManagerMail>(rawIndex.managerMail)
+      managerMail: normalizeManagerMail(rawIndex.managerMail)
     };
     for (const company of companies) {
       index.roleDirectories[company.id] = buildRoleDirectory(index, company.id, now, rawIndex.roleDirectories?.[company.id]);
@@ -2087,9 +2082,9 @@ export class FileHivewardStore implements HivewardStore {
       inboxItems: normalizeInboxItems(state.inboxItems, companies, now),
       iterationSessions: normalizeArray<IterationSession>(state.iterationSessions),
       iterationRounds: normalizeArray<IterationRound>(state.iterationRounds),
-      approvalThreads: normalizeArray<ApprovalThread>(state.approvalThreads),
+      approvalThreads: normalizeApprovalThreads(state.approvalThreads),
       approvalReplies: normalizeArray<ApprovalReply>(state.approvalReplies),
-      approvalRequests: normalizeArray<ApprovalRequest>(state.approvalRequests),
+      approvalRequests: normalizeApprovalRequests(state.approvalRequests),
       approvalDecisions: normalizeArray<ApprovalDecision>(state.approvalDecisions),
       artifacts: normalizeArray<Artifact>(state.artifacts),
       releaseReports: normalizeArray<ReleaseReport>(state.releaseReports),
@@ -2097,7 +2092,7 @@ export class FileHivewardStore implements HivewardStore {
       agentHandoffs: normalizeArray<AgentHandoff>(state.agentHandoffs),
       managerContextSnapshots: normalizeArray<ManagerContextSnapshot>(state.managerContextSnapshots),
       runTimeline: normalizeArray<RunTimelineItem>(state.runTimeline),
-      managerMail: normalizeArray<ManagerMail>(state.managerMail)
+      managerMail: normalizeManagerMail(state.managerMail)
     };
     for (const company of companies) {
       index.roleDirectories[company.id] = buildRoleDirectory(index, company.id, now, state.roleDirectories?.[company.id]);
@@ -2215,25 +2210,11 @@ export function stripRemovedBlueprintRunArchive(archive: BlueprintRunArchive): B
 }
 
 function normalizeRunArchiveRuntimeRefs(archive: BlueprintRunArchive): BlueprintRunArchive {
-  const legacyArchive = archive as RunArchiveWithLegacyRuntimeRefs;
-  const runWithLegacyRefs = legacyArchive.run;
-  const { openclawRefs: _legacyRunRefs, ...runWithoutLegacyRefs } = runWithLegacyRefs;
-  const nodeRuns = Array.isArray(legacyArchive.nodeRuns)
-    ? legacyArchive.nodeRuns.map((nodeRun) => {
-        const { openclawRef: _legacyRuntimeRef, ...nodeRunWithoutLegacyRef } = nodeRun;
-        const runtimeRef = readLegacyNodeRunRuntimeRef(nodeRun);
-        return runtimeRef ? { ...nodeRunWithoutLegacyRef, runtimeRef } : nodeRunWithoutLegacyRef;
-      })
-    : [];
-  const events = Array.isArray(legacyArchive.events)
-    ? legacyArchive.events.map((event) => {
-        const { openclawRef: _legacyRuntimeRef, ...eventWithoutLegacyRef } = event;
-        const runtimeRef = readLegacyNodeEventRuntimeRef(event);
-        return runtimeRef ? { ...eventWithoutLegacyRef, runtimeRef } : eventWithoutLegacyRef;
-      })
-    : [];
+  const run = stripObsoleteRuntimeRefAliases(archive.run);
+  const nodeRuns = Array.isArray(archive.nodeRuns) ? archive.nodeRuns.map(stripObsoleteRuntimeRefAliases) : [];
+  const events = Array.isArray(archive.events) ? archive.events.map(stripObsoleteRuntimeRefAliases) : [];
   const runtimeRefs = mergeRuntimeRefs(
-    readLegacyRunRuntimeRefs(runWithLegacyRefs),
+    readCanonicalRunRuntimeRefs(run),
     nodeRuns.flatMap((nodeRun) => {
       const runtimeRef = readBlueprintNodeRunRuntimeRef(nodeRun);
       return runtimeRef ? [runtimeRef] : [];
@@ -2242,7 +2223,7 @@ function normalizeRunArchiveRuntimeRefs(archive: BlueprintRunArchive): Blueprint
   return {
     ...archive,
     run: {
-      ...runWithoutLegacyRefs,
+      ...run,
       runtimeRefs
     },
     nodeRuns,
@@ -2250,16 +2231,15 @@ function normalizeRunArchiveRuntimeRefs(archive: BlueprintRunArchive): Blueprint
   };
 }
 
-function readLegacyNodeRunRuntimeRef(nodeRun: BlueprintNodeRun & LegacyRuntimeRefFields): RuntimeObjectRef | undefined {
-  return nodeRun.runtimeRef ?? nodeRun.openclawRef;
+function stripObsoleteRuntimeRefAliases<T extends object>(value: T): T {
+  const { openclawRef: _obsoleteRuntimeRef, openclawRefs: _obsoleteRuntimeRefs, ...canonical } =
+    value as T & ObsoleteRuntimeRefAliasFields;
+  return canonical as T;
 }
 
-function readLegacyNodeEventRuntimeRef(event: BlueprintNodeEvent & LegacyRuntimeRefFields): RuntimeObjectRef | undefined {
-  return event.runtimeRef ?? event.openclawRef;
-}
-
-function readLegacyRunRuntimeRefs(run: BlueprintRunSummary & LegacyRuntimeRefsField): RuntimeObjectRef[] {
-  return run.runtimeRefs ?? run.openclawRefs ?? [];
+function readCanonicalRunRuntimeRefs(run: Pick<BlueprintRunSummary, "runtimeRefs">): RuntimeObjectRef[] {
+  const runtimeRefs = readBlueprintRunRuntimeRefs(run);
+  return Array.isArray(runtimeRefs) ? runtimeRefs : [];
 }
 
 function mergeRuntimeRefs(...groups: RuntimeObjectRef[][]): RuntimeObjectRef[] {
@@ -2320,6 +2300,10 @@ function normalizeInboxItems(value: unknown, companies: CompanyProfile[], now: s
       if (!isRecord(item)) return [];
       const id = readString(item.id) ?? `inbox-${nanoid(8)}`;
       const type = normalizeInboxItemType(item.type);
+      if (!type) {
+        reportInboxDataAnomaly(company.id, id, item.type);
+        return [];
+      }
       const status = item.status === "approved" || item.status === "rejected" ? item.status : "pending";
       const title = readString(item.title) ?? "Inbox item";
       const summary = readString(item.summary) ?? "";
@@ -2359,17 +2343,64 @@ function normalizeInboxItemReplies(value: unknown): InboxItem["replies"] {
   return replies.length ? replies : undefined;
 }
 
-function normalizeInboxItemType(value: unknown): InboxItemType {
+function normalizeApprovalRequests(value: unknown): ApprovalRequest[] {
+  return normalizeArray<ApprovalRequest>(value).flatMap((request) => {
+    const kind = normalizeApprovalRequestKind(request.kind);
+    if (!kind) {
+      reportApprovalDataAnomaly(request.id, request.kind);
+      return [];
+    }
+    return [{
+      ...request,
+      kind,
+      capabilities: request.capabilities ?? resolveApprovalCapabilities(kind, request.status)
+    }];
+  });
+}
+
+function normalizeApprovalThreads(value: unknown): ApprovalThread[] {
+  return normalizeArray<ApprovalThread>(value).flatMap((thread) => {
+    const kind = normalizeApprovalRequestKind(thread.kind);
+    if (!kind) {
+      reportApprovalDataAnomaly(thread.id, thread.kind);
+      return [];
+    }
+    return [{ ...thread, kind }];
+  });
+}
+
+function normalizeManagerMail(value: unknown): ManagerMail[] {
+  return normalizeArray<ManagerMail>(value).map((item) => ({
+    ...item,
+    kind: normalizeApprovalRequestKind(item.kind) ?? item.kind
+  }));
+}
+
+function normalizeInboxItemType(value: unknown): InboxItemType | undefined {
   if (
     value === "leader_delegation" ||
     value === "blueprint_proposal" ||
     value === "run_request" ||
-    value === "report" ||
     value === "company_config"
   ) {
     return value;
   }
-  return "report";
+  return undefined;
+}
+
+function reportInboxDataAnomaly(companyId: string, itemId: string, type: unknown): void {
+  const key = `${companyId}:${itemId}:${String(type)}`;
+  if (reportedInboxDataAnomalies.has(key)) return;
+  reportedInboxDataAnomalies.add(key);
+  console.warn(
+    `[HiveWard data anomaly] Skipping unsupported inbox item type ${JSON.stringify(type)} for item ${itemId} in company ${companyId}.`
+  );
+}
+
+function reportApprovalDataAnomaly(itemId: string | undefined, kind: unknown): void {
+  console.warn(
+    `[HiveWard data anomaly] Skipping unsupported approval kind ${JSON.stringify(kind)} for approval ${itemId ?? "unknown"}.`
+  );
 }
 
 function normalizeArray<T>(value: unknown): T[] {
@@ -2387,7 +2418,9 @@ function upsertById<T extends { id: string }>(items: T[], item: T): void {
 
 function backfillApprovalProjectionFacts(index: HivewardStoreIndex): void {
   for (const request of index.approvalRequests) {
-    upsertById(index.approvalThreads, approvalThreadFromRequest(request));
+    const thread = approvalThreadFromRequest(request);
+    const existing = index.approvalThreads.find((candidate) => candidate.id === thread.id);
+    upsertById(index.approvalThreads, existing ? { ...existing, ...thread } : thread);
   }
   const requestsById = new Map(index.approvalRequests.map((request) => [request.id, request]));
   for (const decision of index.approvalDecisions) {
@@ -2818,13 +2851,12 @@ function normalizeBlueprintIndexEntry(
 }
 
 function normalizeRunSummary(run: BlueprintRunSummary, fallbackCompanyId: string): BlueprintRunSummary {
-  const runWithLegacyRefs = run as BlueprintRunSummary & LegacyRuntimeRefsField;
-  const { openclawRefs: _legacyRefs, ...runWithoutLegacyRefs } = runWithLegacyRefs;
+  const canonicalRun = stripObsoleteRuntimeRefAliases(run);
   return {
-    ...runWithoutLegacyRefs,
-    companyId: readScopedCompanyId(run.companyId, fallbackCompanyId),
-    blueprintName: run.blueprintName || run.blueprintId,
-    runtimeRefs: readLegacyRunRuntimeRefs(runWithLegacyRefs)
+    ...canonicalRun,
+    companyId: readScopedCompanyId(canonicalRun.companyId, fallbackCompanyId),
+    blueprintName: canonicalRun.blueprintName || canonicalRun.blueprintId,
+    runtimeRefs: readCanonicalRunRuntimeRefs(canonicalRun)
   };
 }
 
@@ -2895,7 +2927,14 @@ function readPendingApprovalReplies(value: unknown, selectedReplyId?: string): P
     const body = readString(item.body);
     const createdAt = readString(item.createdAt);
     if (!id || !role || !body || !createdAt) return [];
-    return [{ id, role, body, createdAt, ...(selectedReplyId === id ? { selected: true } : {}) }];
+    return [{
+      id,
+      role,
+      body,
+      createdAt,
+      ...(role === "assistant" ? { canUseAsSolution: true } : {}),
+      ...(selectedReplyId === id ? { selected: true } : {})
+    }];
   });
   return replies.length ? replies : undefined;
 }
@@ -2905,13 +2944,17 @@ function pendingApprovalRepliesFromApprovalReplies(
   selectedReplyId?: string
 ): PendingApprovalItem["replies"] {
   if (!replies.length) return undefined;
-  return replies.map((reply) => ({
-    id: reply.id,
-    role: reply.actor === "user" ? "user" : "assistant",
-    body: reply.body,
-    createdAt: reply.createdAt,
-    ...(selectedReplyId === reply.id ? { selected: true } : {})
-  }));
+  return replies.map((reply) => {
+    const selected = selectedReplyId === reply.id;
+    return {
+      id: reply.id,
+      role: reply.actor === "user" ? "user" : "assistant",
+      body: reply.body,
+      createdAt: reply.createdAt,
+      ...(reply.actor !== "user" ? { canUseAsSolution: true } : {}),
+      ...(selected ? { selected: true } : {})
+    };
+  });
 }
 
 function mergePendingApprovalReplies(

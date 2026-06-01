@@ -14,6 +14,7 @@ import { resolve } from "node:path";
 
 export interface AgentSdkRuntime {
   streamChatMessage(input: AgentSdkChatStreamInput, onEvent: (event: ChatStreamEvent) => void): Promise<void>;
+  streamTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult>;
   startTask(input: StartAgentTaskInput): Promise<StartedAgentTaskResult>;
   waitForTask(input: WaitForAgentTaskInput): Promise<AgentTaskResult>;
   cancelTask(input: WaitForAgentTaskInput): Promise<AgentTaskResult>;

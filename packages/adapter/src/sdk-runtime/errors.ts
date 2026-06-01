@@ -5,8 +5,7 @@ export type AgentSdkErrorCode =
   | "permission_denied"
   | "timeout"
   | "cancelled"
-  | "provider_error"
-  | "invalid_output";
+  | "provider_error";
 
 export class AgentSdkError extends Error {
   constructor(

@@ -34,7 +34,7 @@ import { createApiRouter } from "./apiRouter";
 import { ArtifactService } from "../services/artifactService";
 import { FileHivewardStore } from "../store/fileHivewardStore";
 import type { OpenClawConfigStore } from "../store/openClawConfigStore";
-import type { BlueprintWorker } from "../worker/blueprintWorker";
+import { BlueprintWorker } from "../worker/blueprintWorker";
 
 class TrackingAdapter extends MockRuntimeAdapter {
   runtimeOverviewCalls = 0;
@@ -709,6 +709,63 @@ describe("apiRouter", () => {
     }
   });
 
+  it("selects approval request replies without routing through node-run selection", async () => {
+    const fixture = await createStoreFixture();
+    try {
+      const blueprint = (await fixture.store.listBlueprints())[0]!;
+      const run = await fixture.store.createBlueprintRun(blueprint, "tester");
+      const now = new Date().toISOString();
+      const request = await fixture.store.upsertApprovalRequest({
+        id: "approval-request-selection",
+        runId: run.id,
+        kind: "iteration_requirement_plan",
+        status: "pending",
+        title: "Round plan",
+        body: "Original plan",
+        threadId: "thread-request-selection",
+        revision: 1,
+        capabilities: resolveApprovalCapabilities("iteration_requirement_plan", "pending"),
+        requestedBy: { type: "node", label: "Manager", nodeId: "manager" },
+        requestedAt: now,
+        updatedAt: now
+      });
+      await fixture.store.appendApprovalReply({
+        id: "reply-request-selection",
+        threadId: request.threadId ?? request.id,
+        approvalRequestId: request.id,
+        actor: "agent",
+        body: "Candidate plan",
+        createdAt: now,
+        metadata: { inboxDiscussionMode: "candidate", candidate: true }
+      });
+
+      await withApiServer(fixture.store, async (baseUrl) => {
+        const response = await readOkJson<{ approvalRequest: ApprovalRequest }>(await fetch(
+          `${baseUrl}/api/approval-requests/${request.id}/select-reply`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ selectedReplyId: "reply-request-selection" })
+          }
+        ));
+
+        expect(response.approvalRequest).toMatchObject({
+          id: request.id,
+          status: "pending",
+          selectedReplyId: "reply-request-selection",
+          body: "Original plan"
+        });
+      });
+
+      expect(await fixture.store.listApprovalDecisions(request.id)).toEqual([]);
+      expect(await fixture.store.getApprovalRequest(request.id)).toMatchObject({
+        selectedReplyId: "reply-request-selection"
+      });
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
   it("applies run approvals against the immutable run blueprint snapshot", async () => {
     const fixture = await createStoreFixture();
     const receivedBlueprints: BlueprintDefinition[] = [];
@@ -871,6 +928,69 @@ describe("apiRouter", () => {
         );
         expect(repliesBody.approvalReplies.map((reply) => reply.body)).toEqual(["Keep this as a thread comment."]);
       });
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("streams plain inbox thread replies without invoking Agent lifecycle", async () => {
+    const fixture = await createStoreFixture();
+    try {
+      const roles = await fixture.store.getRoleDirectory();
+      const item = await fixture.store.createLeaderDelegationRequest({
+        leaderId: roles.roles.leaders[0]!.id,
+        title: "Plain inbox note",
+        summary: "Discuss this without running an Agent."
+      });
+      const adapter = new TrackingAdapter();
+      await withApiServer(
+        fixture.store,
+        async (baseUrl) => {
+          const response = await fetch(`${baseUrl}/api/inbox/threads/inbox/${encodeURIComponent(item.id)}/messages/stream`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ message: "Persist this comment." })
+          });
+          expect(response.status).toBe(200);
+          const events = readSseEvents(await response.text());
+          expect(events.map((event) => event.type)).toEqual(["inbox_message_created", "done"]);
+          expect(events.find((event) => event.type === "done")).not.toHaveProperty("source");
+
+          const items = await fixture.store.listInboxItems();
+          const replied = items.find((candidate) => candidate.id === item.id);
+          expect(replied?.replies?.map((reply) => reply.body)).toEqual(["Persist this comment."]);
+          expect(adapter.lastStartInput).toBeUndefined();
+        },
+        adapter,
+        createConfigStoreFixture(),
+        new BlueprintWorker(fixture.store, adapter)
+      );
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 409 when an inbox discussion stream is already active", async () => {
+    const fixture = await createStoreFixture();
+    const worker = {
+      isInboxThreadStreamActive() {
+        return true;
+      },
+      async streamInboxThreadMessage() {
+        throw new Error("Stream should not start while locked.");
+      }
+    } as unknown as BlueprintWorker;
+    try {
+      await withApiServer(fixture.store, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/inbox/threads/inbox/thread-1/messages/stream`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message: "Second send." })
+        });
+        const body = await response.json() as { error?: { code?: string } };
+        expect(response.status).toBe(409);
+        expect(body.error?.code).toBe("inbox_discussion_in_progress");
+      }, new TrackingAdapter(), createConfigStoreFixture(), worker);
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
@@ -4228,6 +4348,20 @@ async function readOkJson<T = unknown>(response: Response): Promise<T> {
   const text = await response.text();
   expect([200, 201], text).toContain(response.status);
   return JSON.parse(text) as T;
+}
+
+function readSseEvents(text: string): Array<{ type: string; [key: string]: unknown }> {
+  return text
+    .split(/\n\n/)
+    .map((frame) =>
+      frame
+        .split(/\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n")
+    )
+    .filter(Boolean)
+    .map((data) => JSON.parse(data) as { type: string; [key: string]: unknown });
 }
 
 type StreamSessionChatTestInput = {

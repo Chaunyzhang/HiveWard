@@ -1394,6 +1394,15 @@ export function App() {
     [applyRunView, withBusy]
   );
 
+  const selectApprovalRequestReply = useCallback(
+    (approvalRequestId: string, selectedReplyId: string) => {
+      void withApprovalRequestBusy("selectApprovalRequestReply", async () => {
+        await applyApprovalRequestResponse(await api.selectApprovalRequestReply(approvalRequestId, selectedReplyId));
+      });
+    },
+    [applyApprovalRequestResponse, withApprovalRequestBusy]
+  );
+
   const replyToInboxItem = useCallback(
     (itemId: string, message: string) => {
       void withBusy("replyInboxItem", async () => {
@@ -1438,6 +1447,17 @@ export function App() {
       setError(refreshError instanceof Error ? refreshError.message : messageRef.current.errors.load);
     }
   }, []);
+
+  const refreshAfterInboxThreadStream = useCallback(async () => {
+    try {
+      await hydrateWorkspace({
+        blueprintId: blueprintRef.current?.id,
+        runId: selectedRunIdRef.current
+      });
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : messageRef.current.errors.load);
+    }
+  }, [hydrateWorkspace]);
 
   const handleChatInboxItemCreated = useCallback(
     (item: InboxItem) => {
@@ -1750,8 +1770,11 @@ export function App() {
           onReplyApprovalRequest={replyToApprovalRequest}
           onRequestChangesApprovalRequest={requestChangesApprovalRequest}
           onReviseApprovalRequest={reviseApprovalRequest}
-          onSelectApprovalReply={selectRunApprovalReply}
+          onSelectRunApprovalReply={selectRunApprovalReply}
+          onSelectApprovalRequestReply={selectApprovalRequestReply}
           onReplyInboxItem={replyToInboxItem}
+          onInboxThreadMessageCreated={refreshInboxAndApprovals}
+          onInboxThreadStreamDone={refreshAfterInboxThreadStream}
           onApproveInboxItem={approveInboxItem}
           onRejectInboxItem={rejectInboxItem}
         />

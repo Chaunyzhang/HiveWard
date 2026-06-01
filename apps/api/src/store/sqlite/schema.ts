@@ -527,6 +527,33 @@ const sqliteApprovalReplyLegacyMeaningStatements = [
    WHERE metadata_json LIKE '%"legacySource":"approval_replies_v1"%'`
 ];
 
+const sqliteRuntimeRefCanonicalColumnStatements = [
+  "ALTER TABLE runs RENAME COLUMN openclaw_refs_json TO runtime_refs_json",
+  "ALTER TABLE node_runs RENAME COLUMN openclaw_ref_json TO runtime_ref_json",
+  "ALTER TABLE run_events RENAME COLUMN openclaw_ref_json TO runtime_ref_json"
+];
+
+const sqliteInboxApprovalKindCanonicalizationStatements = [
+  `DELETE FROM inbox_replies
+   WHERE inbox_item_id IN (
+     SELECT id FROM inbox_items
+     WHERE type NOT IN ('leader_delegation','blueprint_proposal','run_request','company_config')
+   )`,
+  `DELETE FROM inbox_items
+   WHERE type NOT IN ('leader_delegation','blueprint_proposal','run_request','company_config')`,
+  "UPDATE approval_requests SET kind = 'function_node' WHERE kind = 'generic_message'",
+  "UPDATE approval_threads SET kind = 'function_node' WHERE kind = 'generic_message'",
+  "UPDATE manager_mail SET kind = 'function_node' WHERE kind = 'generic_message'"
+];
+
+const sqliteApprovalRequestSelectedReplyStatements = [
+  "ALTER TABLE approval_requests ADD COLUMN selected_reply_id TEXT"
+];
+
+const sqliteApprovalThreadDiscussionSessionStatements = [
+  "ALTER TABLE approval_threads ADD COLUMN discussion_session_json TEXT"
+];
+
 function checksumStatements(statements: string[]): string {
   return createHash("sha256").update(statements.join("\n")).digest("hex");
 }
@@ -567,6 +594,30 @@ export const sqliteMigrations: SqliteMigration[] = [
     name: "approval_reply_legacy_meaning",
     checksum: checksumStatements(sqliteApprovalReplyLegacyMeaningStatements),
     up: sqliteApprovalReplyLegacyMeaningStatements
+  },
+  {
+    version: 7,
+    name: "runtime_ref_canonical_columns",
+    checksum: checksumStatements(sqliteRuntimeRefCanonicalColumnStatements),
+    up: sqliteRuntimeRefCanonicalColumnStatements
+  },
+  {
+    version: 8,
+    name: "inbox_approval_kind_canonicalization",
+    checksum: checksumStatements(sqliteInboxApprovalKindCanonicalizationStatements),
+    up: sqliteInboxApprovalKindCanonicalizationStatements
+  },
+  {
+    version: 9,
+    name: "approval_request_selected_reply",
+    checksum: checksumStatements(sqliteApprovalRequestSelectedReplyStatements),
+    up: sqliteApprovalRequestSelectedReplyStatements
+  },
+  {
+    version: 10,
+    name: "approval_thread_discussion_session",
+    checksum: checksumStatements(sqliteApprovalThreadDiscussionSessionStatements),
+    up: sqliteApprovalThreadDiscussionSessionStatements
   }
 ];
 
@@ -576,11 +627,11 @@ export const sqliteSchemaStatements = sqliteMigrations.flatMap((migration) => mi
 export const sqliteRequiredSchema = {
   schema_migrations: ["version", "name", "applied_at", "checksum"],
   migration_manifests: ["id", "source_root", "backup_root", "source_manifest_json", "result_json", "status", "created_at"],
-  runs: ["id", "company_id", "blueprint_id", "status", "started_by", "started_at", "row_version", "updated_at"],
+  runs: ["id", "company_id", "blueprint_id", "status", "started_by", "started_at", "runtime_refs_json", "row_version", "updated_at"],
   run_sequence_counters: ["run_id", "scope", "last_sequence", "updated_at"],
-  node_runs: ["id", "run_id", "blueprint_id", "node_id", "node_label", "node_type", "status", "lease_owner", "worker_epoch", "row_version", "updated_at"],
+  node_runs: ["id", "run_id", "blueprint_id", "node_id", "node_label", "node_type", "status", "runtime_ref_json", "lease_owner", "worker_epoch", "row_version", "updated_at"],
   node_run_payloads: ["node_run_id", "input_json", "output_json", "raw_result_json", "updated_at"],
-  run_events: ["id", "run_id", "node_run_id", "sequence", "type", "message", "created_at"],
+  run_events: ["id", "run_id", "node_run_id", "sequence", "type", "message", "runtime_ref_json", "created_at"],
   approval_threads: ["id", "kind", "status", "title", "current_revision", "capabilities_json", "created_at", "updated_at"],
   approval_replies: ["id", "approval_request_id", "thread_id", "message", "actor", "created_at", "metadata_json"],
   approval_requests: ["id", "run_id", "round_id", "node_run_id", "kind", "status", "title", "body", "revision", "requested_by_json", "requested_at"],

@@ -75,11 +75,28 @@ export type ApprovalRequestKind =
   | "iteration_requirement_plan"
   | "manager_release_report"
   | "agent_proposal"
+  | "function_node"
   | "blueprint_proposal"
   | "leader_delegation"
   | "run_request"
-  | "company_config"
-  | "generic_message";
+  | "company_config";
+
+export function normalizeApprovalRequestKind(value: unknown): ApprovalRequestKind | undefined {
+  if (value === "generic_message") return "function_node";
+  if (
+    value === "iteration_requirement_plan" ||
+    value === "manager_release_report" ||
+    value === "agent_proposal" ||
+    value === "function_node" ||
+    value === "blueprint_proposal" ||
+    value === "leader_delegation" ||
+    value === "run_request" ||
+    value === "company_config"
+  ) {
+    return value;
+  }
+  return undefined;
+}
 
 export type ApprovalRequestStatus =
   | "pending"
@@ -92,6 +109,24 @@ export type ApprovalRequestStatus =
 
 export type ApprovalThreadStatus = "open" | "closed";
 export type ApprovalThreadKind = ApprovalRequestKind;
+export type InboxDiscussionThreadType = "approval" | "inbox";
+export type InboxDiscussionHarnessId = "openclaw" | "claudeCode" | "codex" | "google" | "cursor" | "opencode" | "hermes";
+export type InboxDiscussionNativeSessionState = "unknown" | "resumable" | "missing";
+export type InboxDiscussionSessionStatus = "active" | "ended" | "failed" | "native_missing";
+
+export interface InboxDiscussionSession {
+  threadType: InboxDiscussionThreadType;
+  threadId: string;
+  chatSessionId?: string;
+  harnessId: InboxDiscussionHarnessId;
+  agentId?: string;
+  modelId?: string;
+  nativeSessionId?: string;
+  nativeSessionState?: InboxDiscussionNativeSessionState;
+  status: InboxDiscussionSessionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface ApprovalThread {
   id: string;
@@ -105,12 +140,13 @@ export interface ApprovalThread {
   currentRequestId?: string;
   currentRevision: number;
   capabilities: ApprovalCapabilities;
+  discussionSession?: InboxDiscussionSession;
   createdAt: string;
   updatedAt: string;
   closedAt?: string;
 }
 
-export type ApprovalReplyActor = "user" | "agent" | "manager" | "system";
+export type ApprovalReplyActor = "user" | "assistant" | "agent" | "manager" | "system";
 
 export interface ApprovalReply {
   id: string;
@@ -138,6 +174,7 @@ export interface ApprovalRequest {
   };
   threadId?: string;
   revision: number;
+  selectedReplyId?: string;
   replacesRequestId?: string;
   supersededByRequestId?: string;
   capabilities: ApprovalCapabilities;
@@ -352,6 +389,7 @@ export interface RunTimelineItem {
     | "approval_created"
     | "decision_created"
     | "node_started"
+    | "node_runtime"
     | "node_output"
     | "artifact_published"
     | "release_report_published"
@@ -390,12 +428,13 @@ export function resolveApprovalCapabilities(
       return { approve: true, reject: true, reply: true, complete: false, terminate: false, requestChanges: true, revise: false };
     case "manager_release_report":
       return { approve: !options.finalRound, reject: true, reply: true, complete: true, terminate: false, requestChanges: false, revise: true };
+    case "function_node":
+      return { approve: true, reject: true, reply: true, complete: false, terminate: true, requestChanges: false, revise: false };
     case "blueprint_proposal":
     case "leader_delegation":
     case "company_config":
       return { approve: true, reject: true, reply: true, complete: false, terminate: false, requestChanges: false, revise: false };
     case "run_request":
-    case "generic_message":
       return { approve: true, reject: true, reply: true, complete: false, terminate: true, requestChanges: false, revise: false };
   }
 }
@@ -489,5 +528,5 @@ export function runtimeAccessPolicyToPermissionProfile(policy: RuntimeAccessPoli
 }
 
 export function lifecycleKindForNodeType(type: BlueprintNodeType): ApprovalRequestKind {
-  return type === "agent" ? "agent_proposal" : "generic_message";
+  return type === "agent" ? "agent_proposal" : "function_node";
 }

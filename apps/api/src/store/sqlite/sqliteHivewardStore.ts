@@ -61,6 +61,7 @@ import {
   readPortableBlueprintPackage,
   approvalThreadFromRequest,
   approvalThreadIdForRequest,
+  normalizeApprovalRequestKind,
   resolveFinalRunResult
 } from "@hiveward/shared";
 import {
@@ -99,6 +100,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../.
 const selectedCompanySettingKey = "selected_company_id";
 const catalogSnapshotSettingKey = "catalog_snapshot";
 const maxMessagesPerSession = 60;
+const reportedInboxDataAnomalies = new Set<string>();
 
 type Row = Record<string, unknown>;
 
@@ -714,7 +716,6 @@ export class SqliteHivewardStore implements HivewardStore {
       const body = readOptionalString(message);
       if (!body) throw new Error("Inbox reply message is required.");
       const item = this.requireInboxItem(itemId);
-      if (item.status === "approved") return item;
       const now = new Date().toISOString();
       this.driver.db.prepare(
         `INSERT INTO inbox_replies (id, inbox_item_id, message, created_at) VALUES (?, ?, ?, ?)`
@@ -870,7 +871,7 @@ export class SqliteHivewardStore implements HivewardStore {
       this.driver.db.prepare(
         `INSERT INTO node_runs (
           id, run_id, blueprint_id, node_id, node_label, node_type, iteration_round_id, status,
-          queued_at, started_at, ended_at, error, usage_json, openclaw_ref_json, updated_at
+          queued_at, started_at, ended_at, error, usage_json, runtime_ref_json, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
@@ -879,7 +880,7 @@ export class SqliteHivewardStore implements HivewardStore {
           ended_at = excluded.ended_at,
           error = excluded.error,
           usage_json = excluded.usage_json,
-          openclaw_ref_json = excluded.openclaw_ref_json,
+          runtime_ref_json = excluded.runtime_ref_json,
           row_version = node_runs.row_version + 1,
           updated_at = excluded.updated_at`
       ).run(
@@ -985,6 +986,7 @@ export class SqliteHivewardStore implements HivewardStore {
     const rows = this.driver.db.prepare(
       `SELECT ar.*, r.blueprint_id, r.blueprint_name, r.started_by, r.started_at,
               nr.status AS node_status, nr.node_id AS joined_node_id, nr.node_label AS joined_node_label,
+              nr.runtime_ref_json AS node_runtime_ref_json,
               p.input_json AS node_input_json, p.output_json AS node_output_json
        FROM approval_requests ar
        JOIN runs r ON r.id = ar.run_id
@@ -1003,7 +1005,8 @@ export class SqliteHivewardStore implements HivewardStore {
       ).all(...requestIds) as Row[]).map(approvalReplyFromRow);
       for (const request of rowsWithRequests.map((entry) => entry.request)) {
         const requestReplies = pendingApprovalRepliesFromApprovalReplies(
-          replies.filter((reply) => reply.approvalRequestId === request.id)
+          replies.filter((reply) => reply.approvalRequestId === request.id),
+          request.selectedReplyId
         );
         if (requestReplies) approvalRepliesByRequestId.set(request.id, requestReplies);
       }
@@ -1014,8 +1017,10 @@ export class SqliteHivewardStore implements HivewardStore {
       const output = isRecord(parsedOutput) && parsedOutput.approvalType === "agent"
         ? parsedOutput
         : undefined;
-      const selectedReplyId = readString(output?.selectedReplyId);
+      const selectedReplyId = readString(output?.selectedReplyId) ?? request.selectedReplyId;
       const approvalReplies = approvalRepliesByRequestId.get(request.id);
+      const runtimeRef = parseOptionalJson(row.node_runtime_ref_json);
+      const runtimeSource = isRecord(runtimeRef) ? readString(runtimeRef.source) : undefined;
       return {
         approvalRequestId: request.id,
         approvalThreadId: approvalThreadIdForRequest(request),
@@ -1026,6 +1031,7 @@ export class SqliteHivewardStore implements HivewardStore {
         nodeRunId: request.nodeRunId ?? request.id,
         nodeId: request.requestedBy.nodeId ?? readString(row.joined_node_id) ?? request.id,
         nodeLabel: request.requestedBy.label || readString(row.joined_node_label) || request.id,
+        ...(runtimeSource ? { harnessId: runtimeSource } : {}),
         startedBy: readString(row.started_by) ?? "unknown",
         startedAt: readString(row.started_at) ?? request.requestedAt,
         requestedAt: request.requestedAt,
@@ -1084,8 +1090,8 @@ export class SqliteHivewardStore implements HivewardStore {
     this.driver.db.prepare(
       `INSERT INTO approval_threads (
         id, kind, status, title, run_id, round_id, node_run_id, source_type, source_id,
-        current_request_id, current_revision, capabilities_json, created_at, updated_at, closed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        current_request_id, current_revision, capabilities_json, discussion_session_json, created_at, updated_at, closed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         kind = excluded.kind,
         status = excluded.status,
@@ -1098,6 +1104,7 @@ export class SqliteHivewardStore implements HivewardStore {
         current_request_id = excluded.current_request_id,
         current_revision = excluded.current_revision,
         capabilities_json = excluded.capabilities_json,
+        discussion_session_json = COALESCE(excluded.discussion_session_json, approval_threads.discussion_session_json),
         updated_at = excluded.updated_at,
         closed_at = excluded.closed_at`
     ).run(
@@ -1113,6 +1120,7 @@ export class SqliteHivewardStore implements HivewardStore {
       thread.currentRequestId,
       thread.currentRevision,
       stringifyJson(thread.capabilities),
+      thread.discussionSession ? stringifyJson(thread.discussionSession) : undefined,
       thread.createdAt,
       thread.updatedAt,
       thread.closedAt
@@ -1125,16 +1133,17 @@ export class SqliteHivewardStore implements HivewardStore {
   }
 
   async upsertApprovalRequest(request: ApprovalRequest): Promise<ApprovalRequest> {
-    return this.upsertApprovalRequestSync(request);
+    return this.upsertApprovalRequestSync(canonicalizeApprovalRequest(request));
   }
 
   private upsertApprovalRequestSync(request: ApprovalRequest): ApprovalRequest {
+    request = canonicalizeApprovalRequest(request);
     this.driver.db.prepare(
       `INSERT INTO approval_requests (
         id, run_id, round_id, node_run_id, kind, status, title, body, payload_ref,
-        source_type, source_id, thread_id, revision, replaces_request_id, superseded_by_request_id,
+        source_type, source_id, thread_id, revision, selected_reply_id, replaces_request_id, superseded_by_request_id,
         capabilities_json, requested_by_json, requested_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status,
         title = excluded.title,
@@ -1142,6 +1151,7 @@ export class SqliteHivewardStore implements HivewardStore {
         payload_ref = excluded.payload_ref,
         thread_id = excluded.thread_id,
         revision = excluded.revision,
+        selected_reply_id = excluded.selected_reply_id,
         replaces_request_id = excluded.replaces_request_id,
         superseded_by_request_id = excluded.superseded_by_request_id,
         capabilities_json = excluded.capabilities_json,
@@ -1161,6 +1171,7 @@ export class SqliteHivewardStore implements HivewardStore {
       request.sourceRef?.id,
       request.threadId,
       request.revision,
+      request.selectedReplyId,
       request.replacesRequestId,
       request.supersededByRequestId,
       stringifyJson(request.capabilities),
@@ -1268,12 +1279,16 @@ export class SqliteHivewardStore implements HivewardStore {
       const result = this.driver.db.prepare(
         `UPDATE approval_requests
          SET status = ?,
+             body = ?,
+             selected_reply_id = ?,
              capabilities_json = ?,
              superseded_by_request_id = ?,
              updated_at = ?
          WHERE id = ? AND status = 'pending'`
       ).run(
         input.nextRequest.status,
+        input.nextRequest.body,
+        input.nextRequest.selectedReplyId,
         stringifyJson(input.nextRequest.capabilities),
         input.nextRequest.supersededByRequestId,
         input.nextRequest.updatedAt,
@@ -1839,7 +1854,7 @@ export class SqliteHivewardStore implements HivewardStore {
       const result = this.driver.db.prepare(
         `UPDATE node_runs
          SET started_at = COALESCE(started_at, ?),
-             openclaw_ref_json = COALESCE(?, openclaw_ref_json),
+             runtime_ref_json = COALESCE(?, runtime_ref_json),
              row_version = row_version + 1,
              updated_at = ?
          WHERE id = ?
@@ -1876,7 +1891,7 @@ export class SqliteHivewardStore implements HivewardStore {
              ended_at = ?,
              error = NULL,
              usage_json = ?,
-             openclaw_ref_json = ?,
+             runtime_ref_json = ?,
              row_version = row_version + 1,
              updated_at = ?
           WHERE id = ?
@@ -1941,7 +1956,7 @@ export class SqliteHivewardStore implements HivewardStore {
          SET status = 'cancelled',
              ended_at = ?,
              error = ?,
-             openclaw_ref_json = COALESCE(?, openclaw_ref_json),
+             runtime_ref_json = COALESCE(?, runtime_ref_json),
              row_version = row_version + 1,
              updated_at = ?
          WHERE id = ?
@@ -1998,7 +2013,7 @@ export class SqliteHivewardStore implements HivewardStore {
            ended_at = ?,
            error = NULL,
            usage_json = ?,
-           openclaw_ref_json = ?,
+           runtime_ref_json = ?,
            row_version = row_version + 1,
            updated_at = ?
        WHERE id = ?
@@ -2326,6 +2341,9 @@ export class SqliteHivewardStore implements HivewardStore {
   }
 
   private upsertInboxItem(item: InboxItem): void {
+    if (!normalizeInboxItemType(item.type)) {
+      throw new Error(`Unsupported inbox item type: ${item.type}`);
+    }
     this.driver.db.prepare(
       `INSERT INTO inbox_items (
         id, company_id, type, status, title, summary, created_by_role_id,
@@ -2360,24 +2378,33 @@ export class SqliteHivewardStore implements HivewardStore {
   }
 
   private readInboxItems(where = "", values: unknown[] = []): InboxItem[] {
-    return (this.driver.db.prepare(`SELECT * FROM inbox_items ${where}`).all(...values) as Row[]).map((row) => ({
-      id: requireString(row.id),
-      companyId: requireString(row.company_id),
-      type: normalizeInboxItemType(row.type),
-      status: row.status === "approved" || row.status === "rejected" ? row.status : "pending",
-      title: requireString(row.title),
-      summary: requireString(row.summary),
-      createdByRoleId: requireString(row.created_by_role_id),
-      targetRoleId: readString(row.target_role_id),
-      blueprintId: readString(row.blueprint_id),
-      blueprintName: readString(row.blueprint_name),
-      payload: parseOptionalJson(row.payload_json) as Record<string, unknown> | undefined,
-      createdAt: requireString(row.created_at),
-      updatedAt: requireString(row.updated_at),
-      decidedAt: readString(row.decided_at),
-      decisionComment: readString(row.decision_comment),
-      replies: this.readInboxReplies(requireString(row.id))
-    }));
+    return (this.driver.db.prepare(`SELECT * FROM inbox_items ${where}`).all(...values) as Row[]).flatMap((row) => {
+      const id = requireString(row.id);
+      const companyId = requireString(row.company_id);
+      const type = normalizeInboxItemType(row.type);
+      if (!type) {
+        reportInboxDataAnomaly(companyId, id, row.type);
+        return [];
+      }
+      return [{
+        id,
+        companyId,
+        type,
+        status: row.status === "approved" || row.status === "rejected" ? row.status : "pending",
+        title: requireString(row.title),
+        summary: requireString(row.summary),
+        createdByRoleId: requireString(row.created_by_role_id),
+        targetRoleId: readString(row.target_role_id),
+        blueprintId: readString(row.blueprint_id),
+        blueprintName: readString(row.blueprint_name),
+        payload: parseOptionalJson(row.payload_json) as Record<string, unknown> | undefined,
+        createdAt: requireString(row.created_at),
+        updatedAt: requireString(row.updated_at),
+        decidedAt: readString(row.decided_at),
+        decisionComment: readString(row.decision_comment),
+        replies: this.readInboxReplies(id)
+      }];
+    });
   }
 
   private readInboxReplies(itemId: string): InboxItem["replies"] {
@@ -2412,7 +2439,7 @@ export class SqliteHivewardStore implements HivewardStore {
       `INSERT INTO runs (
         id, company_id, blueprint_id, blueprint_version_id, blueprint_name, blueprint_version,
         status, started_by, started_at, ended_at, duration_ms, total_input_tokens,
-        total_output_tokens, total_cost_usd, openclaw_refs_json, final_result_json, updated_at
+        total_output_tokens, total_cost_usd, runtime_refs_json, final_result_json, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status,
@@ -2421,7 +2448,7 @@ export class SqliteHivewardStore implements HivewardStore {
         total_input_tokens = excluded.total_input_tokens,
         total_output_tokens = excluded.total_output_tokens,
         total_cost_usd = excluded.total_cost_usd,
-        openclaw_refs_json = excluded.openclaw_refs_json,
+        runtime_refs_json = excluded.runtime_refs_json,
         final_result_json = excluded.final_result_json,
         row_version = runs.row_version + 1,
         updated_at = excluded.updated_at`
@@ -2498,7 +2525,7 @@ export class SqliteHivewardStore implements HivewardStore {
       this.driver.db.prepare(
         `INSERT INTO node_runs (
           id, run_id, blueprint_id, node_id, node_label, node_type, iteration_round_id, status,
-          queued_at, started_at, ended_at, error, usage_json, openclaw_ref_json, updated_at
+          queued_at, started_at, ended_at, error, usage_json, runtime_ref_json, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
@@ -2506,7 +2533,7 @@ export class SqliteHivewardStore implements HivewardStore {
           ended_at = excluded.ended_at,
           error = excluded.error,
           usage_json = excluded.usage_json,
-          openclaw_ref_json = excluded.openclaw_ref_json,
+          runtime_ref_json = excluded.runtime_ref_json,
           updated_at = excluded.updated_at`
       ).run(
         nodeRun.id,
@@ -2538,12 +2565,12 @@ export class SqliteHivewardStore implements HivewardStore {
     }
     for (const event of sanitized.events) {
       this.driver.db.prepare(
-        `INSERT INTO run_events (id, run_id, node_run_id, sequence, type, message, openclaw_ref_json, created_at)
+        `INSERT INTO run_events (id, run_id, node_run_id, sequence, type, message, runtime_ref_json, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            type = excluded.type,
            message = excluded.message,
-           openclaw_ref_json = excluded.openclaw_ref_json,
+           runtime_ref_json = excluded.runtime_ref_json,
            created_at = excluded.created_at`
       ).run(
         event.id,
@@ -2646,13 +2673,13 @@ export class SqliteHivewardStore implements HivewardStore {
   private appendEventSync(event: BlueprintNodeEvent): void {
     const sequence = this.nextEventSequence(event.blueprintRunId);
     this.driver.db.prepare(
-      `INSERT INTO run_events (id, run_id, node_run_id, sequence, type, message, openclaw_ref_json, created_at)
+      `INSERT INTO run_events (id, run_id, node_run_id, sequence, type, message, runtime_ref_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          node_run_id = excluded.node_run_id,
          type = excluded.type,
          message = excluded.message,
-         openclaw_ref_json = excluded.openclaw_ref_json,
+         runtime_ref_json = excluded.runtime_ref_json,
          created_at = excluded.created_at`
     ).run(
       event.id,
@@ -2877,7 +2904,7 @@ function runFromRow(row: Row): BlueprintRun {
     totalInputTokens: readNumber(row.total_input_tokens, 0),
     totalOutputTokens: readNumber(row.total_output_tokens, 0),
     totalCostUsd: readNumber(row.total_cost_usd, 0),
-    runtimeRefs: readJsonArray(row.openclaw_refs_json)
+    runtimeRefs: readJsonArray(row.runtime_refs_json)
   };
 }
 
@@ -2905,7 +2932,7 @@ function nodeRunFromRow(row: Row): BlueprintNodeRun {
     output: parseOptionalJson(row.output_json),
     error: readString(row.error),
     usage: parseOptionalJson(row.usage_json) as BlueprintNodeRun["usage"],
-    runtimeRef: parseOptionalJson(row.openclaw_ref_json) as BlueprintNodeRun["runtimeRef"]
+    runtimeRef: parseOptionalJson(row.runtime_ref_json) as BlueprintNodeRun["runtimeRef"]
   };
 }
 
@@ -2917,19 +2944,22 @@ function eventFromRow(row: Row): BlueprintNodeEvent {
     type: requireString(row.type) as BlueprintNodeEvent["type"],
     message: requireString(row.message),
     createdAt: requireString(row.created_at),
-    runtimeRef: parseOptionalJson(row.openclaw_ref_json) as BlueprintNodeEvent["runtimeRef"]
+    runtimeRef: parseOptionalJson(row.runtime_ref_json) as BlueprintNodeEvent["runtimeRef"]
   };
 }
 
 function approvalRequestFromRow(row: Row): ApprovalRequest {
   const sourceType = readString(row.source_type) as NonNullable<ApprovalRequest["sourceRef"]>["type"] | undefined;
   const sourceId = readString(row.source_id);
+  const id = requireString(row.id);
+  const kind = normalizeApprovalRequestKind(row.kind);
+  if (!kind) throw new Error(`Unsupported approval request kind ${JSON.stringify(row.kind)} for ${id}.`);
   return {
-    id: requireString(row.id),
+    id,
     runId: requireString(row.run_id),
     roundId: readString(row.round_id),
     nodeRunId: readString(row.node_run_id),
-    kind: requireString(row.kind) as ApprovalRequest["kind"],
+    kind,
     status: requireString(row.status) as ApprovalRequest["status"],
     title: requireString(row.title),
     body: requireString(row.body),
@@ -2937,6 +2967,7 @@ function approvalRequestFromRow(row: Row): ApprovalRequest {
     sourceRef: sourceType && sourceId ? { type: sourceType, id: sourceId } : undefined,
     threadId: readString(row.thread_id),
     revision: readNumber(row.revision, 1),
+    selectedReplyId: readString(row.selected_reply_id),
     replacesRequestId: readString(row.replaces_request_id),
     supersededByRequestId: readString(row.superseded_by_request_id),
     capabilities: readJson(row.capabilities_json),
@@ -2962,9 +2993,12 @@ function approvalDecisionFromRow(row: Row): ApprovalDecision {
 function approvalThreadFromRow(row: Row): ApprovalThread {
   const sourceType = readString(row.source_type) as NonNullable<ApprovalThread["sourceRef"]>["type"] | undefined;
   const sourceId = readString(row.source_id);
+  const id = requireString(row.id);
+  const kind = normalizeApprovalRequestKind(row.kind);
+  if (!kind) throw new Error(`Unsupported approval thread kind ${JSON.stringify(row.kind)} for ${id}.`);
   return {
-    id: requireString(row.id),
-    kind: requireString(row.kind) as ApprovalThread["kind"],
+    id,
+    kind,
     status: requireString(row.status) as ApprovalThread["status"],
     title: requireString(row.title),
     runId: readString(row.run_id),
@@ -2974,6 +3008,7 @@ function approvalThreadFromRow(row: Row): ApprovalThread {
     currentRequestId: readString(row.current_request_id),
     currentRevision: readNumber(row.current_revision, 1),
     capabilities: readJson(row.capabilities_json),
+    discussionSession: parseOptionalJson(row.discussion_session_json) as ApprovalThread["discussionSession"],
     createdAt: requireString(row.created_at),
     updatedAt: requireString(row.updated_at),
     closedAt: readString(row.closed_at)
@@ -2998,13 +3033,17 @@ function pendingApprovalRepliesFromApprovalReplies(
   selectedReplyId?: string
 ): PendingApprovalItem["replies"] {
   if (!replies.length) return undefined;
-  return replies.map((reply) => ({
-    id: reply.id,
-    role: reply.actor === "user" ? "user" : "assistant",
-    body: reply.body,
-    createdAt: reply.createdAt,
-    ...(selectedReplyId === reply.id ? { selected: true } : {})
-  }));
+  return replies.map((reply) => {
+    const selected = selectedReplyId === reply.id;
+    return {
+      id: reply.id,
+      role: reply.actor === "user" ? "user" : "assistant",
+      body: reply.body,
+      createdAt: reply.createdAt,
+      ...(reply.actor !== "user" ? { canUseAsSolution: true } : {}),
+      ...(selected ? { selected: true } : {})
+    };
+  });
 }
 
 function approvalReplyFromDecision(decision: ApprovalDecision, request: ApprovalRequest): ApprovalReply {
@@ -3138,7 +3177,7 @@ function managerMailFromRow(row: Row): ManagerMail {
     id: requireString(row.id),
     sourceType: requireString(row.source_type) as ManagerMail["sourceType"],
     sourceId: requireString(row.source_id),
-    kind: requireString(row.kind),
+    kind: normalizeApprovalRequestKind(row.kind) ?? requireString(row.kind),
     status: requireString(row.status),
     title: requireString(row.title),
     body: requireString(row.body),
@@ -3531,10 +3570,25 @@ function normalizeNodeRunStatus(value: unknown): BlueprintNodeRun["status"] {
     : "queued";
 }
 
-function normalizeInboxItemType(value: unknown): InboxItemType {
-  return value === "leader_delegation" || value === "blueprint_proposal" || value === "run_request" || value === "report" || value === "company_config"
+function normalizeInboxItemType(value: unknown): InboxItemType | undefined {
+  return value === "leader_delegation" || value === "blueprint_proposal" || value === "run_request" || value === "company_config"
     ? value
-    : "report";
+    : undefined;
+}
+
+function canonicalizeApprovalRequest(request: ApprovalRequest): ApprovalRequest {
+  const kind = normalizeApprovalRequestKind(request.kind);
+  if (!kind) throw new Error(`Unsupported approval request kind: ${request.kind}`);
+  return request.kind === kind ? request : { ...request, kind };
+}
+
+function reportInboxDataAnomaly(companyId: string, itemId: string, type: unknown): void {
+  const key = `${companyId}:${itemId}:${String(type)}`;
+  if (reportedInboxDataAnomalies.has(key)) return;
+  reportedInboxDataAnomalies.add(key);
+  console.warn(
+    `[HiveWard data anomaly] Skipping unsupported inbox item type ${JSON.stringify(type)} for item ${itemId} in company ${companyId}.`
+  );
 }
 
 function normalizeHarnessId(value: unknown, fallback: HarnessId = "openclaw"): HarnessId {

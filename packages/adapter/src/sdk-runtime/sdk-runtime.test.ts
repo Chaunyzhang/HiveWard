@@ -8,7 +8,7 @@ import { ClaudeAgentSdkRuntime, type ClaudeQueryFn } from "./claude-runtime";
 import { CliAgentSdkRuntime, type CliCommandInput, type RunCliCommand } from "./cli-runtime";
 import { CodexAgentSdkRuntime, type CodexClientLike, type CodexThreadLike } from "./codex-runtime";
 import { mapClaudePermission, mapClaudeTools, mapCodexSandbox } from "./permissions";
-import { buildPromptEnvelope, toCodexOutputSchema, validateOutputSchema } from "./prompt-envelope";
+import { buildPromptEnvelope } from "./prompt-envelope";
 import { AgentSdkTaskRegistry } from "./task-registry";
 import { readAgentSdkRuntimeOptions } from "./types";
 
@@ -60,42 +60,19 @@ describe("agent SDK runtime", () => {
       tools: []
     });
 
-    expect(envelope).toContain("The schema is a transport wrapper");
-    expect(envelope).toContain("humanReportMd is your free-form human answer");
+    expect(envelope).toContain("Formal report writing rules");
+    expect(envelope).toContain("Hiveward will preserve your answer even if the shape is imperfect");
+    expect(envelope).toContain("use humanReportMd for the free-form human answer");
     expect(envelope).toContain("## Summary");
     expect(envelope).toContain("100-150");
+    expect(envelope).toContain("If this turn generated any deliverable");
     expect(envelope).toContain("real file path, browser URL, or exact artifacts[] reference");
+    expect(envelope).toContain("fill them: humanReportMd");
     expect(envelope).toContain("Only top-level artifacts[] creates openable artifact records");
     expect(envelope).toContain("complete single-file HTML");
     expect(envelope).toContain("declare that file path in top-level artifacts[].path");
     expect(envelope).toContain("Writing an HTML file under an agent workspace is not enough");
     expect(envelope).toContain("QA or reviewer agents must not redeclare upstream artifacts");
-  });
-
-  it("converts optional Codex output schema properties to nullable required fields", () => {
-    const schema = {
-      type: "object",
-      required: ["status"],
-      properties: {
-        status: { type: "string" },
-        handoffJson: { type: ["object", "null"] },
-        nextSlot: { type: "integer" },
-        reason: { type: "string" }
-      }
-    };
-
-    expect(toCodexOutputSchema(schema)).toEqual({
-      type: "object",
-      required: ["status", "handoffJson", "nextSlot", "reason"],
-      additionalProperties: false,
-      properties: {
-        status: { type: "string" },
-        handoffJson: { type: ["object", "null"], additionalProperties: false, properties: {}, required: [] },
-        nextSlot: { type: ["integer", "null"] },
-        reason: { type: ["string", "null"] }
-      }
-    });
-    expect(validateOutputSchema('{"status":"complete","handoffJson":{},"nextSlot":null,"reason":null}', schema)).toBe(true);
   });
 
   it("maps permission profiles to provider SDK settings", () => {
@@ -376,12 +353,7 @@ describe("agent SDK runtime", () => {
     expect(threadOptions?.model).toBe("test-model");
     expect(threadOptions?.sandboxMode).toBe("workspace-write");
     expect(threadOptions?.approvalPolicy).toBe("never");
-    expect(turnOptions?.outputSchema).toEqual({
-      type: "object",
-      required: ["ok"],
-      additionalProperties: false,
-      properties: { ok: { type: "boolean" } }
-    });
+    expect(turnOptions?.outputSchema).toBeUndefined();
     expect(result.status).toBe("succeeded");
     expect(result.source).toBe("codex");
     expect(result.sessionKey).toBe("codex-thread-1");
@@ -815,6 +787,126 @@ describe("agent SDK runtime", () => {
     ]);
   });
 
+  it("streams Claude Agent tasks with started, delta, runtime state, and done events", async () => {
+    const workspace = createWorkspace();
+    const runtime = new ClaudeAgentSdkRuntime(
+      new AgentSdkTaskRegistry(2),
+      { defaultTimeoutMs: 60_000, workspaceRoot: workspace },
+      fakeClaudeQuery([
+        {
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "Draft" } },
+          parent_tool_use_id: null,
+          uuid: "partial-task-1",
+          session_id: "claude-session-task"
+        } as unknown as SDKMessage,
+        {
+          type: "tool_progress",
+          tool_use_id: "tool-task-1",
+          tool_name: "Read",
+          parent_tool_use_id: null,
+          elapsed_time_seconds: 1,
+          uuid: "tool-task-progress-1",
+          session_id: "claude-session-task"
+        } as unknown as SDKMessage,
+        {
+          type: "result",
+          subtype: "success",
+          duration_ms: 1,
+          duration_api_ms: 1,
+          is_error: false,
+          num_turns: 1,
+          result: "Draft answer",
+          stop_reason: null,
+          total_cost_usd: 0,
+          usage: {},
+          modelUsage: {},
+          permission_denials: [],
+          uuid: "uuid-task-stream",
+          session_id: "claude-session-task"
+        } as unknown as SDKMessage
+      ])
+    );
+    const events: unknown[] = [];
+
+    const result = await runtime.streamTask(
+      createStartInput({ source: "claude", workingDirectory: workspace, modelId: "inherit" }),
+      (event) => events.push(event)
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(events).toEqual([
+      expect.objectContaining({ type: "started", source: "claude", status: "running" }),
+      { type: "delta", text: "Draft" },
+      expect.objectContaining({
+        type: "runtime_state",
+        source: "claude",
+        phase: "tool",
+        label: "Read"
+      }),
+      { type: "delta", text: " answer" },
+      expect.objectContaining({
+        type: "done",
+        source: "claude",
+        status: "succeeded",
+        output: "Draft answer"
+      })
+    ]);
+  });
+
+  it("streams Codex Agent tasks through runStreamed instead of waiting for the final result only", async () => {
+    const workspace = createWorkspace({ git: true });
+    const runtime = new CodexAgentSdkRuntime(
+      new AgentSdkTaskRegistry(2),
+      { defaultTimeoutMs: 60_000, workspaceRoot: workspace },
+      () => fakeCodexClient({
+        threadId: "codex-thread-task-stream",
+        finalResponse: "unused final",
+        usage: null,
+        streamEvents: [
+          { type: "thread.started", thread_id: "codex-thread-task-stream" } as ThreadEvent,
+          { type: "item.started", item: { id: "tool-1", type: "command_execution", command: "npm test" } } as ThreadEvent,
+          { type: "item.updated", item: { id: "msg-1", type: "agent_message", text: "Hel" } } as ThreadEvent,
+          { type: "item.updated", item: { id: "msg-1", type: "agent_message", text: "Hello" } } as ThreadEvent,
+          {
+            type: "turn.completed",
+            usage: {
+              input_tokens: 3,
+              cached_input_tokens: 0,
+              output_tokens: 2,
+              reasoning_output_tokens: 0
+            }
+          } as ThreadEvent
+        ]
+      })
+    );
+    const events: unknown[] = [];
+
+    const result = await runtime.streamTask(
+      createStartInput({ source: "codex", workingDirectory: workspace }),
+      (event) => events.push(event)
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toBe("Hello");
+    expect(events).toEqual([
+      expect.objectContaining({ type: "started", source: "codex", status: "running" }),
+      expect.objectContaining({
+        type: "runtime_state",
+        source: "codex",
+        phase: "command"
+      }),
+      { type: "delta", text: "Hel" },
+      { type: "delta", text: "lo" },
+      expect.objectContaining({
+        type: "done",
+        source: "codex",
+        status: "succeeded",
+        output: "Hello"
+      })
+    ]);
+  });
+
   it("maps Claude Code chat thinking controls to native SDK options", async () => {
     const workspace = createWorkspace();
     const capturedOptions: Array<Parameters<ClaudeQueryFn>[0]["options"]> = [];
@@ -889,7 +981,7 @@ describe("agent SDK runtime", () => {
     expect(capturedOptions[2]?.effort).toBe("low");
   });
 
-  it("rejects Codex output that does not match outputSchema", async () => {
+  it("accepts Codex output as-is when it does not match the suggested output shape", async () => {
     const workspace = createWorkspace({ git: true });
     const runtime = new CodexAgentSdkRuntime(
       new AgentSdkTaskRegistry(2),
@@ -916,8 +1008,9 @@ describe("agent SDK runtime", () => {
       source: "codex"
     });
 
-    expect(result.status).toBe("failed");
-    expect(result.error).toContain("invalid_output");
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toBe("{\"ok\":\"no\"}");
+    expect(result.error).toBeUndefined();
   });
 
   it("streams Google CLI chat through Gemini headless mode and resumes native sessions", async () => {
@@ -1125,6 +1218,45 @@ describe("agent SDK runtime", () => {
     expect(result.status).toBe("succeeded");
     expect(result.source).toBe("opencode");
     expect(result.output).toBe("{\"ok\":true}");
+  });
+
+  it("streams CLI Agent tasks from stdout instead of waiting for final-only completion", async () => {
+    const workspace = createWorkspace();
+    const calls: CliCommandInput[] = [];
+    const runtime = new CliAgentSdkRuntime(
+      new AgentSdkTaskRegistry(2),
+      { defaultTimeoutMs: 60_000, workspaceRoot: workspace },
+      "google",
+      async (input) => {
+        calls.push(input);
+        input.onStdout?.("Hel");
+        input.onStdout?.("lo");
+        return { stdout: "Hello", stderr: "", exitCode: 0 };
+      }
+    );
+    const events: unknown[] = [];
+
+    const result = await runtime.streamTask(
+      createStartInput({ source: "google", workingDirectory: workspace }),
+      (event) => events.push(event)
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toBe("Hello");
+    expect(calls[0]?.args).toContain("--prompt");
+    expect(events).toEqual([
+      expect.objectContaining({ type: "started", source: "google", status: "running" }),
+      expect.objectContaining({ type: "runtime_state", source: "google", phase: "command", status: "started" }),
+      { type: "delta", text: "Hel" },
+      { type: "delta", text: "lo" },
+      expect.objectContaining({ type: "runtime_state", source: "google", phase: "command", status: "completed" }),
+      expect.objectContaining({
+        type: "done",
+        source: "google",
+        status: "succeeded",
+        output: "Hello"
+      })
+    ]);
   });
 
   it("streams Hermes chat through single query mode and resumes native sessions", async () => {
