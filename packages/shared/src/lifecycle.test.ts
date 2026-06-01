@@ -4,6 +4,8 @@ import {
   approvalActionIsMessageOnly,
   approvalThreadFromRequest,
   capabilitiesAllow,
+  lifecycleKindForNodeType,
+  normalizeApprovalRequestKind,
   resolveApprovalCapabilities,
   resolveApprovalThreadStatus,
   type ApprovalRequest
@@ -25,6 +27,7 @@ describe("lifecycle contracts", () => {
     const requirement = resolveApprovalCapabilities("iteration_requirement_plan", "pending");
     const release = resolveApprovalCapabilities("manager_release_report", "pending");
     const agent = resolveApprovalCapabilities("agent_proposal", "pending");
+    const functionNode = resolveApprovalCapabilities("function_node", "pending");
     const delegation = resolveApprovalCapabilities("leader_delegation", "pending");
 
     expect(capabilitiesAllow(requirement, "reply")).toBe(true);
@@ -35,8 +38,18 @@ describe("lifecycle contracts", () => {
     expect(capabilitiesAllow(release, "revise")).toBe(true);
     expect(capabilitiesAllow(agent, "request_changes")).toBe(true);
     expect(capabilitiesAllow(agent, "revise")).toBe(false);
+    expect(capabilitiesAllow(functionNode, "reply")).toBe(true);
+    expect(capabilitiesAllow(functionNode, "terminate")).toBe(true);
+    expect(capabilitiesAllow(functionNode, "request_changes")).toBe(false);
     expect(capabilitiesAllow(delegation, "request_changes")).toBe(false);
     expect(capabilitiesAllow(delegation, "revise")).toBe(false);
+  });
+
+  it("uses function_node as the canonical non-Agent approval kind", () => {
+    expect(lifecycleKindForNodeType("agent")).toBe("agent_proposal");
+    expect(lifecycleKindForNodeType("summary")).toBe("function_node");
+    expect(normalizeApprovalRequestKind("generic_message")).toBe("function_node");
+    expect(normalizeApprovalRequestKind("report")).toBeUndefined();
   });
 
   it("derives thread state from request lifecycle without splitting revisions into facts", () => {

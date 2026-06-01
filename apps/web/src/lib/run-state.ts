@@ -190,12 +190,12 @@ function buildApprovalItemFromRequest(
   const nodeRun = request.nodeRunId ? runView.nodeRuns.find((candidate) => candidate.id === request.nodeRunId) : undefined;
   const upstream = readPendingApprovalUpstream(nodeRun?.input);
   const output = isRecord(nodeRun?.output) && nodeRun.output.approvalType === "agent" ? nodeRun.output : undefined;
+  const selectedReplyId = readOptionalString(output?.selectedReplyId) ?? request.selectedReplyId;
   const replies = mergePendingApprovalReplies(
-    readApprovalFactReplies(runView, request),
+    readApprovalFactReplies(runView, request, selectedReplyId),
     readApprovalDecisionReplies(runView, request.id),
-    readPendingApprovalReplies(output?.replies)
+    readPendingApprovalReplies(output?.replies, selectedReplyId)
   );
-  const selectedReplyId = readOptionalString(output?.selectedReplyId);
   const isPending = request.status === "pending";
   return {
     approvalRequestId: request.id,
@@ -207,6 +207,7 @@ function buildApprovalItemFromRequest(
     nodeRunId: request.nodeRunId ?? request.id,
     nodeId: request.requestedBy.nodeId ?? request.id,
     nodeLabel: request.requestedBy.label,
+    ...(nodeRun?.runtimeRef?.source ? { harnessId: nodeRun.runtimeRef.source } : {}),
     startedBy: runView.run.startedBy,
     startedAt: runView.run.startedAt,
     requestedAt: request.requestedAt,
@@ -235,7 +236,8 @@ function buildLegacyApprovalItemFromNodeRun(
   if (nodeRun.status !== "waiting_approval" && nodeRun.status !== "running") return undefined;
 
   const upstream = readPendingApprovalUpstream(nodeRun.input);
-  const replies = readPendingApprovalReplies(output.replies);
+  const selectedReplyId = readOptionalString(output.selectedReplyId);
+  const replies = readPendingApprovalReplies(output.replies, selectedReplyId);
   const isReplying = nodeRun.status === "running";
   return {
     blueprintId: runView.run.blueprintId,
@@ -244,12 +246,14 @@ function buildLegacyApprovalItemFromNodeRun(
     nodeRunId: nodeRun.id,
     nodeId: nodeRun.nodeId,
     nodeLabel: nodeRun.nodeLabel,
+    ...(nodeRun.runtimeRef?.source ? { harnessId: nodeRun.runtimeRef.source } : {}),
     startedBy: runView.run.startedBy,
     startedAt: runView.run.startedAt,
     requestedAt: nodeRun.startedAt ?? nodeRun.queuedAt,
     status: isReplying ? "replying" : "pending",
     ...("reviewOutput" in output ? { reviewOutput: output.reviewOutput } : {}),
     ...(replies ? { replies } : {}),
+    ...(selectedReplyId ? { selectedReplyId } : {}),
     canApprove: !isReplying,
     canReject: !isReplying,
     canReply: !isReplying,
@@ -265,7 +269,7 @@ function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function readPendingApprovalReplies(value: unknown): PendingApprovalItem["replies"] {
+function readPendingApprovalReplies(value: unknown, selectedReplyId?: string): PendingApprovalItem["replies"] {
   if (!Array.isArray(value)) return undefined;
   const replies = value.flatMap((item) => {
     if (!isRecord(item)) return [];
@@ -275,25 +279,37 @@ function readPendingApprovalReplies(value: unknown): PendingApprovalItem["replie
     const body = readOptionalString(item.body);
     const createdAt = readOptionalString(item.createdAt);
     if (!id || !role || !body || !createdAt) return [];
-    return [{ id, role, body, createdAt }];
+    const selected = selectedReplyId === id;
+    return [{
+      id,
+      role,
+      body,
+      createdAt,
+      ...(role === "assistant" ? { canUseAsSolution: true } : {}),
+      ...(selected ? { selected: true } : {})
+    }];
   });
   return replies.length ? replies : undefined;
 }
 
-function readApprovalFactReplies(runView: BlueprintRunView, request: ApprovalRequest): PendingApprovalItem["replies"] {
+function readApprovalFactReplies(runView: BlueprintRunView, request: ApprovalRequest, selectedReplyId?: string): PendingApprovalItem["replies"] {
   const threadId = request.threadId ?? request.id;
   const replies = (runView.approvalReplies ?? [])
     .filter((reply) => reply.threadId === threadId || reply.approvalRequestId === request.id)
-    .map((reply) => pendingApprovalReplyFromApprovalReply(reply));
+    .map((reply) => pendingApprovalReplyFromApprovalReply(reply, selectedReplyId));
   return replies.length ? replies : undefined;
 }
 
-function pendingApprovalReplyFromApprovalReply(reply: ApprovalReply): NonNullable<PendingApprovalItem["replies"]>[number] {
+function pendingApprovalReplyFromApprovalReply(reply: ApprovalReply, selectedReplyId?: string): NonNullable<PendingApprovalItem["replies"]>[number] {
+  const role = reply.actor === "user" ? "user" : "assistant";
+  const selected = selectedReplyId === reply.id;
   return {
     id: reply.id,
-    role: reply.actor === "user" ? "user" : "assistant",
+    role,
     body: reply.body,
-    createdAt: reply.createdAt
+    createdAt: reply.createdAt,
+    ...(role === "assistant" ? { canUseAsSolution: true } : {}),
+    ...(selected ? { selected: true } : {})
   };
 }
 

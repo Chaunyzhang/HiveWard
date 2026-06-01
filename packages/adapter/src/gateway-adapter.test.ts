@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ChatStreamEvent } from "@hiveward/shared";
+import type { ChatStreamEvent, StartAgentTaskInput } from "@hiveward/shared";
 import { GatewayOpenClawAdapter, formatAgentMessage, readAgentTranscriptMessages } from "./gateway-adapter";
 
 describe("gateway adapter transcript extraction", () => {
@@ -106,6 +106,78 @@ describe("gateway adapter transcript extraction", () => {
       runId: "gateway-run-accepted",
       output: "final blueprint proposal"
     });
+  });
+
+  it("forwards Gateway agent task runtime events and deltas before final completion", async () => {
+    const adapter = new GatewayOpenClawAdapter({
+      url: "ws://127.0.0.1:1",
+      origin: "http://127.0.0.1:1",
+      locale: "zh-CN",
+      requestTimeoutMs: 1,
+      agentStartTimeoutMs: 50
+    });
+    const handlers = new Map<string, Set<(payload: unknown) => void>>();
+    const emit = (eventName: string, payload: unknown) => {
+      for (const handler of handlers.get(eventName) ?? []) handler(payload);
+    };
+    const fakeSession = {
+      request: async (method: string) => {
+        if (method === "chat.history") {
+          return {
+            messages: [
+              { role: "user", content: "Hiveward node run: node-run-gateway\nDo work." },
+              { role: "assistant", content: "Hello" }
+            ]
+          };
+        }
+        throw new Error(`Unexpected method ${method}.`);
+      },
+      requestLifecycle: () => {
+        setTimeout(() => {
+          emit("agent", { runId: "gateway-task-run", sessionKey: "agent:main:main", state: "tool", label: "Read" });
+          emit("agent", { runId: "gateway-task-run", sessionKey: "agent:main:main", state: "delta", deltaText: "Hel" });
+          emit("agent", { runId: "gateway-task-run", sessionKey: "agent:main:main", state: "delta", deltaText: "lo" });
+        }, 0);
+        return {
+          accepted: Promise.resolve({ runId: "gateway-task-run", sessionKey: "agent:main:main", status: "accepted" }),
+          final: new Promise<Record<string, unknown>>((resolve) => {
+            setTimeout(() => resolve({ runId: "gateway-task-run", sessionKey: "agent:main:main", status: "ok" }), 10);
+          })
+        };
+      },
+      onEvent: (eventName: string, handler: (payload: unknown) => void) => {
+        const next = handlers.get(eventName) ?? new Set<(payload: unknown) => void>();
+        next.add(handler);
+        handlers.set(eventName, next);
+        return () => {
+          next.delete(handler);
+        };
+      }
+    };
+    (adapter as unknown as { getSession: () => Promise<typeof fakeSession> }).getSession = async () => fakeSession;
+    const events: ChatStreamEvent[] = [];
+
+    const input: StartAgentTaskInput = {
+      blueprintRunId: "run-gateway",
+      nodeRunId: "node-run-gateway",
+      source: "openclaw",
+      agentId: "main",
+      agentName: "writer",
+      prompt: "Do work.",
+      input: {},
+      tools: []
+    };
+    const result = await adapter.streamAgentTask(input, (event) => events.push(event));
+
+    expect(result.output).toBe("Hello");
+    expect(events).toEqual([
+      expect.objectContaining({ type: "started", runId: "gateway-task-run", source: "openclaw" }),
+      expect.objectContaining({ type: "runtime_state", source: "openclaw", label: expect.stringContaining("Gateway task stream") }),
+      expect.objectContaining({ type: "runtime_state", source: "openclaw", phase: "tool", label: "Read" }),
+      { type: "delta", text: "Hel", replace: false },
+      { type: "delta", text: "lo", replace: false },
+      expect.objectContaining({ type: "done", source: "openclaw", status: "succeeded", output: "Hello" })
+    ]);
   });
 
   it("shows only the user's original message when reading Hiveward chat history", async () => {

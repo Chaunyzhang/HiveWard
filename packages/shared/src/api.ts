@@ -174,8 +174,23 @@ export interface StreamInboxThreadMessageRequest {
   message: string;
 }
 
+export type InboxThreadDoneEvent = {
+  type: "done";
+  taskId: string;
+  runId: string;
+  sessionKey: string;
+  status: RuntimeExecutionStatus;
+  output?: string;
+  error?: string;
+  updatedAt: string;
+  threadType: InboxThreadType;
+  threadId: string;
+  messageId: string;
+};
+
 export type StreamInboxThreadMessageEvent =
   | ChatStreamEvent
+  | InboxThreadDoneEvent
   | {
       type: "inbox_message_created";
       messageId: string;
@@ -202,6 +217,10 @@ export interface ApproveBlueprintRunRequest {
 
 export interface SelectBlueprintRunApprovalRequest {
   nodeRunId: string;
+  selectedReplyId: string;
+}
+
+export interface SelectApprovalRequestReplyRequest {
   selectedReplyId: string;
 }
 

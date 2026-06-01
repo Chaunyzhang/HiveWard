@@ -84,6 +84,7 @@ export interface PendingApprovalReply {
   body: string;
   createdAt: string;
   selected?: boolean;
+  canUseAsSolution?: boolean;
 }
 
 export interface PendingApprovalUpstreamItem {
@@ -99,7 +100,6 @@ export type InboxItemType =
   | "leader_delegation"
   | "blueprint_proposal"
   | "run_request"
-  | "report"
   | "company_config";
 
 export interface InboxItem {

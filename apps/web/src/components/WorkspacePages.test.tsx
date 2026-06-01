@@ -3,7 +3,25 @@ import { describe, expect, it } from "vitest";
 import type { ApprovalThread, BlueprintDefinition, BlueprintRunView, PendingApprovalItem } from "@hiveward/shared";
 import { messages } from "../lib/i18n";
 import { MarkdownRenderer } from "./MarkdownRenderer";
-import { ApprovalsPage, buildCurrentOutputDisplayBody, CompanyDirectoryPage, RunsPage, shouldAwaitApprovalHarnessReply } from "./WorkspacePages";
+import {
+  ApprovalsPage,
+  appendInboxStreamingDelta,
+  buildRuntimeConversationMessages,
+  buildCurrentOutputDisplayBody,
+  clearAllInboxStreamingBuffers,
+  CompanyDirectoryPage,
+  completeInboxStreamingBufferWithFinalBody,
+  flushInboxStreamingBuffer,
+  type InboxStreamingBuffer,
+  type InboxStreamingBufferScheduler,
+  resolveApprovalReplySelectionTarget,
+  RunsPage,
+  shouldAwaitApprovalHarnessReply,
+  shouldRefreshInboxThreadImmediately,
+  syncRuntimeConversationBuffers,
+  type RuntimeConversationSourceMessage,
+  waitForInboxStreamingBufferDrained
+} from "./WorkspacePages";
 
 describe("CompanyDirectoryPage", () => {
   it("renders the add-company action without the external Plus icon component", () => {
@@ -46,6 +64,28 @@ function createPendingApproval(overrides: Partial<PendingApprovalItem> = {}): Pe
     canComplete: false,
     canTerminate: false,
     ...overrides
+  };
+}
+
+function createInboxStreamingBufferScheduler(): InboxStreamingBufferScheduler & {
+  callbacks: Map<number, () => void>;
+  cleared: number[];
+} {
+  let nextTimer = 1;
+  const callbacks = new Map<number, () => void>();
+  const cleared: number[] = [];
+  return {
+    callbacks,
+    cleared,
+    setInterval(callback) {
+      const timer = nextTimer++;
+      callbacks.set(timer, callback);
+      return timer;
+    },
+    clearInterval(timer) {
+      cleared.push(timer);
+      callbacks.delete(timer);
+    }
   };
 }
 
@@ -101,7 +141,8 @@ describe("ApprovalsPage", () => {
         onReplyApprovalRequest={() => undefined}
         onRequestChangesApprovalRequest={() => undefined}
         onReviseApprovalRequest={() => undefined}
-        onSelectApprovalReply={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
         onReplyInboxItem={() => undefined}
         onApproveInboxItem={() => undefined}
         onRejectInboxItem={() => undefined}
@@ -114,7 +155,7 @@ describe("ApprovalsPage", () => {
     expect(html).not.toContain("old body");
   });
 
-  it("renders comment and explicit change-request actions as separate controls", () => {
+  it("renders reply and modify actions as separate controls", () => {
     const html = renderToStaticMarkup(
       <ApprovalsPage
         approvals={[createPendingApproval({
@@ -134,15 +175,18 @@ describe("ApprovalsPage", () => {
         onReplyApprovalRequest={() => undefined}
         onRequestChangesApprovalRequest={() => undefined}
         onReviseApprovalRequest={() => undefined}
-        onSelectApprovalReply={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
         onReplyInboxItem={() => undefined}
         onApproveInboxItem={() => undefined}
         onRejectInboxItem={() => undefined}
       />
     );
 
-    expect(html).toContain("Comment");
-    expect(html).toContain("Request changes");
+    expect(html).toContain("Reply");
+    expect(html).toContain("Revise");
+    expect(html).toContain("Workflow decision");
+    expect(html).toContain("Agent requests");
     expect(html).not.toMatch(/reply with changes/i);
   });
 
@@ -164,14 +208,86 @@ describe("ApprovalsPage", () => {
         onReplyApprovalRequest={() => undefined}
         onRequestChangesApprovalRequest={() => undefined}
         onReviseApprovalRequest={() => undefined}
-        onSelectApprovalReply={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
         onReplyInboxItem={() => undefined}
         onApproveInboxItem={() => undefined}
         onRejectInboxItem={() => undefined}
       />
     );
 
-    expect(extractButtonByAriaLabel(html, "Approve")).toContain("disabled");
+    expect(extractButtonByAriaLabel(html, "Pass")).toContain("disabled");
+    expect(extractActionTooltipByAriaLabel(html, "Pass")).toContain('title="The node is running. Wait for the result to return."');
+    expect(extractActionTooltipByAriaLabel(html, "Pass")).toContain('data-tooltip="The node is running. Wait for the result to return."');
+    expect(html).toContain("The node is running. Wait for the result to return.");
+  });
+
+  it("uses empty-input disabled reasons for reply and modify actions", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalsPage
+        approvals={[createPendingApproval({
+          canRequestChanges: true,
+          canRevise: true
+        })]}
+        approvalThreads={[]}
+        inboxItems={[]}
+        language="zh-CN"
+        t={messages["zh-CN"]}
+        onApprove={() => undefined}
+        onApproveApprovalRequest={() => undefined}
+        onComplete={() => undefined}
+        onReject={() => undefined}
+        onRejectApprovalRequest={() => undefined}
+        onReply={() => undefined}
+        onReplyApprovalRequest={() => undefined}
+        onRequestChangesApprovalRequest={() => undefined}
+        onReviseApprovalRequest={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
+        onReplyInboxItem={() => undefined}
+        onApproveInboxItem={() => undefined}
+        onRejectInboxItem={() => undefined}
+      />
+    );
+
+    expect(extractActionTooltipByAriaLabel(html, "回复")).toContain("请先输入回复内容。");
+    expect(extractActionTooltipByAriaLabel(html, "修改")).toContain("请先输入修改要求。");
+    expect(extractActionTooltipByAriaLabel(html, "回复")).not.toContain("当前邮件信息不全");
+    expect(extractActionTooltipByAriaLabel(html, "修改")).not.toContain("当前邮件信息不全");
+  });
+
+  it("keeps the reply composer editable while an executor reply is running", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalsPage
+        approvals={[createPendingApproval({
+          status: "replying",
+          canApprove: false,
+          canReject: false,
+          canReply: true
+        })]}
+        approvalThreads={[]}
+        inboxItems={[]}
+        language="en"
+        t={messages.en}
+        onApprove={() => undefined}
+        onApproveApprovalRequest={() => undefined}
+        onComplete={() => undefined}
+        onReject={() => undefined}
+        onRejectApprovalRequest={() => undefined}
+        onReply={() => undefined}
+        onReplyApprovalRequest={() => undefined}
+        onRequestChangesApprovalRequest={() => undefined}
+        onReviseApprovalRequest={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
+        onReplyInboxItem={() => undefined}
+        onApproveInboxItem={() => undefined}
+        onRejectInboxItem={() => undefined}
+      />
+    );
+
+    expect(html).toMatch(/<textarea(?![^>]*disabled)[^>]*>/);
+    expect(extractActionTooltipByAriaLabel(html, "Reply")).toContain("The executor is replying. Wait for the current reply to finish.");
   });
 
   it("processed approval keeps the discussion composer while disabling lifecycle actions", () => {
@@ -199,16 +315,17 @@ describe("ApprovalsPage", () => {
         onReplyApprovalRequest={() => undefined}
         onRequestChangesApprovalRequest={() => undefined}
         onReviseApprovalRequest={() => undefined}
-        onSelectApprovalReply={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
         onReplyInboxItem={() => undefined}
         onApproveInboxItem={() => undefined}
         onRejectInboxItem={() => undefined}
       />
     );
 
-    expect(extractButtonByAriaLabel(html, "Approve")).toContain("disabled");
-    expect(html).toContain("Add a comment; comments do not change the workflow.");
-    expect(html).not.toMatch(/<textarea[^>]*disabled/);
+    expect(extractButtonByAriaLabel(html, "Pass")).toContain("disabled");
+    expect(html).toContain("This message has already been handled and cannot be repeated.");
+    expect(html).toMatch(/<textarea[^>]*disabled/);
   });
 
   it("does not wait for a harness reply for request-backed approval comments", () => {
@@ -220,6 +337,324 @@ describe("ApprovalsPage", () => {
     }))).toBe(false);
     expect(shouldAwaitApprovalHarnessReply(legacyApproval)).toBe(true);
   });
+
+  it("refreshes the inbox snapshot as soon as the server creates the user message", () => {
+    expect(shouldRefreshInboxThreadImmediately({
+      type: "inbox_message_created",
+      messageId: "reply-1",
+      threadType: "approval",
+      threadId: "thread-1"
+    })).toBe(true);
+    expect(shouldRefreshInboxThreadImmediately({
+      type: "delta",
+      text: "assistant text"
+    })).toBe(false);
+  });
+
+  it("buffers inbox assistant deltas and reveals them one character per tick", () => {
+    const scheduler = createInboxStreamingBufferScheduler();
+    const buffers: Record<string, InboxStreamingBuffer> = {};
+    const updates: string[] = [];
+    const largeDelta = "ABC";
+
+    appendInboxStreamingDelta({
+      buffers,
+      threadKey: "approval:thread-1",
+      text: largeDelta,
+      scheduler,
+      setVisible: (_threadKey, visible) => updates.push(visible)
+    });
+
+    expect(updates).toEqual([]);
+    expect(buffers["approval:thread-1"]?.queued).toBe(largeDelta);
+    scheduler.callbacks.get(1)?.();
+    expect(updates.at(-1)).toBe("A");
+    scheduler.callbacks.get(1)?.();
+    expect(updates.at(-1)).toBe("AB");
+    scheduler.callbacks.get(1)?.();
+    expect(updates.at(-1)).toBe("ABC");
+
+    const flushed = flushInboxStreamingBuffer({
+      buffers,
+      threadKey: "approval:thread-1",
+      scheduler,
+      setVisible: (_threadKey, visible) => updates.push(visible)
+    });
+
+    expect(flushed).toBe(largeDelta);
+    expect(updates.at(-1)).toBe(largeDelta);
+    expect(buffers["approval:thread-1"]?.queued).toBe("");
+    expect(scheduler.cleared).toContain(1);
+  });
+
+  it("queues replacement inbox assistant stream content instead of dumping it all at once", () => {
+    const scheduler = createInboxStreamingBufferScheduler();
+    const buffers: Record<string, InboxStreamingBuffer> = {};
+    const updates: string[] = [];
+
+    appendInboxStreamingDelta({
+      buffers,
+      threadKey: "approval:thread-1",
+      text: "B".repeat(80),
+      scheduler,
+      setVisible: (_threadKey, visible) => updates.push(visible)
+    });
+    expect(buffers["approval:thread-1"]?.queued.length).toBe(80);
+
+    appendInboxStreamingDelta({
+      buffers,
+      threadKey: "approval:thread-1",
+      text: "replacement",
+      replace: true,
+      scheduler,
+      setVisible: (_threadKey, visible) => updates.push(visible)
+    });
+
+    expect(updates.at(-1)).toBe("");
+    expect(buffers["approval:thread-1"]).toMatchObject({
+      visible: "",
+      queued: "replacement"
+    });
+    expect(scheduler.cleared).toContain(1);
+    scheduler.callbacks.get(2)?.();
+    expect(updates.at(-1)).toBe("r");
+  });
+
+  it("queues final inbox assistant output and waits for the typewriter drain", async () => {
+    const scheduler = createInboxStreamingBufferScheduler();
+    const buffers: Record<string, InboxStreamingBuffer> = {};
+    const updates: string[] = [];
+
+    appendInboxStreamingDelta({
+      buffers,
+      threadKey: "approval:thread-1",
+      text: "Hel",
+      scheduler,
+      setVisible: (_threadKey, visible) => updates.push(visible)
+    });
+    scheduler.callbacks.get(1)?.();
+    expect(updates.at(-1)).toBe("H");
+
+    completeInboxStreamingBufferWithFinalBody({
+      buffers,
+      threadKey: "approval:thread-1",
+      finalBody: "Hello",
+      scheduler,
+      setVisible: (_threadKey, visible) => updates.push(visible)
+    });
+
+    expect(buffers["approval:thread-1"]).toMatchObject({
+      visible: "H",
+      queued: "ello"
+    });
+
+    const drained = waitForInboxStreamingBufferDrained({
+      buffers,
+      threadKey: "approval:thread-1",
+      scheduler,
+      setVisible: (_threadKey, visible) => updates.push(visible)
+    });
+    scheduler.callbacks.get(1)?.();
+    scheduler.callbacks.get(1)?.();
+    scheduler.callbacks.get(1)?.();
+    scheduler.callbacks.get(1)?.();
+
+    await expect(drained).resolves.toBe("Hello");
+    expect(updates.at(-1)).toBe("Hello");
+  });
+
+  it("clears inbox streaming timers when conversation buffers are discarded", () => {
+    const scheduler = createInboxStreamingBufferScheduler();
+    const buffers: Record<string, InboxStreamingBuffer> = {};
+
+    appendInboxStreamingDelta({
+      buffers,
+      threadKey: "approval:thread-1",
+      text: "C".repeat(80),
+      scheduler,
+      setVisible: () => undefined
+    });
+    appendInboxStreamingDelta({
+      buffers,
+      threadKey: "approval:thread-2",
+      text: "D".repeat(80),
+      scheduler,
+      setVisible: () => undefined
+    });
+
+    clearAllInboxStreamingBuffers(buffers, scheduler);
+
+    expect(buffers).toEqual({});
+    expect(scheduler.cleared).toEqual(expect.arrayContaining([1, 2]));
+  });
+
+  it("routes candidate selection to node-run or request-level handlers by approval kind", () => {
+    expect(resolveApprovalReplySelectionTarget(createPendingApproval({
+      kind: "agent_proposal",
+      approvalRequestId: "agent-request",
+      blueprintRunId: "run-agent",
+      nodeRunId: "node-run-agent"
+    }))).toEqual({
+      kind: "run",
+      blueprintRunId: "run-agent",
+      nodeRunId: "node-run-agent"
+    });
+    expect(resolveApprovalReplySelectionTarget(createPendingApproval({
+      kind: "iteration_requirement_plan",
+      approvalRequestId: "plan-request",
+      blueprintRunId: "run-plan",
+      nodeRunId: "plan-request"
+    }))).toEqual({
+      kind: "request",
+      approvalRequestId: "plan-request"
+    });
+    expect(resolveApprovalReplySelectionTarget(createPendingApproval({
+      kind: "manager_release_report",
+      approvalRequestId: "report-request",
+      blueprintRunId: "run-report",
+      nodeRunId: "report-request"
+    }))).toEqual({
+      kind: "request",
+      approvalRequestId: "report-request"
+    });
+  });
+
+  it("renders a saved request-level selected candidate after refresh", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalsPage
+        approvals={[createPendingApproval({
+          kind: "iteration_requirement_plan",
+          selectedReplyId: "reply-selected",
+          reviewOutput: "Original plan",
+          replies: [{
+            id: "reply-selected",
+            role: "assistant",
+            body: "Selected candidate plan",
+            createdAt: "2026-05-21T01:03:00.000Z",
+            selected: true,
+            canUseAsSolution: true
+          }]
+        })]}
+        approvalThreads={[]}
+        inboxItems={[]}
+        language="en"
+        t={messages.en}
+        onApprove={() => undefined}
+        onApproveApprovalRequest={() => undefined}
+        onComplete={() => undefined}
+        onReject={() => undefined}
+        onRejectApprovalRequest={() => undefined}
+        onReply={() => undefined}
+        onReplyApprovalRequest={() => undefined}
+        onRequestChangesApprovalRequest={() => undefined}
+        onReviseApprovalRequest={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
+        onReplyInboxItem={() => undefined}
+        onApproveInboxItem={() => undefined}
+        onRejectInboxItem={() => undefined}
+      />
+    );
+
+    expect(html).toContain("Selected candidate plan");
+    expect(html).toContain("Selected");
+  });
+
+  it("labels function node approvals as notification mail without a system-message fallback", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalsPage
+        approvals={[createPendingApproval({ kind: "function_node", nodeLabel: "Function pause" })]}
+        approvalThreads={[]}
+        inboxItems={[]}
+        language="en"
+        t={messages.en}
+        onApprove={() => undefined}
+        onApproveApprovalRequest={() => undefined}
+        onComplete={() => undefined}
+        onReject={() => undefined}
+        onRejectApprovalRequest={() => undefined}
+        onReply={() => undefined}
+        onReplyApprovalRequest={() => undefined}
+        onRequestChangesApprovalRequest={() => undefined}
+        onReviseApprovalRequest={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
+        onReplyInboxItem={() => undefined}
+        onApproveInboxItem={() => undefined}
+        onRejectInboxItem={() => undefined}
+      />
+    );
+
+    expect(html).toContain("Notification mail");
+    expect(html).not.toContain("Function node");
+    expect(html).not.toContain("System message");
+  });
+
+  it("uses notification mail copy for non-agent reply tooltips in Chinese", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalsPage
+        approvals={[createPendingApproval({
+          kind: "function_node",
+          nodeLabel: "Manual checkpoint",
+          canReply: false
+        })]}
+        approvalThreads={[]}
+        inboxItems={[]}
+        language="zh-CN"
+        t={messages["zh-CN"]}
+        onApprove={() => undefined}
+        onApproveApprovalRequest={() => undefined}
+        onComplete={() => undefined}
+        onReject={() => undefined}
+        onRejectApprovalRequest={() => undefined}
+        onReply={() => undefined}
+        onReplyApprovalRequest={() => undefined}
+        onRequestChangesApprovalRequest={() => undefined}
+        onReviseApprovalRequest={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
+        onReplyInboxItem={() => undefined}
+        onApproveInboxItem={() => undefined}
+        onRejectInboxItem={() => undefined}
+      />
+    );
+
+    expect(html).toContain("\u901a\u77e5\u90ae\u4ef6");
+    expect(extractActionTooltipByAriaLabel(html, "\u56de\u590d")).toContain(
+      "\u5f53\u524d\u4e3a\u901a\u77e5\u90ae\u4ef6\uff0c\u4ec5\u652f\u6301\u7559\u8a00\uff0c\u4e0d\u4f1a\u8c03\u7528 Agent\u3002"
+    );
+    expect(html).not.toContain("\u7cfb\u7edf\u6d88\u606f");
+    expect(html).not.toContain("\u529f\u80fd\u8282\u70b9");
+  });
+
+  it("renders approval type labels as visible inbox tags", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalsPage
+        approvals={[createPendingApproval({ kind: "agent_proposal", nodeLabel: "Review" })]}
+        approvalThreads={[]}
+        inboxItems={[]}
+        language="zh-CN"
+        t={messages["zh-CN"]}
+        onApprove={() => undefined}
+        onApproveApprovalRequest={() => undefined}
+        onComplete={() => undefined}
+        onReject={() => undefined}
+        onRejectApprovalRequest={() => undefined}
+        onReply={() => undefined}
+        onReplyApprovalRequest={() => undefined}
+        onRequestChangesApprovalRequest={() => undefined}
+        onReviseApprovalRequest={() => undefined}
+        onSelectRunApprovalReply={() => undefined}
+        onSelectApprovalRequestReply={() => undefined}
+        onReplyInboxItem={() => undefined}
+        onApproveInboxItem={() => undefined}
+        onRejectInboxItem={() => undefined}
+      />
+    );
+
+    expect(html).toContain("inbox-type-tag inbox-type-tag-agent_proposal");
+    expect(html).toContain("\u8282\u70b9\u65b9\u6848");
+  });
 });
 
 function extractButtonByAriaLabel(html: string, label: string): string {
@@ -227,6 +662,113 @@ function extractButtonByAriaLabel(html: string, label: string): string {
   const match = html.match(new RegExp(`<button[^>]+aria-label="${escaped}"[^>]*>`));
   if (!match) throw new Error(`Button with aria-label "${label}" was not rendered.`);
   return match[0];
+}
+
+function extractActionTooltipByAriaLabel(html: string, label: string): string {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = html.match(new RegExp(`<span class="inbox-action-tooltip"[^>]*>[\\s\\S]*?<button[^>]+aria-label="${escaped}"[\\s\\S]*?</button></span>`));
+  if (!match) throw new Error(`Tooltip wrapper for button "${label}" was not rendered.`);
+  return match[0];
+}
+
+function createRuntimeRunFixture(overrides: {
+  body?: string;
+  runId?: string;
+  timelineId?: string;
+  title?: string;
+} = {}): { blueprint: BlueprintDefinition; runView: BlueprintRunView } {
+  const now = "2026-05-28T00:00:00.000Z";
+  const runId = overrides.runId ?? "run-runtime";
+  const blueprint: BlueprintDefinition = {
+    id: "blueprint-runtime",
+    companyId: "company-1",
+    name: "Runtime blueprint",
+    version: 1,
+    nodes: [
+      {
+        id: "agent-runtime",
+        type: "agent",
+        runtimeId: "openclaw",
+        position: { x: 0, y: 0 },
+        config: {
+          label: "Runtime Agent",
+          agentName: "runtime",
+          prompt: "Work live.",
+          tools: []
+        }
+      }
+    ],
+    edges: [],
+    variables: {},
+    display: { viewport: { x: 0, y: 0, zoom: 1 } },
+    createdAt: now,
+    updatedAt: now
+  };
+  return {
+    blueprint,
+    runView: {
+      run: {
+        id: runId,
+        companyId: "company-1",
+        blueprintId: blueprint.id,
+        blueprintName: blueprint.name,
+        blueprintVersion: 1,
+        status: "running",
+        startedBy: "user-1",
+        startedAt: now,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUsd: 0,
+        runtimeRefs: []
+      },
+      nodeRuns: [
+        {
+          id: "node-run-runtime",
+          blueprintRunId: runId,
+          blueprintId: blueprint.id,
+          nodeId: "agent-runtime",
+          nodeLabel: "Runtime Agent",
+          nodeType: "agent",
+          status: "running",
+          queuedAt: now,
+          startedAt: now,
+          runtimeRef: {
+            source: "openclaw",
+            sourceId: "task-runtime",
+            sourceUpdatedAt: now,
+            taskId: "task-runtime",
+            runId: "runtime-run",
+            sessionKey: "session-runtime"
+          }
+        }
+      ],
+      events: [],
+      finalResult: null,
+      iterationSessions: [],
+      iterationRounds: [],
+      approvalRequests: [],
+      approvalDecisions: [],
+      artifacts: [],
+      releaseReports: [],
+      agentHumanReports: [],
+      agentHandoffs: [],
+      managerContextSnapshots: [],
+      runTimeline: [
+        {
+          id: overrides.timelineId ?? "timeline-runtime",
+          runId,
+          sequence: 1,
+          createdAt: now,
+          actorLabel: "Runtime Agent",
+          kind: "node_runtime",
+          title: overrides.title ?? "Runtime Agent: generating",
+          body: overrides.body ?? "runtime_state: thinking updated\nrecent_output:\nDrafting live result",
+          payloadRef: "node-run-runtime"
+        }
+      ],
+      managerMail: []
+    }
+  };
 }
 
 describe("RunsPage", () => {
@@ -427,7 +969,8 @@ describe("RunsPage", () => {
       />
     );
 
-    expect(html.indexOf("Current output")).toBeLessThan(html.indexOf("Artifacts"));
+    expect(html.indexOf("Live work")).toBeLessThan(html.indexOf("Sub-node output"));
+    expect(html.indexOf("Sub-node output")).toBeLessThan(html.indexOf("Artifacts"));
     expect(html.indexOf("Artifacts")).toBeLessThan(html.indexOf("Round Report"));
     expect(html).not.toContain("Round Execution Plan");
     expect(html).not.toContain("Agent Markdown reports");
@@ -436,6 +979,271 @@ describe("RunsPage", () => {
     expect(html).toContain("Readable artifact");
     expect(html).not.toContain("SECRET_RAW_OUTPUT");
     expect(html).not.toContain("machine-only");
+  });
+
+  it("renders live runtime work as a read-only conversation thread before node output", () => {
+    const now = "2026-05-28T00:00:00.000Z";
+    const blueprint: BlueprintDefinition = {
+      id: "blueprint-live",
+      companyId: "company-1",
+      name: "Live blueprint",
+      version: 1,
+      nodes: [
+        {
+          id: "agent-live",
+          type: "agent",
+          runtimeId: "openclaw",
+          position: { x: 0, y: 0 },
+          config: {
+            label: "Live Agent",
+            agentName: "live",
+            prompt: "Work live.",
+            tools: []
+          }
+        }
+      ],
+      edges: [],
+      variables: {},
+      display: { viewport: { x: 0, y: 0, zoom: 1 } },
+      createdAt: now,
+      updatedAt: now
+    };
+    const runView: BlueprintRunView = {
+      run: {
+        id: "run-live",
+        companyId: "company-1",
+        blueprintId: blueprint.id,
+        blueprintName: blueprint.name,
+        blueprintVersion: 1,
+        status: "running",
+        startedBy: "user-1",
+        startedAt: now,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUsd: 0,
+        runtimeRefs: []
+      },
+      nodeRuns: [
+        {
+          id: "node-run-live",
+          blueprintRunId: "run-live",
+          blueprintId: blueprint.id,
+          nodeId: "agent-live",
+          nodeLabel: "Live Agent",
+          nodeType: "agent",
+          status: "running",
+          queuedAt: now,
+          startedAt: now,
+          runtimeRef: {
+            source: "openclaw",
+            sourceId: "task-live",
+            sourceUpdatedAt: now,
+            taskId: "task-live",
+            runId: "runtime-run-live",
+            sessionKey: "session-live"
+          }
+        }
+      ],
+      events: [
+        {
+          id: "event-live-started",
+          blueprintRunId: "run-live",
+          nodeRunId: "node-run-live",
+          type: "node.run.started",
+          message: "Live Agent started.",
+          createdAt: now
+        }
+      ],
+      finalResult: null,
+      iterationSessions: [],
+      iterationRounds: [],
+      approvalRequests: [],
+      approvalDecisions: [],
+      artifacts: [],
+      releaseReports: [],
+      agentHumanReports: [],
+      agentHandoffs: [],
+      managerContextSnapshots: [],
+      runTimeline: [
+        {
+          id: "timeline-live-runtime",
+          runId: "run-live",
+          sequence: 1,
+          createdAt: now,
+          actorLabel: "Live Agent",
+          kind: "node_runtime",
+          title: "Live Agent: generating",
+          body: "runtime_state: thinking updated\nrecent_output:\nDrafting live result",
+          payloadRef: "node-run-live"
+        }
+      ],
+      managerMail: []
+    };
+
+    const html = renderToStaticMarkup(
+      <RunsPage
+        runs={[runView]}
+        blueprints={[blueprint]}
+        blueprint={blueprint}
+        selectedRunId={runView.run.id}
+        language="en"
+        t={messages.en}
+        onSelectBlueprint={() => undefined}
+        onSelectRun={() => undefined}
+      />
+    );
+
+    const runtimePanelHtml = html.slice(
+      html.indexOf("chat-thread runtime-conversation-thread"),
+      html.indexOf('<section class="run-output-panel" role="tabpanel" hidden="">')
+    );
+
+    expect(html).toContain("Live work");
+    expect(runtimePanelHtml).toContain("chat-thread runtime-conversation-thread");
+    expect(runtimePanelHtml).toContain("chat-message-row chat-message-row-assistant");
+    expect(runtimePanelHtml).toContain("Live Agent");
+    expect(runtimePanelHtml).toContain("Thinking...");
+    expect(runtimePanelHtml).not.toContain("OpenClaw · Live Agent: generating");
+    expect(runtimePanelHtml).not.toContain("Drafting live result");
+    expect(html).not.toContain("textarea");
+    expect(html).not.toMatch(/aria-label="Reply"/i);
+    expect(html).not.toMatch(/aria-label="Pass"/i);
+    expect(html).not.toMatch(/aria-label="Reject"/i);
+    expect(html.indexOf("Live work")).toBeLessThan(html.indexOf("Summary"));
+  });
+
+  it("builds runtime messages from node_runtime timeline items", () => {
+    const { runView } = createRuntimeRunFixture();
+
+    const runtimeMessages = buildRuntimeConversationMessages(runView, "en");
+
+    expect(runtimeMessages).toHaveLength(1);
+    expect(runtimeMessages[0]).toMatchObject({
+      id: "timeline-runtime",
+      role: "assistant",
+      speaker: "Runtime Agent",
+      sourceBody: "runtime_state: thinking updated\nrecent_output:\nDrafting live result",
+      progressText: "OpenClaw · Runtime Agent: generating",
+      streamKey: "run:run-runtime:runtime:timeline-runtime"
+    });
+  });
+
+  it("queues only the new runtime suffix when a timeline body grows", () => {
+    const scheduler = createInboxStreamingBufferScheduler();
+    const buffers: Record<string, InboxStreamingBuffer> = {};
+    const receivedBodies: Record<string, string> = {};
+    const updates: string[] = [];
+    const message: RuntimeConversationSourceMessage = {
+      id: "timeline-runtime",
+      role: "assistant",
+      speaker: "Runtime Agent",
+      body: "",
+      sourceBody: "Hel",
+      progressText: "Runtime Agent: generating",
+      sequence: 1,
+      streamKey: "run:run-runtime:runtime:timeline-runtime"
+    };
+
+    syncRuntimeConversationBuffers({
+      messages: [message],
+      receivedBodies,
+      buffers,
+      scheduler,
+      setVisible: (_key, visible) => updates.push(visible)
+    });
+    scheduler.callbacks.get(1)?.();
+    expect(updates.at(-1)).toBe("H");
+
+    syncRuntimeConversationBuffers({
+      messages: [{ ...message, sourceBody: "Hello" }],
+      receivedBodies,
+      buffers,
+      scheduler,
+      setVisible: (_key, visible) => updates.push(visible)
+    });
+
+    expect(buffers[message.streamKey]).toMatchObject({
+      visible: "H",
+      queued: "ello"
+    });
+  });
+
+  it("queues runtime replacement bodies instead of showing replacements immediately", () => {
+    const scheduler = createInboxStreamingBufferScheduler();
+    const buffers: Record<string, InboxStreamingBuffer> = {
+      "run:run-runtime:runtime:timeline-runtime": { visible: "Old", queued: "" }
+    };
+    const receivedBodies: Record<string, string> = {
+      "run:run-runtime:runtime:timeline-runtime": "Old"
+    };
+    const updates: string[] = [];
+
+    syncRuntimeConversationBuffers({
+      messages: [{
+        streamKey: "run:run-runtime:runtime:timeline-runtime",
+        sourceBody: "New body"
+      }],
+      receivedBodies,
+      buffers,
+      scheduler,
+      setVisible: (_key, visible) => updates.push(visible)
+    });
+
+    expect(updates.at(-1)).toBe("");
+    expect(buffers["run:run-runtime:runtime:timeline-runtime"]).toMatchObject({
+      visible: "",
+      queued: "New body"
+    });
+    scheduler.callbacks.get(1)?.();
+    expect(updates.at(-1)).toBe("N");
+  });
+
+  it("clears stale runtime buffers when timeline messages disappear", () => {
+    const scheduler = createInboxStreamingBufferScheduler();
+    const buffers: Record<string, InboxStreamingBuffer> = {};
+    const receivedBodies: Record<string, string> = {};
+
+    syncRuntimeConversationBuffers({
+      messages: [{ streamKey: "run:old:runtime:timeline-old", sourceBody: "Old body" }],
+      receivedBodies,
+      buffers,
+      scheduler,
+      setVisible: () => undefined
+    });
+    expect(Object.keys(buffers)).toEqual(["run:old:runtime:timeline-old"]);
+
+    syncRuntimeConversationBuffers({
+      messages: [],
+      receivedBodies,
+      buffers,
+      scheduler,
+      setVisible: () => undefined
+    });
+
+    expect(buffers).toEqual({});
+    expect(receivedBodies).toEqual({});
+    expect(scheduler.cleared).toContain(1);
+  });
+
+  it("keeps the runtime empty state when a run has no runtime timeline", () => {
+    const { blueprint, runView } = createRuntimeRunFixture();
+    const emptyRunView = { ...runView, runTimeline: [] };
+
+    const html = renderToStaticMarkup(
+      <RunsPage
+        runs={[emptyRunView]}
+        blueprints={[blueprint]}
+        blueprint={blueprint}
+        selectedRunId={emptyRunView.run.id}
+        language="en"
+        t={messages.en}
+        onSelectBlueprint={() => undefined}
+        onSelectRun={() => undefined}
+      />
+    );
+
+    expect(html).toContain("No live runtime work has been recorded yet.");
+    expect(html).not.toContain("chat-thread runtime-conversation-thread");
   });
 
   it("structures current output as fixed concise sections", () => {

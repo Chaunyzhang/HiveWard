@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { RuntimeAdapter, RuntimeChatSessionResult, RuntimeChatSessionTitleResult } from "@hiveward/adapter";
+import type { RuntimeAdapter, RuntimeChatSessionResult, RuntimeChatSessionTitleResult, RuntimeChatStreamInput } from "@hiveward/adapter";
 import {
   type AgentNodeConfig,
   type AgentTaskResult,
@@ -31,6 +31,8 @@ import { BlueprintWorker } from "./blueprintWorker";
 
 class ScriptedAdapter implements RuntimeAdapter {
   readonly calls: StartAgentTaskInput[] = [];
+  readonly chatCalls: RuntimeChatStreamInput[] = [];
+  readonly chatSessionInputs: unknown[] = [];
   readonly waitCalls: WaitForAgentTaskInput[] = [];
   readonly sendCalls: SendChannelInput[] = [];
 
@@ -74,16 +76,45 @@ class ScriptedAdapter implements RuntimeAdapter {
     return [];
   }
 
-  async createChatSession(): Promise<RuntimeChatSessionResult> {
-    throw new Error("Chat session creation is not used by blueprint worker tests.");
+  async createChatSession(input: unknown): Promise<RuntimeChatSessionResult> {
+    this.chatSessionInputs.push(input);
+    return {
+      sessionKey: `test-chat-session-${this.chatSessionInputs.length}`
+    };
   }
 
   async updateChatSessionTitle(): Promise<RuntimeChatSessionTitleResult> {
     throw new Error("Chat session title updates are not used by blueprint worker tests.");
   }
 
-  async streamChatMessage(): Promise<void> {
-    throw new Error("Chat stream is not used by blueprint worker tests.");
+  async streamChatMessage(input: RuntimeChatStreamInput, onEvent: (event: ChatStreamEvent) => void): Promise<void> {
+    this.chatCalls.push(input);
+    const now = new Date().toISOString();
+    const result = await this.nextCompletionResult(input.idempotencyKey);
+    const output = typeof result.output === "string" ? result.output : result.output === undefined ? undefined : JSON.stringify(result.output, null, 2);
+    const sessionKey = result.sessionKey || input.sessionKey || `${input.source ?? "openclaw"}-chat-session-${this.chatCalls.length}`;
+    onEvent({
+      type: "started",
+      taskId: result.taskId,
+      runId: result.runId,
+      sessionKey,
+      source: result.source,
+      status: "running",
+      updatedAt: now
+    });
+    if (output) onEvent({ type: "delta", text: output });
+    onEvent({
+      type: "done",
+      taskId: result.taskId,
+      runId: result.runId,
+      sessionKey,
+      source: result.source,
+      status: result.status,
+      output,
+      error: result.error,
+      usage: result.usage,
+      updatedAt: result.updatedAt
+    });
   }
 
   async streamAgentTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
@@ -115,10 +146,14 @@ class ScriptedAdapter implements RuntimeAdapter {
 
   async waitForAgentTask(input: WaitForAgentTaskInput): Promise<AgentTaskResult> {
     this.waitCalls.push(input);
+    return this.nextCompletionResult(input.taskId);
+  }
+
+  private async nextCompletionResult(taskId: string): Promise<AgentTaskResult> {
     const matchingIndex = this.completionResults.findIndex((candidate) =>
       !(candidate instanceof Error) &&
       !(candidate instanceof Promise) &&
-      candidate.taskId === input.taskId
+      candidate.taskId === taskId
     );
     const result = matchingIndex >= 0
       ? this.completionResults.splice(matchingIndex, 1)[0]
@@ -666,6 +701,36 @@ describe("BlueprintWorker", () => {
     expect(nodeRun?.error).toContain("visible output");
   });
 
+  it("records node runtime timeline without replacing the final node output", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const blueprint = createBlueprint([createAgentNode("brief", "Brief")], []);
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-runtime")
+    ], [
+      createCompletedAgentTask("task-runtime", "succeeded", "brief ok")
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const view = await waitForRunTerminal(store, run.id);
+    const nodeRun = view?.nodeRuns.find((candidate) => candidate.nodeId === "brief");
+    const runtimeItems = view?.runTimeline?.filter((item) => item.kind === "node_runtime") ?? [];
+
+    expect(view?.run.status).toBe("succeeded");
+    expect(nodeRun?.output).toBe("brief ok");
+    expect(runtimeItems).toHaveLength(1);
+    expect(runtimeItems[0]).toMatchObject({
+      kind: "node_runtime",
+      actorLabel: "brief",
+      payloadRef: nodeRun?.id
+    });
+    expect(runtimeItems[0]?.body).toContain("recent_output");
+    expect(runtimeItems[0]?.body).toContain("brief ok");
+  });
+
   it("runs harness summary nodes through the selected harness with the default merge prompt", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
     const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
@@ -750,9 +815,12 @@ describe("BlueprintWorker", () => {
     });
     expect(adapter.calls[0]?.prompt).toContain("humanReportMd");
     expect(adapter.calls[0]?.prompt).toContain("AgentOutputEnvelope is a transport wrapper");
+    expect(adapter.calls[0]?.prompt).toContain("HiveWard preserves your answer even if the shape is imperfect");
     expect(adapter.calls[0]?.prompt).toContain("humanReportMd is your free-form human answer");
     expect(adapter.calls[0]?.prompt).toContain("## 摘要");
     expect(adapter.calls[0]?.prompt).toContain("100-150");
+    expect(adapter.calls[0]?.prompt).toContain("If this step created any deliverable");
+    expect(adapter.calls[0]?.prompt).toContain("fill them: humanReportMd");
     expect(adapter.calls[0]?.prompt).toContain("do not describe internal program phases");
     expect(adapter.calls[0]?.prompt).toContain("real file path, browser URL, or exact artifacts[] reference");
     expect(adapter.calls[0]?.prompt).toContain("Top-level artifacts[] is a publication hint and link/address index");
@@ -858,7 +926,7 @@ describe("BlueprintWorker", () => {
     expect(adapter.sendCalls[0]?.body).toContain("draft answer");
   });
 
-  it("streams Agent approval discussion into an assistant candidate without approving", async () => {
+  it("streams Agent approval discussion replies without publishing candidates or approving", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
     const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
     await store.init();
@@ -892,7 +960,7 @@ describe("BlueprintWorker", () => {
     await worker.streamInboxThreadMessage({
       threadType: "approval",
       threadId: approvalRequest.threadId,
-      message: "Give me another version.",
+      message: "Generate a formal candidate with another version.",
       onEvent: (event) => events.push(event)
     });
 
@@ -901,7 +969,7 @@ describe("BlueprintWorker", () => {
     const waitingOutput = waitingNode?.output as {
       approvalType: "agent";
       reviewOutput: string;
-      replies: Array<{ id: string; role: string; body: string }>;
+      replies: Array<{ id: string; role: string; body: string; canUseAsSolution?: boolean }>;
       selectedReplyId?: string;
     };
 
@@ -910,34 +978,277 @@ describe("BlueprintWorker", () => {
     expect(waitingOutput.reviewOutput).toBe("draft answer");
     expect(waitingOutput.selectedReplyId).toBeUndefined();
     expect(waitingOutput.replies.map((reply) => [reply.role, reply.body])).toEqual([
-      ["user", "Give me another version."],
+      ["user", "Generate a formal candidate with another version."],
       ["assistant", "## Summary\n\nAlternative answer."]
     ]);
+    expect(waitingOutput.replies[1]?.canUseAsSolution).toBe(false);
     expect(events.map((event) => event.type)).toEqual([
       "inbox_message_created",
       "started",
       "delta",
-      "done",
-      "inbox_candidate_created"
+      "done"
     ]);
-    expect(events.find((event) => event.type === "inbox_candidate_created")?.replyId).toBe(waitingOutput.replies[1]?.id);
-    expect(adapter.calls).toHaveLength(2);
+    expect(events.some((event) => event.type === "inbox_candidate_created")).toBe(false);
+    expect(adapter.calls).toHaveLength(1);
+    expect(adapter.chatCalls).toHaveLength(1);
     const deliveryConfig = delivery.config as AgentNodeConfig;
-    expect(adapter.calls[1]).toMatchObject({
+    expect(adapter.chatCalls[0]).toMatchObject({
       source: "openclaw",
-      agentName: deliveryConfig.agentName,
       modelId: deliveryConfig.modelId,
-      permissionProfile: deliveryConfig.permissionProfile,
-      workingDirectory: deliveryConfig.workingDirectory,
-      tools: deliveryConfig.tools,
       skillIds: deliveryConfig.skillIds
     });
-    expect(JSON.stringify(adapter.calls[1]?.input)).toContain("Give me another version.");
+    expect(adapter.chatCalls[0]?.message).toContain("Generate a formal candidate with another version.");
 
     await worker.selectApprovalReply(blueprint, replyView!.run, waitingNode!.id, waitingOutput.replies[1]!.id);
     const selectedView = await store.getRunView(run.id);
     const selectedNode = selectedView?.nodeRuns.find((nodeRun) => nodeRun.nodeId === "delivery");
     expect((selectedNode?.output as { selectedReplyId?: string }).selectedReplyId).toBe(waitingOutput.replies[1]?.id);
+  });
+
+  it("keeps ordinary Agent approval discussion replies as discussion until explicitly selected", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const delivery = createAgentNode("delivery", "Delivery");
+    delivery.config = {
+      ...delivery.config,
+      approval: {
+        enabled: true
+      }
+    };
+    const blueprint = createBlueprint([delivery], []);
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-ordinary-1"),
+      createStartedAgentTask("task-ordinary-2")
+    ], [
+      createCompletedAgentTask("task-ordinary-1", "succeeded", "draft answer"),
+      createCompletedAgentTask("task-ordinary-2", "succeeded", {
+        humanReportMd: "This version trades speed for more verification detail.",
+        result: { status: "discussed" }
+      })
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const waitingView = await waitForRunStatus(store, run.id, "waiting_approval");
+    const approvalRequest = waitingView.approvalRequests?.find((request) => request.kind === "agent_proposal");
+    if (!approvalRequest?.threadId) throw new Error("Expected agent approval request.");
+    const events: Array<{ type: string; replyId?: string }> = [];
+
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: approvalRequest.threadId,
+      message: "Can you explain the tradeoff first?",
+      onEvent: (event) => events.push(event)
+    });
+
+    const replyView = await store.getRunView(run.id);
+    const waitingNode = replyView?.nodeRuns.find((nodeRun) => nodeRun.nodeId === "delivery");
+    const waitingOutput = waitingNode?.output as {
+      approvalType: "agent";
+      replies: Array<{ id: string; role: string; body: string; canUseAsSolution?: boolean }>;
+    };
+
+    expect(replyView?.run.status).toBe("waiting_approval");
+    expect(waitingOutput.replies.map((reply) => [reply.role, reply.body, reply.canUseAsSolution])).toEqual([
+      ["user", "Can you explain the tradeoff first?", undefined],
+      ["assistant", "This version trades speed for more verification detail.", false]
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "inbox_message_created",
+      "started",
+      "delta",
+      "done"
+    ]);
+    expect(adapter.chatCalls[0]?.message).toContain("ordinary reply in a HiveWard inbox discussion");
+    expect(adapter.chatCalls[0]?.message).toContain("Can you explain the tradeoff first?");
+    expect(adapter.chatCalls[0]?.message).toContain("Do not approve, reject, rerun, schedule, complete");
+    expect(adapter.chatCalls[0]?.message).not.toContain("HiveWard inbox discussion payload");
+    expect(adapter.chatCalls[0]?.message).not.toContain("originalInput");
+    const [thread] = await store.listApprovalThreads({ runId: run.id });
+    const messages = await store.listChatMessages(thread!.discussionSession!.chatSessionId!);
+    expect(messages[0]?.content).toBe("Can you explain the tradeoff first?");
+    expect(messages[0]?.content).not.toContain("HiveWard inbox discussion payload");
+    await worker.selectApprovalReply(blueprint, replyView!.run, waitingNode!.id, waitingOutput.replies[1]!.id);
+    const selectedView = await store.getRunView(run.id);
+    const selectedNode = selectedView?.nodeRuns.find((nodeRun) => nodeRun.nodeId === "delivery");
+    expect((selectedNode?.output as { selectedReplyId?: string }).selectedReplyId).toBe(waitingOutput.replies[1]?.id);
+  });
+
+  it("resumes the same native discussion session for repeated Agent approval replies", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const delivery = createAgentNode("delivery", "Delivery");
+    delivery.config = {
+      ...delivery.config,
+      approval: {
+        enabled: true
+      }
+    };
+    const blueprint = createBlueprint([delivery], []);
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-resume-initial")
+    ], [
+      createCompletedAgentTask("task-resume-initial", "succeeded", "draft answer"),
+      createCompletedAgentTask("task-resume-chat-1", "succeeded", "answer one"),
+      createCompletedAgentTask("task-resume-chat-2", "succeeded", "answer two"),
+      createCompletedAgentTask("task-resume-chat-3", "succeeded", "answer three")
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const waitingView = await waitForRunStatus(store, run.id, "waiting_approval");
+    const approvalRequest = waitingView.approvalRequests?.find((request) => request.kind === "agent_proposal");
+    if (!approvalRequest?.threadId) throw new Error("Expected agent approval request.");
+
+    for (const message of ["First follow-up.", "Second follow-up.", "Third follow-up."]) {
+      await worker.streamInboxThreadMessage({
+        threadType: "approval",
+        threadId: approvalRequest.threadId,
+        message,
+        onEvent: () => undefined
+      });
+    }
+
+    expect(adapter.chatCalls.map((call) => call.sessionKey)).toEqual([
+      "test-chat-session-1",
+      "agent:main:main",
+      "agent:main:main"
+    ]);
+    expect(adapter.calls).toHaveLength(1);
+    const [thread] = await store.listApprovalThreads({ runId: run.id });
+    expect(thread?.discussionSession).toMatchObject({
+      threadType: "approval",
+      threadId: approvalRequest.threadId,
+      nativeSessionId: "agent:main:main",
+      nativeSessionState: "resumable",
+      status: "active"
+    });
+    const messages = await store.listChatMessages(thread!.discussionSession!.chatSessionId!);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "user", "assistant", "user", "assistant"]);
+    expect(messages.filter((message) => message.role === "user").map((message) => message.content)).toEqual([
+      "First follow-up.",
+      "Second follow-up.",
+      "Third follow-up."
+    ]);
+    expect(messages.some((message) => message.content.includes("HiveWard inbox discussion payload"))).toBe(false);
+  });
+
+  it("marks inbox discussion sessions native_missing when native resume fails", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const delivery = createAgentNode("delivery", "Delivery");
+    delivery.config = {
+      ...delivery.config,
+      approval: {
+        enabled: true
+      }
+    };
+    const blueprint = createBlueprint([delivery], []);
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-missing-initial")
+    ], [
+      createCompletedAgentTask("task-missing-initial", "succeeded", "draft answer"),
+      createCompletedAgentTask("task-missing-chat-1", "succeeded", "answer one"),
+      createCompletedAgentTask("task-missing-chat-2", "failed", undefined, "Cannot resume thread: session not found")
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const waitingView = await waitForRunStatus(store, run.id, "waiting_approval");
+    const approvalRequest = waitingView.approvalRequests?.find((request) => request.kind === "agent_proposal");
+    if (!approvalRequest?.threadId) throw new Error("Expected agent approval request.");
+
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: approvalRequest.threadId,
+      message: "First follow-up.",
+      onEvent: () => undefined
+    });
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: approvalRequest.threadId,
+      message: "Second follow-up.",
+      onEvent: () => undefined
+    });
+
+    const [thread] = await store.listApprovalThreads({ runId: run.id });
+    expect(thread?.discussionSession).toMatchObject({
+      nativeSessionId: "agent:main:main",
+      nativeSessionState: "missing",
+      status: "native_missing"
+    });
+    const chatSession = await store.getChatSession(thread!.discussionSession!.chatSessionId!);
+    expect(chatSession).toMatchObject({
+      status: "native_missing",
+      nativeSessionState: "missing"
+    });
+    const replies = await store.listApprovalReplies({ approvalRequestId: approvalRequest.id });
+    expect(replies.at(-1)).toMatchObject({
+      actor: "system",
+      body: "Cannot resume thread: session not found"
+    });
+  });
+
+  it("starts a fresh discussion session for the next blueprint run", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const delivery = createAgentNode("delivery", "Delivery");
+    delivery.config = {
+      ...delivery.config,
+      approval: {
+        enabled: true
+      }
+    };
+    const blueprint = createBlueprint([delivery], []);
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-run-1-initial"),
+      createStartedAgentTask("task-run-2-initial")
+    ], [
+      createCompletedAgentTask("task-run-1-initial", "succeeded", "first draft"),
+      { ...createCompletedAgentTask("task-run-1-chat", "succeeded", "first run answer"), sessionKey: "native-run-1" },
+      createCompletedAgentTask("task-run-2-initial", "succeeded", "second draft"),
+      { ...createCompletedAgentTask("task-run-2-chat", "succeeded", "second run answer"), sessionKey: "native-run-2" }
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const firstRun = await worker.startRun(blueprint, "test-user");
+    const firstWaiting = await waitForRunStatus(store, firstRun.id, "waiting_approval");
+    const firstRequest = firstWaiting.approvalRequests?.find((request) => request.kind === "agent_proposal");
+    if (!firstRequest?.threadId) throw new Error("Expected first approval request.");
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: firstRequest.threadId,
+      message: "Discuss first run.",
+      onEvent: () => undefined
+    });
+
+    const secondRun = await worker.startRun(blueprint, "test-user");
+    const secondWaiting = await waitForRunStatus(store, secondRun.id, "waiting_approval");
+    const secondRequest = secondWaiting.approvalRequests?.find((request) => request.kind === "agent_proposal");
+    if (!secondRequest?.threadId) throw new Error("Expected second approval request.");
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: secondRequest.threadId,
+      message: "Discuss second run.",
+      onEvent: () => undefined
+    });
+
+    const firstThread = (await store.listApprovalThreads({ runId: firstRun.id }))[0];
+    const secondThread = (await store.listApprovalThreads({ runId: secondRun.id }))[0];
+    expect(firstThread?.discussionSession?.nativeSessionId).toBe("native-run-1");
+    expect(secondThread?.discussionSession?.nativeSessionId).toBe("native-run-2");
+    expect(adapter.chatCalls.map((call) => call.sessionKey)).toEqual([
+      "test-chat-session-1",
+      "test-chat-session-2"
+    ]);
   });
 
   it("streams Agent approval discussion through the runtime that created the waiting node", async () => {
@@ -968,18 +1279,184 @@ describe("BlueprintWorker", () => {
     const waitingNode = waitingView.nodeRuns.find((nodeRun) => nodeRun.nodeId === "delivery");
     const approvalRequest = waitingView.approvalRequests?.find((request) => request.kind === "agent_proposal");
     if (!approvalRequest?.threadId || !waitingNode) throw new Error("Expected agent approval request.");
+    const events: Array<{ type: string; source?: string }> = [];
 
     await worker.streamInboxThreadMessage({
       threadType: "approval",
       threadId: approvalRequest.threadId,
       message: "Use the same harness for this follow-up.",
-      onEvent: () => undefined
+      onEvent: (event) => events.push(event)
     });
 
     expect(adapter.calls[0]?.source).toBe("opencode");
     expect(waitingNode.runtimeRef?.source).toBe("claude");
-    expect(adapter.calls[1]?.source).toBe("claude");
-    expect(adapter.waitCalls[1]?.source).toBe("claude");
+    expect(adapter.chatCalls[0]?.source).toBe("claude");
+    expect(events.find((event) => event.type === "started")?.source).toBe("claude");
+    expect(events.find((event) => event.type === "done")?.source).toBe("claude");
+  });
+
+  it("streams requirement-plan approval discussion through the configured planning executor without approving", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const blueprint = createSelfIterationBlueprint({ maxRounds: 1, researchAgent: true, requirementAgent: true });
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-plan-chat-research"),
+      createStartedAgentTask("task-plan-chat-plan"),
+      createStartedAgentTask("task-plan-chat-discussion")
+    ], [
+      createCompletedAgentTask("task-plan-chat-research", "succeeded", "plan chat research"),
+      createCompletedAgentTask("task-plan-chat-plan", "succeeded", "initial plan"),
+      createCompletedAgentTask("task-plan-chat-discussion", "succeeded", "assistant plan reply")
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const waiting = await waitForRunStatus(store, run.id, "waiting_approval");
+    const requirement = waiting.approvalRequests?.find((request) => request.kind === "iteration_requirement_plan");
+    if (!requirement?.threadId) throw new Error("Expected requirement approval.");
+    const events: Array<{ type: string; replyId?: string }> = [];
+
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: requirement.threadId,
+      message: "Discuss a clearer acceptance criterion.",
+      onEvent: (event) => events.push(event)
+    });
+
+    const replyView = await store.getRunView(run.id);
+    const replies = await store.listApprovalReplies({ approvalRequestId: requirement.id });
+
+    expect(replyView?.run.status).toBe("waiting_approval");
+    expect(replyView?.approvalRequests?.find((request) => request.id === requirement.id)).toMatchObject({
+      status: "pending"
+    });
+    expect(replyView?.approvalDecisions ?? []).toHaveLength(0);
+    expect(replies.map((reply) => [reply.actor, reply.body])).toEqual([
+      ["user", "Discuss a clearer acceptance criterion."],
+      ["agent", "assistant plan reply"]
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "inbox_message_created",
+      "started",
+      "delta",
+      "done"
+    ]);
+    expect(replies[1]?.metadata).toMatchObject({ inboxDiscussionMode: "reply", candidate: false });
+    expect(adapter.calls.map((call) => call.agentName)).toEqual(["research", "requirements"]);
+    expect(adapter.chatCalls).toHaveLength(1);
+    expect(adapter.chatCalls[0]?.message).toContain("ordinary reply in a HiveWard inbox discussion");
+    expect(adapter.chatCalls[0]?.message).toContain("Type: iteration_requirement_plan");
+    expect(adapter.chatCalls[0]?.message).toContain("Discuss a clearer acceptance criterion.");
+    expect(adapter.chatCalls[0]?.message).not.toContain("HiveWard inbox discussion payload");
+    expect(adapter.chatCalls[0]?.message).not.toContain('"revisionFeedback"');
+  });
+
+  it("streams release-report approval discussion through the manager without starting the next round", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const blueprint = createSelfIterationBlueprint({ maxRounds: 1 });
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-report-chat-research"),
+      createStartedAgentTask("task-report-chat-plan"),
+      createStartedAgentTask("task-report-chat-build"),
+      createStartedAgentTask("task-report-chat-release"),
+      createStartedAgentTask("task-report-chat-discussion")
+    ], [
+      createCompletedAgentTask("task-report-chat-research", "succeeded", "report chat research"),
+      createCompletedAgentTask("task-report-chat-plan", "succeeded", "report chat plan"),
+      createCompletedAgentTask("task-report-chat-build", "succeeded", htmlArtifactOutput("report chat")),
+      createCompletedAgentTask("task-report-chat-release", "succeeded", releaseReportOutput("report chat")),
+      createCompletedAgentTask("task-report-chat-discussion", "succeeded", releaseReportOutput("report chat candidate"))
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const started = await waitForRunStatus(store, run.id, "waiting_approval");
+    const requirement = started.approvalRequests?.find((request) => request.kind === "iteration_requirement_plan");
+    const currentRun = await store.getBlueprintRun(run.id);
+    if (!currentRun || !requirement) throw new Error("Expected requirement approval.");
+    await worker.applyApprovalRequest(blueprint, currentRun, requirement.id, "approve");
+
+    const reportView = await waitForRunView(store, run.id, (view) =>
+      view.run.status === "waiting_approval" &&
+      (view.approvalRequests ?? []).some((request) => request.kind === "manager_release_report" && request.status === "pending")
+    );
+    const report = reportView.approvalRequests?.find((request) =>
+      request.kind === "manager_release_report" && request.status === "pending"
+    );
+    if (!report?.threadId) throw new Error("Expected release report approval.");
+    const events: Array<{ type: string }> = [];
+
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: report.threadId,
+      message: "Discuss the verification language before I pass it.",
+      onEvent: (event) => events.push(event)
+    });
+
+    const replyView = await store.getRunView(run.id);
+    const replies = await store.listApprovalReplies({ approvalRequestId: report.id });
+
+    expect(replyView?.run.status).toBe("waiting_approval");
+    expect(replyView?.approvalRequests?.find((request) => request.id === report.id)).toMatchObject({
+      status: "pending"
+    });
+    expect(replyView?.approvalDecisions?.map((decision) => decision.action)).toEqual(["approve"]);
+    expect(replyView?.iterationRounds?.[0]).toMatchObject({ status: "report_pending" });
+    expect(replies.map((reply) => [reply.actor, reply.body])).toEqual([
+      ["user", "Discuss the verification language before I pass it."],
+      ["manager", expect.stringContaining("report chat candidate release report written by the manager")]
+    ]);
+    expect(events.map((event) => event.type)).toEqual(["inbox_message_created", "started", "delta", "done"]);
+    expect(replies[1]?.metadata).toMatchObject({ inboxDiscussionMode: "reply", candidate: false });
+    expect(adapter.calls.map((call) => call.agentName)).toEqual(["manager", "manager", "builder", "manager"]);
+    expect(adapter.chatCalls).toHaveLength(1);
+    expect(adapter.chatCalls[0]?.message).toContain("ordinary reply in a HiveWard inbox discussion");
+    expect(adapter.chatCalls[0]?.message).toContain("Type: manager_release_report");
+    expect(adapter.chatCalls[0]?.message).toContain("Discuss the verification language before I pass it.");
+    expect(adapter.chatCalls[0]?.message).not.toContain("HiveWard inbox discussion payload");
+    expect(adapter.chatCalls[0]?.message).not.toContain('"revisionFeedback"');
+  }, 30_000);
+
+  it("keeps function-node approval replies as message-only when no executor is bound", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+    const approvalService = new ApprovalService(store);
+    const request = await approvalService.createRequest({
+      kind: "function_node",
+      title: "Manual function checkpoint",
+      body: "Manual checkpoint body.",
+      requestedBy: {
+        type: "system",
+        label: "Manual checkpoint"
+      }
+    });
+    const adapter = new ScriptedAdapter([], []);
+    const worker = new BlueprintWorker(store, adapter);
+    const events: Array<{ type: string }> = [];
+
+    await worker.streamInboxThreadMessage({
+      threadType: "approval",
+      threadId: request.threadId ?? request.id,
+      message: "Leave this note only.",
+      onEvent: (event) => events.push(event)
+    });
+
+    expect(events.map((event) => event.type)).toEqual(["inbox_message_created", "done"]);
+    expect(adapter.calls).toHaveLength(0);
+    expect((await store.getApprovalRequest(request.id))?.status).toBe("pending");
+    expect(await store.listApprovalDecisions(request.id)).toEqual([]);
+    expect(await store.listApprovalReplies({ approvalRequestId: request.id })).toEqual([
+      expect.objectContaining({
+        actor: "user",
+        body: "Leave this note only."
+      })
+    ]);
   });
 
   it("keeps Agent approval rejection from rerunning or continuing the run", async () => {
@@ -3710,6 +4187,80 @@ describe("BlueprintWorker", () => {
       "approve",
       "reject"
     ]);
+  }, 30_000);
+
+  it("reruns the manager when revising a release report", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "hiveward-worker-"));
+    const store = new FileHivewardStore(path.join(tempDir, "hiveward-store.json"));
+    await store.init();
+
+    const blueprint = createSelfIterationBlueprint({ maxRounds: 1 });
+    const adapter = new ScriptedAdapter([
+      createStartedAgentTask("task-report-revise-research"),
+      createStartedAgentTask("task-report-revise-plan"),
+      createStartedAgentTask("task-report-revise-build"),
+      createStartedAgentTask("task-report-revise-release-1"),
+      createStartedAgentTask("task-report-revise-release-2")
+    ], [
+      createCompletedAgentTask("task-report-revise-research", "succeeded", "revise report research"),
+      createCompletedAgentTask("task-report-revise-plan", "succeeded", "revise report plan"),
+      createCompletedAgentTask("task-report-revise-build", "succeeded", htmlArtifactOutput("revise report")),
+      createCompletedAgentTask("task-report-revise-release-1", "succeeded", releaseReportOutput("initial revise report")),
+      createCompletedAgentTask("task-report-revise-release-2", "succeeded", releaseReportOutput("manager revised report"))
+    ]);
+    const worker = new BlueprintWorker(store, adapter);
+
+    const run = await worker.startRun(blueprint, "test-user");
+    const started = await waitForRunStatus(store, run.id, "waiting_approval");
+    const requirement = started.approvalRequests?.find((request) => request.kind === "iteration_requirement_plan");
+    const currentRun1 = await store.getBlueprintRun(run.id);
+    if (!currentRun1 || !requirement) throw new Error("Expected requirement approval.");
+    await worker.applyApprovalRequest(blueprint, currentRun1, requirement.id, "approve");
+
+    const report1View = await waitForRunView(store, run.id, (view) =>
+      view.run.status === "waiting_approval" &&
+      (view.approvalRequests ?? []).some((request) => request.kind === "manager_release_report" && request.status === "pending")
+    );
+    const report1 = report1View.approvalRequests?.find((request) =>
+      request.kind === "manager_release_report" && request.status === "pending"
+    );
+    const currentRun2 = await store.getBlueprintRun(run.id);
+    if (!currentRun2 || !report1) throw new Error("Expected first release report.");
+    await worker.applyApprovalRequest(blueprint, currentRun2, report1.id, "revise", {
+      message: "Rewrite with real source notes."
+    });
+
+    const revisedView = await store.getRunView(run.id);
+    const oldReportApproval = revisedView?.approvalRequests?.find((request) => request.id === report1.id);
+    const report2 = revisedView?.approvalRequests
+      ?.filter((request) => request.kind === "manager_release_report" && request.status === "pending")
+      .at(-1);
+    const releaseReports = revisedView?.releaseReports ?? [];
+    const revisionCall = adapter.calls.at(-1);
+
+    expect(oldReportApproval).toMatchObject({
+      status: "superseded",
+      supersededByRequestId: report2?.id
+    });
+    expect(report2).toMatchObject({
+      revision: 2,
+      body: expect.stringContaining("manager revised report release report written by the manager")
+    });
+    expect(releaseReports.map((report) => report.version)).toEqual([1, 2]);
+    expect(releaseReports.at(-1)).toMatchObject({
+      approvalRequestId: report2?.id,
+      summary: expect.stringContaining("manager revised report release report written by the manager"),
+      supersedesReportId: releaseReports[0]?.id
+    });
+    expect(revisionCall?.agentName).toBe("manager");
+    expect(revisionCall?.prompt).toContain("release report revision");
+    expect(revisionCall?.input).toMatchObject({
+      task: "self_iteration_release_report",
+      revision: expect.objectContaining({
+        feedback: "Rewrite with real source notes."
+      })
+    });
+    expect(adapter.calls.map((call) => call.agentName)).toEqual(["manager", "manager", "builder", "manager", "manager"]);
   }, 30_000);
 
   it("freezes pending lifecycle approvals when a self-iteration run is cancelled", async () => {

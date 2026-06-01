@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HivewardStore } from "../hivewardStore";
 import { FileHivewardStore } from "../fileHivewardStore";
 import {
@@ -43,6 +43,44 @@ const storeCases: Array<[string, () => Promise<Harness>]> = [
     return { store, dataDir, close: () => store.close() };
   }]
 ];
+
+describe("SqliteHivewardStore inbox item type filtering", () => {
+  it("hides legacy report rows and unknown inbox item types", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "hiveward-sqlite-inbox-type-filter-"));
+    const store = new SqliteHivewardStore(join(dataDir, "hiveward.sqlite"));
+    await store.init();
+    const companyState = await store.createCompany({ name: "Inbox Type Filter Company" });
+    const companyId = companyState.selectedCompanyId;
+    if (!companyId) throw new Error("Expected selected company.");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const db = (store as unknown as {
+      driver: {
+        db: {
+          prepare: (sql: string) => { run: (...values: unknown[]) => unknown };
+        };
+      };
+    }).driver.db;
+    const insert = db.prepare(
+      `INSERT INTO inbox_items (
+        id, company_id, type, status, title, summary, created_by_role_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const now = "2026-05-31T00:00:00.000Z";
+    insert.run("inbox-report", companyId, "report", "pending", "Legacy report", "Should not appear.", "ceo", now, now);
+    insert.run("inbox-unknown", companyId, "unknown", "pending", "Unknown", "Should not be coerced.", "ceo", now, now);
+    insert.run("inbox-config", companyId, "company_config", "pending", "Config", "Valid item.", "ceo", now, now);
+
+    try {
+      await expect(store.listInboxItems()).resolves.toEqual([
+        expect.objectContaining({ id: "inbox-config", type: "company_config" })
+      ]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("unsupported inbox item type"));
+    } finally {
+      warn.mockRestore();
+      store.close();
+    }
+  });
+});
 
 describe.each(storeCases)("%s store contract", (_label, createHarness) => {
   it("persists runtime state and rebuilds the existing run view shape", async () => {
@@ -165,6 +203,101 @@ describe.each(storeCases)("%s store contract", (_label, createHarness) => {
         status: "sent"
       });
       await expect(store.listChatMessages(sessionRecord.id)).resolves.toEqual([expect.objectContaining({ content: "Hello" })]);
+    } finally {
+      close?.();
+    }
+  });
+
+  it("projects the pending approval harness from the paused node runtime", async () => {
+    const { store, close } = await createHarness();
+    try {
+      const companyState = await store.createCompany({ name: "Runtime Approval Company" });
+      const companyId = companyState.selectedCompanyId;
+      if (!companyId) throw new Error("Expected selected company.");
+      const blueprint = await store.saveBlueprint(createContractBlueprint(companyId));
+      const run = await store.createBlueprintRun(blueprint, "contract-user");
+      const nodeRun = {
+        ...createContractNodeRun(run, undefined, "waiting_approval"),
+        output: {
+          approvalType: "agent",
+          reviewOutput: "Draft answer",
+          replies: []
+        },
+        runtimeRef: {
+          source: "claude",
+          sourceId: "claude-task-contract",
+          sourceUpdatedAt: contractNow,
+          taskId: "claude-task-contract",
+          runId: "claude-run-contract",
+          sessionKey: "claude-session-contract"
+        }
+      } as const;
+      await store.upsertNodeRun(nodeRun);
+      await store.upsertApprovalRequest(createContractApproval(run.id, nodeRun.id));
+
+      await expect(store.listPendingApprovals()).resolves.toEqual([
+        expect.objectContaining({
+          approvalRequestId: "approval-contract",
+          harnessId: "claude"
+        })
+      ]);
+    } finally {
+      close?.();
+    }
+  });
+
+  it("exposes request-level selected candidate state in pending approval views", async () => {
+    const { store, close } = await createHarness();
+    try {
+      const companyState = await store.createCompany({ name: "Selected Candidate Company" });
+      const companyId = companyState.selectedCompanyId;
+      if (!companyId) throw new Error("Expected selected company.");
+      const blueprint = await store.saveBlueprint(createContractBlueprint(companyId));
+      const run = await store.createBlueprintRun(blueprint, "contract-user");
+      const request = await store.upsertApprovalRequest({
+        id: "approval-selected-candidate",
+        runId: run.id,
+        kind: "iteration_requirement_plan",
+        status: "pending",
+        title: "Round plan",
+        body: "Original plan",
+        threadId: "thread-selected-candidate",
+        revision: 1,
+        selectedReplyId: "reply-selected-candidate",
+        capabilities: {
+          approve: true,
+          reject: true,
+          reply: true,
+          complete: false,
+          terminate: false
+        },
+        requestedBy: { type: "node", label: "Manager", nodeId: "contract-manager" },
+        requestedAt: contractNow,
+        updatedAt: contractNow
+      });
+      await store.appendApprovalReply({
+        id: "reply-selected-candidate",
+        threadId: request.threadId ?? request.id,
+        approvalRequestId: request.id,
+        actor: "manager",
+        body: "Candidate plan",
+        createdAt: contractNow,
+        metadata: { inboxDiscussionMode: "candidate", candidate: true }
+      });
+
+      await expect(store.listPendingApprovals()).resolves.toEqual([
+        expect.objectContaining({
+          approvalRequestId: request.id,
+          selectedReplyId: "reply-selected-candidate",
+          replies: [
+            expect.objectContaining({
+              id: "reply-selected-candidate",
+              selected: true,
+              canUseAsSolution: true
+            })
+          ]
+        })
+      ]);
     } finally {
       close?.();
     }

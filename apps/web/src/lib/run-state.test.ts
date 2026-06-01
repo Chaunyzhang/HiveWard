@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ApprovalRequest, BlueprintRunStatus, BlueprintRunSummary, BlueprintRunView, PendingApprovalItem } from "@hiveward/shared";
+import type { ApprovalRequest, BlueprintRunStatus, BlueprintRunSummary, BlueprintRunView, PendingApprovalItem, RuntimeObjectSource } from "@hiveward/shared";
 import {
   acknowledgedTerminalRunIdsStorageKey,
   readAcknowledgedTerminalRunIds,
@@ -36,6 +36,14 @@ describe("run state sync", () => {
         canReject: true
       }
     ]);
+  });
+
+  it("uses the paused node runtime source as the approval harness label source", () => {
+    const runView = createRunView("waiting_approval", { runtimeSource: "claude" });
+
+    const approvals = syncApprovalsForRun([], runView);
+
+    expect(approvals[0]).toMatchObject({ harnessId: "claude" });
   });
 
   it("derives Agent approval reply state from a waiting agent node", () => {
@@ -298,6 +306,82 @@ describe("run state sync", () => {
     });
   });
 
+  it("restores request-level selected candidate state from run views", () => {
+    const runView = createRunView("waiting_approval");
+    runView.approvalRequests = [
+      createApprovalRequest({
+        id: "approval-plan-selected",
+        threadId: "approval-thread-selected",
+        kind: "iteration_requirement_plan",
+        status: "pending",
+        title: "Round 1 Execution Plan",
+        body: "Original plan",
+        selectedReplyId: "reply-selected"
+      })
+    ];
+    runView.approvalReplies = [
+      {
+        id: "reply-selected",
+        threadId: "approval-thread-selected",
+        approvalRequestId: "approval-plan-selected",
+        actor: "agent",
+        body: "Selected candidate plan",
+        createdAt: "2026-05-21T01:06:00.000Z",
+        metadata: { inboxDiscussionMode: "candidate", candidate: true }
+      }
+    ];
+
+    const approvals = syncApprovalsForRun([], runView);
+
+    expect(approvals[0]).toMatchObject({
+      approvalRequestId: "approval-plan-selected",
+      selectedReplyId: "reply-selected",
+      replies: [
+        {
+          id: "reply-selected",
+          role: "assistant",
+          body: "Selected candidate plan",
+          selected: true,
+          canUseAsSolution: true
+        }
+      ]
+    });
+  });
+
+  it("offers request-level ordinary assistant discussion replies for explicit solution selection", () => {
+    const runView = createRunView("waiting_approval");
+    runView.approvalRequests = [
+      createApprovalRequest({
+        id: "approval-plan-chat",
+        threadId: "approval-thread-chat",
+        kind: "iteration_requirement_plan",
+        status: "pending",
+        title: "Round 1 Execution Plan",
+        body: "Original plan"
+      })
+    ];
+    runView.approvalReplies = [
+      {
+        id: "reply-chat",
+        threadId: "approval-thread-chat",
+        approvalRequestId: "approval-plan-chat",
+        actor: "agent",
+        body: "This is a discussion answer, not a candidate.",
+        createdAt: "2026-05-21T01:06:00.000Z",
+        metadata: { inboxDiscussionMode: "reply", candidate: false }
+      }
+    ];
+
+    const approvals = syncApprovalsForRun([], runView);
+
+    expect(approvals[0]?.replies?.[0]).toMatchObject({
+      id: "reply-chat",
+      role: "assistant",
+      body: "This is a discussion answer, not a candidate.",
+      canUseAsSolution: true
+    });
+  });
+
   it("prefers thread facts over duplicate node output replies", () => {
     const runView = createRunView("waiting_approval");
     runView.approvalRequests = [
@@ -535,6 +619,7 @@ function createRunView(
     blueprintId?: string;
     runId?: string;
     runStatus?: BlueprintRunStatus;
+    runtimeSource?: RuntimeObjectSource;
     upstreamOutput?: unknown;
   } = {}
 ): BlueprintRunView {
@@ -566,6 +651,18 @@ function createRunView(
         status: nodeStatus,
         queuedAt: "2026-05-21T01:01:00.000Z",
         startedAt: "2026-05-21T01:02:00.000Z",
+        ...(options.runtimeSource
+          ? {
+              runtimeRef: {
+                source: options.runtimeSource,
+                sourceId: `${options.runtimeSource}-task-1`,
+                sourceUpdatedAt: "2026-05-21T01:02:30.000Z",
+                taskId: `${options.runtimeSource}-task-1`,
+                runId: `${options.runtimeSource}-run-1`,
+                sessionKey: `${options.runtimeSource}-session-1`
+              }
+            }
+          : {}),
         ...(options.upstreamOutput === undefined
           ? {}
           : {
@@ -599,7 +696,7 @@ function createApprovalRequest(overrides: Partial<ApprovalRequest>): ApprovalReq
   return {
     id: "approval-1",
     runId: "run-1",
-    kind: "generic_message",
+    kind: "function_node",
     status: "pending",
     title: "Approval",
     body: "Approval body",

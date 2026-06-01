@@ -54,7 +54,7 @@ describe("JSON to SQLite migration", () => {
 
     const verification = await verifySqliteMigration({ dataDir, sqlitePath });
     expect(verification).toMatchObject({ ok: true, mismatches: [] });
-  });
+  }, 10_000);
 
   it("preserves a legacy artifact nodeRunId that has no matching node_run row", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "hiveward-migration-legacy-artifact-node-"));

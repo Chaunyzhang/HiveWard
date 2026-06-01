@@ -11,7 +11,7 @@ import type {
 import { formatAgentSdkError, formatAgentSdkProviderError, getErrorMessage, isAbortLikeError } from "./errors";
 import { mapCodexSandbox, normalizeTaskRuntimeAccessPolicy } from "./permissions";
 import { buildSdkChatPrompt, mapCodexReasoningEffort } from "./chat-envelope";
-import { buildPromptEnvelope, toCodexOutputSchema, validateOutputSchema } from "./prompt-envelope";
+import { buildPromptEnvelope } from "./prompt-envelope";
 import { runtimeLabelFromRecord } from "./runtime-state";
 import { createTerminalTaskResult, AgentSdkTaskRegistry } from "./task-registry";
 import type { AgentSdkChatStreamInput, AgentSdkRuntime } from "./types";
@@ -174,28 +174,58 @@ export class CodexAgentSdkRuntime implements AgentSdkRuntime {
   }
 
   async streamTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
-    const started = await this.startTask(input);
-    onEvent({ ...started, type: "started" });
-    if (started.status === "failed" || started.status === "cancelled") {
-      const terminal: AgentTaskResult = { ...started, output: undefined, usage: undefined };
+    const now = new Date().toISOString();
+    const taskId = `codex-task-${nanoid(10)}`;
+    const runId = `codex-run-${nanoid(10)}`;
+    const initialSessionKey = `codex-session-${input.nodeRunId}`;
+
+    let workingDirectory: string;
+    try {
+      requireConfiguredModel(input.modelId);
+      workingDirectory = resolveSdkWorkingDirectory(input.workingDirectory, this.options.workspaceRoot);
+      assertGitWorkspace(workingDirectory, this.options.workspaceRoot);
+    } catch (error) {
+      const failed = this.failedStart(taskId, runId, initialSessionKey, getErrorMessage(error), now);
+      onEvent({ ...failed, type: "started" });
+      const terminal: AgentTaskResult = { ...failed, output: undefined, usage: undefined };
       onEvent(toAgentTaskDoneEvent(terminal));
       return terminal;
     }
-    const result = await this.waitForTask({
-      nodeRunId: input.nodeRunId,
-      taskId: started.taskId,
-      runId: started.runId,
-      sessionKey: started.sessionKey,
-      source: started.source,
-      agentId: input.agentId,
-      modelId: input.modelId
+
+    onEvent({
+      type: "started",
+      taskId,
+      runId,
+      sessionKey: initialSessionKey,
+      source: "codex",
+      status: "running",
+      updatedAt: now
     });
-    const text = stringifyStreamOutput(result.output);
-    if (text) {
-      onEvent({ type: "delta", text });
+
+    const timeoutMs = normalizeTimeout(input.timeoutMs, this.options.defaultTimeoutMs);
+    const abortController = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      abortController.abort("timeout");
+    }, timeoutMs);
+
+    try {
+      const result = await this.runCodexTask({
+        input,
+        taskId,
+        runId,
+        initialSessionKey,
+        workingDirectory,
+        abortController,
+        isTimedOut: () => timedOut,
+        onEvent
+      });
+      onEvent(toAgentTaskDoneEvent(result, stringifyStreamOutput(result.output)));
+      return result;
+    } finally {
+      clearTimeout(timeout);
     }
-    onEvent(toAgentTaskDoneEvent(result, text));
-    return result;
   }
 
   waitForTask(input: WaitForAgentTaskInput): Promise<AgentTaskResult> {
@@ -213,7 +243,8 @@ export class CodexAgentSdkRuntime implements AgentSdkRuntime {
     initialSessionKey,
     workingDirectory,
     abortController,
-    isTimedOut
+    isTimedOut,
+    onEvent
   }: {
     input: StartAgentTaskInput;
     taskId: string;
@@ -222,6 +253,7 @@ export class CodexAgentSdkRuntime implements AgentSdkRuntime {
     workingDirectory: string;
     abortController: AbortController;
     isTimedOut: () => boolean;
+    onEvent?: (event: ChatStreamEvent) => void;
   }): Promise<AgentTaskResult> {
     const runtimeAccessPolicy = normalizeTaskRuntimeAccessPolicy(input, "codex");
     const permissionProfile = runtimeAccessPolicy.filesystem;
@@ -232,7 +264,6 @@ export class CodexAgentSdkRuntime implements AgentSdkRuntime {
         return this.cancelledResult(taskId, runId, sessionKey, isTimedOut());
       }
 
-      const outputSchema = toCodexOutputSchema(input.outputSchema);
       const codex = this.createCodexClient();
       const thread = codex.startThread({
         model: input.modelId,
@@ -242,31 +273,26 @@ export class CodexAgentSdkRuntime implements AgentSdkRuntime {
         networkAccessEnabled: runtimeAccessPolicy.network === "enabled",
         webSearchMode: runtimeAccessPolicy.webSearch
       });
-      const turn = await thread.run(buildPromptEnvelope({ ...input, outputSchema }), {
-        outputSchema,
+      const prompt = buildPromptEnvelope(input);
+      const turn = onEvent
+        ? thread.runStreamed
+          ? await this.runStreamedChatTurn(thread, prompt, { signal: abortController.signal }, onEvent, (nextSessionKey) => {
+              sessionKey = nextSessionKey;
+            })
+          : await this.runBufferedTaskTurn(thread, prompt, { signal: abortController.signal }, onEvent, runId)
+        : await thread.run(prompt, {
         signal: abortController.signal
       });
       sessionKey = thread.id ?? sessionKey;
 
-      if (!validateOutputSchema(turn.finalResponse, input.outputSchema)) {
-        return createTerminalTaskResult({
-          taskId,
-          runId,
-          sessionKey,
-          source: "codex",
-          status: "failed",
-          error: formatAgentSdkError("invalid_output", "SDK output does not match outputSchema."),
-          usage: mapCodexUsage(input, turn.usage)
-        });
-      }
-
+      const finalResponse = "finalResponse" in turn ? turn.finalResponse : turn.text;
       return {
         taskId,
         runId,
         sessionKey,
         source: "codex",
         status: "succeeded",
-        output: turn.finalResponse,
+        output: finalResponse,
         usage: mapCodexUsage(input, turn.usage),
         updatedAt: new Date().toISOString()
       };
@@ -318,6 +344,42 @@ export class CodexAgentSdkRuntime implements AgentSdkRuntime {
     if (turn.finalResponse) {
       onEvent({ type: "delta", text: turn.finalResponse });
     }
+    return {
+      text: turn.finalResponse,
+      usage: turn.usage
+    };
+  }
+
+  private async runBufferedTaskTurn(
+    thread: CodexThreadLike,
+    prompt: string,
+    turnOptions: TurnOptions,
+    onEvent: (event: ChatStreamEvent) => void,
+    runId: string
+  ): Promise<{ text: string; usage: Usage | null }> {
+    const fallbackId = `${runId}:final-only-fallback`;
+    onEvent({
+      type: "runtime_state",
+      source: "codex",
+      phase: "thinking",
+      label: "Codex final-only fallback: runStreamed is unavailable; waiting for final task output.",
+      id: fallbackId,
+      status: "started",
+      updatedAt: new Date().toISOString()
+    });
+    const turn = await thread.run(prompt, turnOptions);
+    if (turn.finalResponse) {
+      onEvent({ type: "delta", text: turn.finalResponse, replace: true });
+    }
+    onEvent({
+      type: "runtime_state",
+      source: "codex",
+      phase: "thinking",
+      label: "Codex final-only fallback completed.",
+      id: fallbackId,
+      status: "completed",
+      updatedAt: new Date().toISOString()
+    });
     return {
       text: turn.finalResponse,
       usage: turn.usage

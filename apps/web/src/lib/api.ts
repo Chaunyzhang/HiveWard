@@ -57,6 +57,7 @@ import type {
   RejectBlueprintRunRequest,
   ReplyBlueprintRunApprovalRequest,
   SelectBlueprintRunApprovalRequest,
+  SelectApprovalRequestReplyRequest,
   ReplyInboxItemRequest,
   ChatSessionHistoryResponse,
   ChatSessionMessagesResponse,
@@ -577,6 +578,13 @@ export const api = {
     return request<ApprovalRequestResponse>(`/api/approval-requests/${encodeURIComponent(approvalRequestId)}/terminate`, {
       method: "POST",
       body: JSON.stringify({ comment })
+    });
+  },
+
+  async selectApprovalRequestReply(approvalRequestId: string, selectedReplyId: string): Promise<ApprovalRequestResponse> {
+    return request<ApprovalRequestResponse>(`/api/approval-requests/${encodeURIComponent(approvalRequestId)}/select-reply`, {
+      method: "POST",
+      body: JSON.stringify({ selectedReplyId } satisfies SelectApprovalRequestReplyRequest)
     });
   },
 

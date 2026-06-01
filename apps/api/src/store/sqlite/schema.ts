@@ -533,6 +533,27 @@ const sqliteRuntimeRefCanonicalColumnStatements = [
   "ALTER TABLE run_events RENAME COLUMN openclaw_ref_json TO runtime_ref_json"
 ];
 
+const sqliteInboxApprovalKindCanonicalizationStatements = [
+  `DELETE FROM inbox_replies
+   WHERE inbox_item_id IN (
+     SELECT id FROM inbox_items
+     WHERE type NOT IN ('leader_delegation','blueprint_proposal','run_request','company_config')
+   )`,
+  `DELETE FROM inbox_items
+   WHERE type NOT IN ('leader_delegation','blueprint_proposal','run_request','company_config')`,
+  "UPDATE approval_requests SET kind = 'function_node' WHERE kind = 'generic_message'",
+  "UPDATE approval_threads SET kind = 'function_node' WHERE kind = 'generic_message'",
+  "UPDATE manager_mail SET kind = 'function_node' WHERE kind = 'generic_message'"
+];
+
+const sqliteApprovalRequestSelectedReplyStatements = [
+  "ALTER TABLE approval_requests ADD COLUMN selected_reply_id TEXT"
+];
+
+const sqliteApprovalThreadDiscussionSessionStatements = [
+  "ALTER TABLE approval_threads ADD COLUMN discussion_session_json TEXT"
+];
+
 function checksumStatements(statements: string[]): string {
   return createHash("sha256").update(statements.join("\n")).digest("hex");
 }
@@ -579,6 +600,24 @@ export const sqliteMigrations: SqliteMigration[] = [
     name: "runtime_ref_canonical_columns",
     checksum: checksumStatements(sqliteRuntimeRefCanonicalColumnStatements),
     up: sqliteRuntimeRefCanonicalColumnStatements
+  },
+  {
+    version: 8,
+    name: "inbox_approval_kind_canonicalization",
+    checksum: checksumStatements(sqliteInboxApprovalKindCanonicalizationStatements),
+    up: sqliteInboxApprovalKindCanonicalizationStatements
+  },
+  {
+    version: 9,
+    name: "approval_request_selected_reply",
+    checksum: checksumStatements(sqliteApprovalRequestSelectedReplyStatements),
+    up: sqliteApprovalRequestSelectedReplyStatements
+  },
+  {
+    version: 10,
+    name: "approval_thread_discussion_session",
+    checksum: checksumStatements(sqliteApprovalThreadDiscussionSessionStatements),
+    up: sqliteApprovalThreadDiscussionSessionStatements
   }
 ];
 

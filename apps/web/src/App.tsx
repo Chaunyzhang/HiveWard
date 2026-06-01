@@ -1394,6 +1394,15 @@ export function App() {
     [applyRunView, withBusy]
   );
 
+  const selectApprovalRequestReply = useCallback(
+    (approvalRequestId: string, selectedReplyId: string) => {
+      void withApprovalRequestBusy("selectApprovalRequestReply", async () => {
+        await applyApprovalRequestResponse(await api.selectApprovalRequestReply(approvalRequestId, selectedReplyId));
+      });
+    },
+    [applyApprovalRequestResponse, withApprovalRequestBusy]
+  );
+
   const replyToInboxItem = useCallback(
     (itemId: string, message: string) => {
       void withBusy("replyInboxItem", async () => {
@@ -1761,8 +1770,10 @@ export function App() {
           onReplyApprovalRequest={replyToApprovalRequest}
           onRequestChangesApprovalRequest={requestChangesApprovalRequest}
           onReviseApprovalRequest={reviseApprovalRequest}
-          onSelectApprovalReply={selectRunApprovalReply}
+          onSelectRunApprovalReply={selectRunApprovalReply}
+          onSelectApprovalRequestReply={selectApprovalRequestReply}
           onReplyInboxItem={replyToInboxItem}
+          onInboxThreadMessageCreated={refreshInboxAndApprovals}
           onInboxThreadStreamDone={refreshAfterInboxThreadStream}
           onApproveInboxItem={approveInboxItem}
           onRejectInboxItem={rejectInboxItem}

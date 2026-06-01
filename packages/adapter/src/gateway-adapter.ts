@@ -388,28 +388,98 @@ export class GatewayOpenClawAdapter implements RuntimeAdapter {
   }
 
   async streamAgentTask(input: StartAgentTaskInput, onEvent: (event: ChatStreamEvent) => void): Promise<AgentTaskResult> {
-    const started = await this.startAgentTask(input);
-    onEvent({ ...started, type: "started" });
-    if (started.status === "failed" || started.status === "cancelled") {
-      const terminal: AgentTaskResult = { ...started, output: undefined, usage: undefined };
-      onEvent(toAgentTaskDoneEvent(terminal));
-      return terminal;
+    const session = await this.getSession();
+    const requestedRunId = createGatewayId(input.nodeRunId);
+    const knownRunIds = new Set([requestedRunId]);
+    let activeRunId = requestedRunId;
+    let activeSessionKey = buildAgentMainSessionKey(input.agentId);
+    let streamedOutput = "";
+    let lastUsage: RuntimeUsageFact | undefined;
+    let sawGatewayStreamEvent = false;
+
+    const handleGatewayEvent = (payload: unknown) => {
+      const event = mapGatewayTaskStreamEvent(payload, knownRunIds, activeRunId, activeSessionKey, streamedOutput, lastUsage);
+      if (!event) return;
+      sawGatewayStreamEvent = true;
+      if (event.type === "started" || event.type === "done") {
+        knownRunIds.add(event.runId);
+        activeRunId = event.runId;
+        activeSessionKey = event.sessionKey;
+      }
+      if (event.type === "delta") {
+        streamedOutput = event.replace ? event.text : `${streamedOutput}${event.text}`;
+        onEvent(event);
+        return;
+      }
+      if (event.type === "runtime_state") {
+        onEvent(event);
+        return;
+      }
+      if (event.type === "done") {
+        streamedOutput = event.output ?? streamedOutput;
+        lastUsage = event.usage ?? lastUsage;
+      }
+    };
+    const unsubscribeChat = session.onEvent("chat", handleGatewayEvent);
+    const unsubscribeAgent = session.onEvent("agent", handleGatewayEvent);
+
+    try {
+      const started = await this.startAgentTask(input);
+      knownRunIds.add(started.runId);
+      activeRunId = started.runId;
+      activeSessionKey = started.sessionKey;
+      onEvent({ ...started, type: "started" });
+      if (started.status === "failed" || started.status === "cancelled") {
+        const terminal: AgentTaskResult = { ...started, output: undefined, usage: undefined };
+        onEvent(toAgentTaskDoneEvent(terminal));
+        return terminal;
+      }
+
+      onEvent({
+        type: "runtime_state",
+        source: "openclaw",
+        phase: "thinking",
+        label: "OpenClaw task accepted; waiting for Gateway task stream events.",
+        id: `${started.runId}:gateway-task-stream`,
+        status: "started",
+        updatedAt: new Date().toISOString()
+      });
+
+      const result = await this.waitForAgentTask({
+        nodeRunId: input.nodeRunId,
+        taskId: started.taskId,
+        runId: started.runId,
+        sessionKey: started.sessionKey,
+        source: started.source,
+        agentId: input.agentId,
+        modelId: input.modelId,
+      });
+      const text = stringifyStreamOutput(result.output);
+      if (!sawGatewayStreamEvent) {
+        onEvent({
+          type: "runtime_state",
+          source: "openclaw",
+          phase: "thinking",
+          label: "OpenClaw final-only fallback: Gateway task stream events were unavailable; using final transcript output.",
+          id: `${started.runId}:final-only-fallback`,
+          status: "completed",
+          updatedAt: new Date().toISOString()
+        });
+      }
+      if (text && text !== streamedOutput) {
+        if (!streamedOutput || text.startsWith(streamedOutput)) {
+          const delta = text.slice(streamedOutput.length);
+          if (delta) onEvent({ type: "delta", text: delta });
+        } else {
+          onEvent({ type: "delta", text, replace: true });
+        }
+      }
+      onEvent(toAgentTaskDoneEvent(result, text));
+      return result;
+    } finally {
+      unsubscribeChat();
+      unsubscribeAgent();
     }
-    const result = await this.waitForAgentTask({
-      nodeRunId: input.nodeRunId,
-      taskId: started.taskId,
-      runId: started.runId,
-      sessionKey: started.sessionKey,
-      source: started.source,
-      agentId: input.agentId,
-      modelId: input.modelId,
-    });
-    const text = stringifyStreamOutput(result.output);
-    if (text) {
-      onEvent({ type: "delta", text });
-    }
-    onEvent(toAgentTaskDoneEvent(result, text));
-    return result;
   }
 
   async sendChannelMessage(input: SendChannelInput): Promise<SendChannelResult> {
@@ -1016,6 +1086,85 @@ function mapGatewayChatEvent(
   }
 
   return undefined;
+}
+
+function mapGatewayTaskStreamEvent(
+  payload: unknown,
+  knownRunIds: ReadonlySet<string>,
+  fallbackRunId: string,
+  fallbackSessionKey: string,
+  currentOutput: string,
+  currentUsage: RuntimeUsageFact | undefined,
+): ChatStreamEvent | undefined {
+  if (!isRecord(payload)) return undefined;
+  const eventRunId = readString(payload.runId) ?? readString(payload.taskId) ?? readString(payload.id);
+  const eventSessionKey = readString(payload.sessionKey);
+  if (eventRunId && !knownRunIds.has(eventRunId)) return undefined;
+  if (!eventRunId && eventSessionKey && eventSessionKey !== fallbackSessionKey) return undefined;
+  if (!eventRunId && !eventSessionKey) return undefined;
+
+  const runtimeState = mapGatewayRuntimeStateEvent(payload);
+  if (runtimeState) return runtimeState;
+  return mapGatewayChatEvent(payload, knownRunIds, fallbackRunId, fallbackSessionKey, currentOutput, currentUsage);
+}
+
+function mapGatewayRuntimeStateEvent(payload: Record<string, unknown>): Extract<ChatStreamEvent, { type: "runtime_state" }> | undefined {
+  const state = readString(payload.state) ?? readString(payload.type);
+  if (!state) return undefined;
+  if (
+    state !== "runtime_state" &&
+    state !== "progress" &&
+    state !== "thinking" &&
+    state !== "tool" &&
+    state !== "tool_start" &&
+    state !== "tool_end" &&
+    state !== "command" &&
+    state !== "command_start" &&
+    state !== "command_end"
+  ) {
+    return undefined;
+  }
+
+  return {
+    type: "runtime_state",
+    source: "openclaw",
+    phase: gatewayRuntimePhase(payload, state),
+    label: gatewayRuntimeLabel(payload, state),
+    id: readString(payload.activityId) ?? readString(payload.activity_id) ?? readString(payload.id),
+    status: gatewayRuntimeActivityStatus(payload, state),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function gatewayRuntimePhase(
+  payload: Record<string, unknown>,
+  state: string
+): Extract<ChatStreamEvent, { type: "runtime_state" }>["phase"] {
+  const phase = readString(payload.phase);
+  if (phase === "thinking" || phase === "tool" || phase === "command") return phase;
+  if (state.includes("command")) return "command";
+  if (state.includes("tool")) return "tool";
+  return "thinking";
+}
+
+function gatewayRuntimeActivityStatus(
+  payload: Record<string, unknown>,
+  state: string
+): Extract<ChatStreamEvent, { type: "runtime_state" }>["status"] {
+  const status = readString(payload.status);
+  if (status === "started" || status === "updated" || status === "completed") return status;
+  if (state.endsWith("_start")) return "started";
+  if (state.endsWith("_end")) return "completed";
+  return "updated";
+}
+
+function gatewayRuntimeLabel(payload: Record<string, unknown>, state: string): string {
+  const label =
+    readString(payload.label) ??
+    readString(payload.title) ??
+    readString(payload.name) ??
+    extractMessageText(payload.message).trim();
+  return label || state;
 }
 
 function readAgentResultOutput(result: Record<string, unknown>): string | undefined {

@@ -69,6 +69,7 @@ import type {
   RejectInboxItemRequest,
   ReplyBlueprintRunApprovalRequest,
   ReplyInboxItemRequest,
+  SelectApprovalRequestReplyRequest,
   SendChatSessionMessageRequest,
   StreamInboxThreadMessageRequest,
   UpdateChatSessionTitleRequest,
@@ -770,6 +771,23 @@ export function createApiRouter({ store, openClawConfigStore, adapter, worker, a
         return;
       }
       res.json(await buildApprovalRequestResponse(approvalRequestId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/api/approval-requests/:approvalRequestId/select-reply", async (req, res, next) => {
+    try {
+      const approvalRequestId = readRouteParam(req.params.approvalRequestId, "approvalRequestId");
+      const body = normalizeSelectApprovalRequestReplyRequest(req.body);
+      const approvalRequest = await store.getApprovalRequest(approvalRequestId);
+      if (!approvalRequest) {
+        res.status(404).json({ error: { code: "approval_request_not_found", message: "Approval request not found." } });
+        return;
+      }
+      const updated = await approvalService.selectReply(approvalRequestId, body.selectedReplyId);
+      await managerMailProjector.refresh(updated.runId);
+      res.json(await buildApprovalRequestResponse(approvalRequestId, updated.runId));
     } catch (error) {
       next(error);
     }
@@ -1587,6 +1605,17 @@ function normalizeSelectBlueprintRunApprovalRequest(value: unknown): SelectBluep
     throw new Error("Approval selection selectedReplyId is required.");
   }
   return { nodeRunId, selectedReplyId };
+}
+
+function normalizeSelectApprovalRequestReplyRequest(value: unknown): SelectApprovalRequestReplyRequest {
+  if (!isPlainRecord(value)) {
+    throw new Error("Approval request selection must be a JSON object.");
+  }
+  const selectedReplyId = readOptionalString(value.selectedReplyId);
+  if (!selectedReplyId) {
+    throw new Error("Approval request selection selectedReplyId is required.");
+  }
+  return { selectedReplyId };
 }
 
 function normalizeSaveArchitectureBlueprintLayoutRequest(value: unknown): SaveArchitectureBlueprintLayoutRequest {

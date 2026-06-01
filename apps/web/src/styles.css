@@ -7671,6 +7671,62 @@ html[data-theme="light"] .openclaw-panel-metric.offline strong {
   white-space: nowrap;
 }
 
+.inbox-row-badges {
+  min-width: 0;
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.inbox-type-tag {
+  --inbox-type-border: #0284c7;
+  --inbox-type-bg: color-mix(in srgb, #0284c7 14%, transparent);
+  --inbox-type-color: #7dd3fc;
+
+  min-height: 24px;
+  max-width: min(210px, 100%);
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--inbox-type-border);
+  border-radius: var(--radius-sm);
+  background: var(--inbox-type-bg);
+  color: var(--inbox-type-color);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inbox-type-tag-agent_proposal,
+.inbox-type-tag-function_node {
+  --inbox-type-border: #0d9488;
+  --inbox-type-bg: color-mix(in srgb, #0d9488 16%, transparent);
+  --inbox-type-color: #5eead4;
+}
+
+.inbox-type-tag-iteration_requirement_plan,
+.inbox-type-tag-manager_release_report {
+  --inbox-type-border: #b45309;
+  --inbox-type-bg: color-mix(in srgb, #b45309 16%, transparent);
+  --inbox-type-color: #fbbf24;
+}
+
+.inbox-type-tag-blueprint_proposal,
+.inbox-type-tag-leader_delegation,
+.inbox-type-tag-run_request,
+.inbox-type-tag-company_config {
+  --inbox-type-border: #64748b;
+  --inbox-type-bg: color-mix(in srgb, #64748b 18%, transparent);
+  --inbox-type-color: #cbd5e1;
+}
+
 .inbox-row-preview {
   min-height: 42px;
   color: var(--muted);
@@ -7739,6 +7795,31 @@ html[data-theme="light"] .inbox-row.processed:hover {
   background: #f1f5f9;
 }
 
+html[data-theme="light"] .inbox-type-tag {
+  --inbox-type-bg: color-mix(in srgb, #0284c7 10%, white);
+  --inbox-type-color: #075985;
+}
+
+html[data-theme="light"] .inbox-type-tag-agent_proposal,
+html[data-theme="light"] .inbox-type-tag-function_node {
+  --inbox-type-bg: color-mix(in srgb, #0d9488 10%, white);
+  --inbox-type-color: #115e59;
+}
+
+html[data-theme="light"] .inbox-type-tag-iteration_requirement_plan,
+html[data-theme="light"] .inbox-type-tag-manager_release_report {
+  --inbox-type-bg: color-mix(in srgb, #b45309 10%, white);
+  --inbox-type-color: #92400e;
+}
+
+html[data-theme="light"] .inbox-type-tag-blueprint_proposal,
+html[data-theme="light"] .inbox-type-tag-leader_delegation,
+html[data-theme="light"] .inbox-type-tag-run_request,
+html[data-theme="light"] .inbox-type-tag-company_config {
+  --inbox-type-bg: color-mix(in srgb, #64748b 10%, white);
+  --inbox-type-color: #334155;
+}
+
 @media (max-width: 640px) {
   .inbox-row {
     grid-template-columns: 1fr;
@@ -7788,13 +7869,76 @@ html[data-theme="light"] .inbox-row.processed:hover {
   display: flex;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
+}
+
+.inbox-action-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--paper-strong) 72%, transparent);
+}
+
+.inbox-action-group-label {
+  padding-inline: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.inbox-action-group-decision {
+  border-color: color-mix(in srgb, #f59e0b 38%, var(--line));
+}
+
+.inbox-action-group-agent {
+  border-color: color-mix(in srgb, #0d9488 34%, var(--line));
 }
 
 .inbox-conversation-actions button {
   min-height: 36px;
   padding-inline: 12px;
+}
+
+.inbox-action-tooltip {
+  position: relative;
+  display: inline-flex;
+}
+
+.inbox-action-tooltip > button {
+  width: 100%;
+}
+
+.inbox-action-tooltip > button:disabled {
+  pointer-events: none;
+}
+
+.inbox-action-tooltip[data-tooltip]:is(:hover, :focus-within)::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 40;
+  width: max-content;
+  max-width: min(280px, 72vw);
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+  box-shadow: 0 16px 32px rgb(0 0 0 / 0.28);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: normal;
+  pointer-events: none;
 }
 
 .markdown-body {
@@ -10881,6 +11025,10 @@ html[data-theme="light"] .trace-issue-column.trace-run-frame-failed {
   color: var(--semantic-green);
 }
 
+.chat-context-strip span.inbox-type-tag {
+  max-width: 240px;
+}
+
 .chat-context-strip span.draft {
   border-color: rgb(245 154 11 / 0.22);
   color: var(--accent-strong);
@@ -10926,6 +11074,10 @@ html[data-theme="light"] .trace-issue-column.trace-run-frame-failed {
   align-self: flex-start;
 }
 
+.chat-message-row-system {
+  align-self: flex-start;
+}
+
 .chat-avatar {
   width: 34px;
   height: 34px;
@@ -10951,6 +11103,11 @@ html[data-theme="light"] .trace-issue-column.trace-run-frame-failed {
   color: var(--accent-strong);
 }
 
+.chat-avatar-system {
+  background: rgb(148 163 184 / 0.10);
+  color: var(--muted-strong);
+}
+
 .chat-message {
   min-width: 0;
   max-width: min(760px, calc(100% - 44px));
@@ -10965,6 +11122,20 @@ html[data-theme="light"] .trace-issue-column.trace-run-frame-failed {
 .chat-message-user {
   background: rgb(245 154 11 / 0.12);
   border-color: rgb(245 154 11 / 0.30);
+}
+
+.chat-message-system {
+  background: rgb(148 163 184 / 0.08);
+}
+
+.runtime-conversation-thread {
+  min-height: 280px;
+  max-height: min(58vh, 620px);
+  padding: 2px 10px 4px 0;
+}
+
+.runtime-conversation-thread .chat-message-row {
+  width: min(760px, 100%);
 }
 
 .chat-message-speaker {
@@ -11725,6 +11896,11 @@ html[data-theme="light"] .chat-avatar-assistant {
     grid-template-columns: 1fr;
   }
 
+  .inbox-action-group {
+    width: 100%;
+  }
+
+  .inbox-action-tooltip,
   .inbox-conversation-actions button {
     width: 100%;
   }

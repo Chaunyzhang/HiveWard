@@ -31,6 +31,82 @@ describe("SqliteDriver schema migrations", () => {
     driver.close();
   });
 
+  it("canonicalizes legacy inbox and approval kinds in the v8 migration", () => {
+    const sqlitePath = join(mkdtempSync(join(tmpdir(), "hiveward-schema-v8-kinds-")), "hiveward.sqlite");
+    const legacy = new SqliteDriver(sqlitePath);
+    legacy.migrate(sqliteMigrations.slice(0, 7));
+    const now = "2026-05-31T00:00:00.000Z";
+    legacy.db.prepare(
+      "INSERT INTO companies (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)"
+    ).run("company-v8", "Company", now, now);
+    legacy.db.prepare(
+      `INSERT INTO inbox_items (
+        id, company_id, type, status, title, summary, created_by_role_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("inbox-report", "company-v8", "report", "pending", "Legacy report", "Hidden", "ceo", now, now);
+    legacy.db.prepare(
+      "INSERT INTO inbox_replies (id, inbox_item_id, message, created_at) VALUES (?, ?, ?, ?)"
+    ).run("reply-report", "inbox-report", "Legacy reply", now);
+    legacy.db.prepare(
+      `INSERT INTO approval_requests (
+        id, kind, status, title, body, revision, capabilities_json, requested_by_json, requested_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "approval-generic",
+      "generic_message",
+      "pending",
+      "Generic",
+      "Body",
+      1,
+      JSON.stringify({ approve: true, reject: true, reply: true, complete: false, terminate: false }),
+      JSON.stringify({ type: "node", label: "Function" }),
+      now,
+      now
+    );
+    legacy.db.prepare(
+      `INSERT INTO approval_threads (
+        id, kind, status, title, current_request_id, current_revision, capabilities_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "thread-generic",
+      "generic_message",
+      "open",
+      "Generic thread",
+      "approval-generic",
+      1,
+      JSON.stringify({ approve: true, reject: true, reply: true, complete: false, terminate: false }),
+      now,
+      now
+    );
+    legacy.db.prepare(
+      `INSERT INTO manager_mail (
+        id, source_type, source_id, kind, status, title, body, capabilities_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "mail-generic",
+      "approval_request",
+      "approval-generic",
+      "generic_message",
+      "pending",
+      "Generic mail",
+      "Body",
+      JSON.stringify({ approve: true, reject: true, reply: true, complete: false, terminate: false }),
+      now,
+      now
+    );
+    legacy.close();
+
+    const upgraded = new SqliteDriver(sqlitePath);
+    upgraded.migrate();
+    expect(upgraded.currentSchemaVersion()).toBe(sqliteSchemaVersion);
+    expect(upgraded.db.prepare("SELECT COUNT(*) AS count FROM inbox_items WHERE type = 'report'").get()).toMatchObject({ count: 0 });
+    expect(upgraded.db.prepare("SELECT COUNT(*) AS count FROM inbox_replies WHERE inbox_item_id = 'inbox-report'").get()).toMatchObject({ count: 0 });
+    expect(upgraded.db.prepare("SELECT kind FROM approval_requests WHERE id = ?").get("approval-generic")).toMatchObject({ kind: "function_node" });
+    expect(upgraded.db.prepare("SELECT kind FROM approval_threads WHERE id = ?").get("thread-generic")).toMatchObject({ kind: "function_node" });
+    expect(upgraded.db.prepare("SELECT kind FROM manager_mail WHERE id = ?").get("mail-generic")).toMatchObject({ kind: "function_node" });
+    upgraded.close();
+  });
+
   it("upgrades v1 databases with legacy migration compatibility columns", () => {
     const sqlitePath = join(mkdtempSync(join(tmpdir(), "hiveward-schema-v1-upgrade-")), "hiveward.sqlite");
     const first = new SqliteDriver(sqlitePath);

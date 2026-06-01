@@ -709,6 +709,63 @@ describe("apiRouter", () => {
     }
   });
 
+  it("selects approval request replies without routing through node-run selection", async () => {
+    const fixture = await createStoreFixture();
+    try {
+      const blueprint = (await fixture.store.listBlueprints())[0]!;
+      const run = await fixture.store.createBlueprintRun(blueprint, "tester");
+      const now = new Date().toISOString();
+      const request = await fixture.store.upsertApprovalRequest({
+        id: "approval-request-selection",
+        runId: run.id,
+        kind: "iteration_requirement_plan",
+        status: "pending",
+        title: "Round plan",
+        body: "Original plan",
+        threadId: "thread-request-selection",
+        revision: 1,
+        capabilities: resolveApprovalCapabilities("iteration_requirement_plan", "pending"),
+        requestedBy: { type: "node", label: "Manager", nodeId: "manager" },
+        requestedAt: now,
+        updatedAt: now
+      });
+      await fixture.store.appendApprovalReply({
+        id: "reply-request-selection",
+        threadId: request.threadId ?? request.id,
+        approvalRequestId: request.id,
+        actor: "agent",
+        body: "Candidate plan",
+        createdAt: now,
+        metadata: { inboxDiscussionMode: "candidate", candidate: true }
+      });
+
+      await withApiServer(fixture.store, async (baseUrl) => {
+        const response = await readOkJson<{ approvalRequest: ApprovalRequest }>(await fetch(
+          `${baseUrl}/api/approval-requests/${request.id}/select-reply`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ selectedReplyId: "reply-request-selection" })
+          }
+        ));
+
+        expect(response.approvalRequest).toMatchObject({
+          id: request.id,
+          status: "pending",
+          selectedReplyId: "reply-request-selection",
+          body: "Original plan"
+        });
+      });
+
+      expect(await fixture.store.listApprovalDecisions(request.id)).toEqual([]);
+      expect(await fixture.store.getApprovalRequest(request.id)).toMatchObject({
+        selectedReplyId: "reply-request-selection"
+      });
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
   it("applies run approvals against the immutable run blueprint snapshot", async () => {
     const fixture = await createStoreFixture();
     const receivedBlueprints: BlueprintDefinition[] = [];
@@ -897,6 +954,7 @@ describe("apiRouter", () => {
           expect(response.status).toBe(200);
           const events = readSseEvents(await response.text());
           expect(events.map((event) => event.type)).toEqual(["inbox_message_created", "done"]);
+          expect(events.find((event) => event.type === "done")).not.toHaveProperty("source");
 
           const items = await fixture.store.listInboxItems();
           const replied = items.find((candidate) => candidate.id === item.id);

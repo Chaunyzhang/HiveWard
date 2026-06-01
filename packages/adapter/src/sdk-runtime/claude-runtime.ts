@@ -17,7 +17,7 @@ import type {
 import { AgentSdkError, formatAgentSdkError, formatAgentSdkProviderError, getErrorMessage, isAbortLikeError } from "./errors";
 import { mapClaudeAvailableTools, mapClaudePermission, mapClaudeTools, normalizeTaskRuntimeAccessPolicy } from "./permissions";
 import { buildSdkChatPrompt, mapClaudeEffort, mapClaudeThinking } from "./chat-envelope";
-import { buildPromptEnvelope, formatStructuredOutput, validateOutputSchema } from "./prompt-envelope";
+import { buildPromptEnvelope, formatStructuredOutput } from "./prompt-envelope";
 import { isRecord, readString, runtimeLabelFromRecord } from "./runtime-state";
 import { createTerminalTaskResult, AgentSdkTaskRegistry } from "./task-registry";
 import type { AgentSdkChatStreamInput, AgentSdkRuntime } from "./types";
@@ -307,8 +307,7 @@ export class ClaudeAgentSdkRuntime implements AgentSdkRuntime {
         permissionMode: mapClaudePermission(permissionProfile),
         tools: mapClaudeAvailableTools(permissionProfile, input.tools),
         allowedTools: mapClaudeTools(permissionProfile, input.tools),
-        skills: input.skillIds?.length ? input.skillIds : undefined,
-        outputFormat: input.outputSchema ? { type: "json_schema", schema: input.outputSchema } : undefined
+        skills: input.skillIds?.length ? input.skillIds : undefined
       };
 
       for await (const message of this.queryFn({ prompt: buildPromptEnvelope(input), options: sdkOptions })) {
@@ -388,18 +387,6 @@ export class ClaudeAgentSdkRuntime implements AgentSdkRuntime {
         onEvent({ type: "delta", text: output, replace: true });
       }
     }
-    if (!validateOutputSchema(output, input.outputSchema)) {
-      return createTerminalTaskResult({
-        taskId,
-        runId,
-        sessionKey,
-        source: "claude",
-        status: "failed",
-        error: formatAgentSdkError("invalid_output", "SDK output does not match outputSchema."),
-        usage: mapClaudeUsage(input, finalMessage)
-      });
-    }
-
     return {
       taskId,
       runId,
