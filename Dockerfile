@@ -103,7 +103,7 @@ VOLUME /app/data
 
 # ---- Environment ----
 ENV NODE_ENV=production \
-    HIVEWARD_PORT=10101
+    PORT=10101
 
 # ---- Port ----
 EXPOSE 10101
