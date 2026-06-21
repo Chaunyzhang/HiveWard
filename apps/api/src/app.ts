@@ -20,6 +20,20 @@ export async function createHivewardApiApp(): Promise<ReturnType<typeof express>
   app.use(cors({ origin: true }));
   app.use(express.json({ limit: "2mb" }));
   app.use(createApiRouter({ store, openClawConfigStore, adapter, worker }));
+  // Serve built web frontend (production only — dist is populated by Docker build)
+  const webDistDir = resolve(projectRoot(), "apps/web/dist");
+  app.use(express.static(webDistDir));
+
+  // SPA fallback: serve index.html for client-side routing (non-API GET only)
+  app.use((req, res, next) => {
+    if (req.method !== "GET" || req.url.startsWith("/api/")) {
+      next();
+      return;
+    }
+    res.sendFile(resolve(webDistDir, "index.html"), (err) => {
+      if (err) next(err);
+    });
+  });
   app.use(apiNotFoundHandler);
   app.use(errorHandler);
   await worker.resumeActiveRuns();
