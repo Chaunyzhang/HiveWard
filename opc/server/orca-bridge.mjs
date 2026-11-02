@@ -429,7 +429,7 @@ export async function startBridge({
         return reply(404, { error: { code: 'not_found', message: req.url } })
       }
       const params = route[1].exec(url.pathname).slice(1).map(decodeURIComponent)
-      const body = await route[2](req, params, url)
+      const body = await route[2](req, params, url, { isLan })
       if (body?.raw instanceof Buffer) {
         res.writeHead(200, {
           'content-type': body.type,

@@ -9,6 +9,7 @@ import {
   dispatcherAgent,
 } from '@/components/opc/agent-logo'
 import { Markdown } from '@/features/live/chat-view'
+import { ReviewBar, ReviewChip } from './review-bar'
 import {
   statusIcon,
   statusOrder,
@@ -20,8 +21,8 @@ const DONE_PREVIEW = 6
 
 /**
  * 任务与汇报：一张列表同时承载"在做什么"和"做完汇报了什么"。
- * 「全部」按 受阻 → 进行中 → 已汇报 分组；切到某一栏只列该状态。行是隐藏的框，悬停变灰。
- * 已完成 / 失败的任务直接展示下属的汇报摘要（worker_done），点开看全文和改动文件。
+ * 「全部」按 受阻 → 待复核 → 进行中 → 已完成 分组；切到某一栏只列该状态。行是隐藏的框，悬停变灰。
+ * 已完成 / 失败的任务直接展示下属的汇报摘要（worker_done），点开看全文和改动文件；待复核的点开后能通过或打回。
  */
 export function TaskFeed({
   tasks,
@@ -43,7 +44,7 @@ export function TaskFeed({
 
   const groups =
     tab === 'all' ? taskGroups : taskGroups.filter((g) => g.key === tab)
-  if (!tasks.some((t) => groups.some((g) => g.match(t.status))))
+  if (!tasks.some((t) => groups.some((g) => g.match(t))))
     return (
       <p className='px-2 py-6 text-[13px] text-muted-foreground'>
         这一栏没有任务。
@@ -54,7 +55,7 @@ export function TaskFeed({
     <div className='space-y-5'>
       {groups.map((g) => {
         const all = tasks
-          .filter((t) => g.match(t.status))
+          .filter((t) => g.match(t))
           .sort(
             (a, b) =>
               statusOrder[a.status] - statusOrder[b.status] ||
@@ -146,6 +147,7 @@ function TaskRow({
         <span className='min-w-0 flex-1'>
           <span className='flex items-baseline gap-2'>
             <span className='truncate text-[13px] leading-5'>{t.title}</span>
+            <ReviewChip task={t} />
             {t.assignee && (t.status === 'dispatched' || t.dispatchedBy) && (
               <span className='inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground'>
                 {t.dispatchedBy && (
@@ -218,6 +220,7 @@ function TaskRow({
           {timeAgo(t.updatedAt)}
         </span>
       </button>
+      {open && <ReviewBar task={t} />}
     </li>
   )
 }

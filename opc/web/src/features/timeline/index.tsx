@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import type {
   BusinessSummary,
   Page as Paged,
   TimelineEvent,
   TimelineKind,
 } from '@shared/api'
-import { LoaderCircle } from 'lucide-react'
+import { LoaderCircle, MessageSquareReply } from 'lucide-react'
+import { toast } from 'sonner'
 import { scoped, useMachineId } from '@/lib/machine'
-import { useOverview } from '@/lib/opc-api'
+import { useOverview, useResumeRecord } from '@/lib/opc-api'
 import { timelineKindLabel } from '@/lib/opc-format'
 import { cn } from '@/lib/utils'
 import { Page } from '@/components/layout/page'
@@ -24,6 +25,7 @@ const kindDot: Record<TimelineKind, string> = {
   decision: 'bg-attention',
   instruction: 'bg-foreground/60',
   system: 'bg-muted-foreground/50',
+  record: 'bg-done',
 }
 
 const dayFmt = new Intl.DateTimeFormat('zh-CN', {
@@ -232,10 +234,10 @@ function EventRow({
     </>
   )
   const cls =
-    'flex items-start gap-3 rounded-md px-2 py-2 text-start hover:bg-accent'
+    'flex min-w-0 flex-1 items-start gap-3 rounded-md px-2 py-2 text-start hover:bg-accent'
   // 有项目就能点：带终端的直接打开那个终端
   return (
-    <li>
+    <li className='flex items-start gap-1'>
       {project ? (
         <Link
           to='/b/$businessId'
@@ -250,6 +252,51 @@ function EventRow({
       ) : (
         <div className={cls}>{body}</div>
       )}
+      {e.kind === 'record' && e.recordId && (
+        <ResumeButton recordId={e.recordId} businessId={project?.id} />
+      )}
     </li>
+  )
+}
+
+/** 工作记录「接着聊」：在原目录开新终端接上原来的会话，开好就跳过去 */
+function ResumeButton({
+  recordId,
+  businessId,
+}: {
+  recordId: string
+  businessId?: string
+}) {
+  const resume = useResumeRecord()
+  const navigate = useNavigate()
+  return (
+    <button
+      type='button'
+      disabled={resume.isPending}
+      title='在原目录开一个新终端，接上这次的会话'
+      onClick={() =>
+        resume.mutate(recordId, {
+          onSuccess: ({ terminal }) => {
+            toast.success('已重新打开')
+            if (businessId) {
+              void navigate({
+                to: '/b/$businessId',
+                params: { businessId },
+                search: { tab: 'terminal', t: terminal },
+              })
+            }
+          },
+          onError: (err) => toast.error(`重新打开失败：${err.message}`),
+        })
+      }
+      className='mt-1 flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50'
+    >
+      {resume.isPending ? (
+        <LoaderCircle className='size-3 animate-spin' />
+      ) : (
+        <MessageSquareReply className='size-3' />
+      )}
+      接着聊
+    </button>
   )
 }

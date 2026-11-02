@@ -21,7 +21,7 @@ import {
   readFileSync
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 const run = (program, args, options = {}) => {
   if (process.platform === 'win32') {
@@ -371,6 +371,27 @@ function firstLine(path) {
   } finally {
     closeSync(fd)
   }
+}
+
+export function transcriptSessionId(agent, path) {
+  if (!path) {
+    return null
+  }
+  if (agent === 'claude') {
+    return basename(path, '.jsonl')
+  }
+  if (agent === 'kimi') {
+    return basename(dirname(path))
+  }
+  if (agent === 'codex') {
+    try {
+      const payload = JSON.parse(firstLine(path))?.payload
+      return payload?.id ?? payload?.session_id ?? payload?.thread_id ?? null
+    } catch {
+      return null
+    }
+  }
+  return null
 }
 
 const LOCATE_TTL_MS = 4_000

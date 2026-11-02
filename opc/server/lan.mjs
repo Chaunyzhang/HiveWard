@@ -300,8 +300,16 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
     if (proxy) {
       const id = decodeURIComponent(proxy[1])
       const path = `${proxy[2].startsWith('api/') ? '/' : '/api/'}${proxy[2]}${url.search}`
+      const pathname = new URL(path, 'http://x').pathname
+      if (
+        req.method === 'POST' &&
+        /^\/api\/tasks\/[^/]+\/review$/.test(pathname) &&
+        req.headers['x-opc-caller'] === 'agent'
+      ) {
+        throw error(403, 'forbidden', 'Agent 不能跨电脑复核')
+      }
       if (id === machine.id) {
-        if (/^\/api\/m(\/|$)/.test(new URL(path, 'http://x').pathname)) {
+        if (/^\/api\/m(\/|$)/.test(pathname)) {
           throw error(400, 'bad_request', '不支持多跳转发')
         }
         req.url = path

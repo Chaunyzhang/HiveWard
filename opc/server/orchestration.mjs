@@ -525,6 +525,7 @@ function dispatchedWorker(d, parentId, businessId) {
     terminal: d.handle,
     activity: d.title || d.prompt.split('\n')[0].slice(0, 80),
     state: dispatchState[d.status],
+    review: d.review?.state,
     startedAt: d.at,
     finishedAt: d.status === 'completed' ? d.report?.reportedAt : undefined
   }

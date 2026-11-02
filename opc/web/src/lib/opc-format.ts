@@ -154,6 +154,7 @@ export const timelineKindLabel: Record<TimelineKind, string> = {
   decision: '决策',
   instruction: '指令',
   system: '系统',
+  record: '工作记录',
 }
 
 const timeFmt = new Intl.DateTimeFormat('zh-CN', {

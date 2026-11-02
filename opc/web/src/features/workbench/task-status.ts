@@ -1,4 +1,4 @@
-import type { TaskStatus } from '@shared/api'
+import type { Task, TaskStatus } from '@shared/api'
 import {
   CheckCircle2,
   Circle,
@@ -27,23 +27,35 @@ export const statusIcon: Record<
   failed: { icon: CircleX, className: 'text-danger', label: '失败' },
 }
 
-/** 三组：要你处理的 → 在做的 → 做完汇报的 */
+/** 交了活、等上级复核的派单 */
+export const awaitingReview = (t: Task) =>
+  t.status === 'completed' && t.review?.state === 'awaiting'
+
+/** 四组：要你处理的 → 等复核的 → 在做的 → 做完的 */
 export const taskGroups: {
-  key: 'attention' | 'active' | 'done'
+  key: 'attention' | 'review' | 'active' | 'done'
   label: string
-  match: (s: TaskStatus) => boolean
+  match: (t: Task) => boolean
 }[] = [
   {
     key: 'attention',
     label: '受阻',
-    match: (s) => s === 'blocked' || s === 'failed',
+    match: (t) => t.status === 'blocked' || t.status === 'failed',
   },
+  { key: 'review', label: '待复核', match: awaitingReview },
   {
     key: 'active',
     label: '进行中',
-    match: (s) => s === 'dispatched' || s === 'ready' || s === 'pending',
+    match: (t) =>
+      t.status === 'dispatched' ||
+      t.status === 'ready' ||
+      t.status === 'pending',
   },
-  { key: 'done', label: '已汇报', match: (s) => s === 'completed' },
+  {
+    key: 'done',
+    label: '已完成',
+    match: (t) => t.status === 'completed' && !awaitingReview(t),
+  },
 ]
 
 // 组内排序：执行中 → 可开始 → 排队
@@ -64,7 +76,7 @@ export const taskTabs: { value: TaskTab; label: string }[] = [
   ...taskGroups.map((g) => ({ value: g.key, label: g.label })),
 ]
 
-export const countTab = (tab: TaskTab, statuses: TaskStatus[]) =>
+export const countTab = (tab: TaskTab, tasks: Task[]) =>
   tab === 'all'
-    ? statuses.length
-    : statuses.filter(taskGroups.find((g) => g.key === tab)!.match).length
+    ? tasks.length
+    : tasks.filter(taskGroups.find((g) => g.key === tab)!.match).length

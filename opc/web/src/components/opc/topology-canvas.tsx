@@ -548,8 +548,16 @@ function ProjectBranch({
   )
 }
 
-function StateChip({ status }: { status: AgentStatus }) {
+function StateChip({
+  status,
+  review,
+}: {
+  status: AgentStatus
+  review?: TopologyNode['review']
+}) {
   const s = agentStatusStyle[status]
+  // 交了活、等上级复核：仍是「完成」，但标出来还差一步
+  const awaiting = status === 'done' && review === 'awaiting'
   return (
     <span
       className={cn(
@@ -561,7 +569,7 @@ function StateChip({ status }: { status: AgentStatus }) {
         <span className='size-1.5 animate-pulse rounded-full bg-current' />
       )}
       {status === 'done' && <Check className='size-3' />}
-      {s.label}
+      {awaiting ? '完成·待复核' : s.label}
     </span>
   )
 }
@@ -628,7 +636,7 @@ function Node({ node: n, openId, onOpen }: NodeProps & { node: TopologyNode }) {
       <div className='flex h-5 items-center gap-2'>
         <AgentLogo agent={n.agent} className='size-4' />
         {status ? (
-          <StateChip status={status} />
+          <StateChip status={status} review={n.review} />
         ) : (
           live && (
             <span className='flex items-center gap-1 text-[11px] text-muted-foreground'>

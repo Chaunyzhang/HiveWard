@@ -18,6 +18,9 @@ import type {
   LeaderScreenResponse,
   OverviewResponse,
   ResolveDecisionRequest,
+  ResumeRecordResponse,
+  ReviewTaskRequest,
+  ReviewTaskResponse,
   Task,
   TopologyResponse,
   Project,
@@ -277,6 +280,38 @@ export function useLaunchProjectLeader() {
         `${businessPath(p.businessId)}/projects/${encodeURIComponent(p.id)}/leader`,
         noMock('开 Leader Agent'),
         { method: 'POST', body: JSON.stringify(body) },
+        m
+      ),
+    onSuccess: () => queryClient.invalidateQueries(),
+  })
+}
+
+/** 复核一条派单：通过 → 关掉它的终端、留一条工作记录；打回 → 意见发回它的终端接着改 */
+export function useReviewTask() {
+  const queryClient = useQueryClient()
+  const m = useMachineId()
+  return useMutation({
+    mutationFn: ({ id, ...body }: ReviewTaskRequest & { id: string }) =>
+      request<ReviewTaskResponse>(
+        `/api/tasks/${encodeURIComponent(id)}/review`,
+        noMock('复核'),
+        { method: 'POST', body: JSON.stringify(body) },
+        m
+      ),
+    onSuccess: () => queryClient.invalidateQueries(),
+  })
+}
+
+/** 工作记录重新打开：在原目录开新终端接上原来的会话 */
+export function useResumeRecord() {
+  const queryClient = useQueryClient()
+  const m = useMachineId()
+  return useMutation({
+    mutationFn: (id: string) =>
+      request<ResumeRecordResponse>(
+        `/api/records/${encodeURIComponent(id)}/resume`,
+        noMock('重新打开'),
+        { method: 'POST' },
         m
       ),
     onSuccess: () => queryClient.invalidateQueries(),

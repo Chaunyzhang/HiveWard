@@ -12,6 +12,7 @@
 //   hiwd status                               全局一屏：每块业务一行（Leader Agent、任务、待决定）
 //   hiwd tasks [业务] [--open] [-n 20]        任务列表，新的在前；--open 只看没完成的
 //   hiwd task <id>                            一个任务的全部：派单、补充、汇报
+//   hiwd review <id> --accept | --rework <意见> 复核派单；Agent 只能复核自己派的
 //   hiwd decisions                            要老板决定的事（列选项、标推荐）
 //   hiwd decide <id> <答复…>                  替老板答复一个决定
 //   hiwd assign <业务>/<项目> <话…>           把活派给这块业务的 Leader Agent（老板卡同款）
@@ -35,12 +36,12 @@ const enc = encodeURIComponent
 let machinePrefix = ''
 const endpoint = (path) => BASE + (machinePrefix ? machinePrefix + path.slice(4) : path)
 
-async function api(path, body) {
+async function api(path, body, headers = {}) {
   let res
   try {
     res = await fetch(endpoint(path), {
       method: body ? 'POST' : 'GET',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...headers },
       body: body ? JSON.stringify(body) : undefined
     })
   } catch {
@@ -152,6 +153,11 @@ async function find(query) {
   const exact = list.find((t) => t.handle === query)
   if (exact) {
     return exact
+  }
+  // handle 只写前半截（比如 term_7ceed433）也认，前提是只对上一个
+  const byPrefix = list.filter((t) => t.handle.startsWith(query))
+  if (query.startsWith('term_') && byPrefix.length === 1) {
+    return byPrefix[0]
   }
   const q = query.toLowerCase()
   const hits = list.filter((t) =>
@@ -649,6 +655,34 @@ switch (cmd) {
     console.log(`要老板决定的事：${decisions.length} 件`)
     break
   }
+  case 'review': {
+    const [id] = args
+    const accept = args.includes('--accept')
+    const rework = args.indexOf('--rework')
+    const validAccept = accept && args.length === 2 && args[1] === '--accept'
+    const validRework = rework === 1 && args.length === 3 && args[2]?.trim()
+    if (!id || accept === (rework !== -1) || (!validAccept && !validRework)) {
+      fail('用法：hiwd review <任务id> --accept 或 hiwd review <任务id> --rework "意见"')
+    }
+    const caller = dispatcher()
+    const result = await api(
+      `/api/tasks/${enc(id)}/review`,
+      accept ? { verdict: 'accept' } : { verdict: 'rework', note: args[2] },
+      {
+        'x-opc-caller': 'agent',
+        'x-opc-dispatcher-id': encodeURIComponent(caller.id)
+      }
+    )
+    if (accept) {
+      console.log(`已通过 ${id}，工作记录：${result.record?.id ?? '-'}`)
+      if (result.closeError) {
+        console.log(`终端未关闭：${result.closeError}`)
+      }
+    } else {
+      console.log(`已打回 ${id}，进入第 ${result.task.review?.round ?? '?'} 轮重做`)
+    }
+    break
+  }
   case 'tasks': {
     let open = false,
       n = 20
@@ -689,7 +723,11 @@ switch (cmd) {
           const from = t.dispatchedBy?.label ?? '-'
           const to = t.assignee?.agent ?? t.terminal ?? '-'
           const biz = t.businessId || t.project || '-'
-          const head = `${t.id} [${t.status}] ${from}→${to} · ${biz} · ${t.title}`
+          const review =
+            t.review?.state === 'awaiting'
+              ? ` [待复核·${t.review.reviewer === 'owner' ? '老板' : `派单方 ${from}`}]`
+              : ''
+          const head = `${t.id} [${t.status}]${review} ${from}→${to} · ${biz} · ${t.title}`
           const report = t.report?.summary ? `\n    汇报：${firstSentence(t.report.summary)}` : ''
           return head + report
         })
@@ -806,6 +844,7 @@ switch (cmd) {
         'hiwd agents | projects | read <agent> [-n 20] | tell <agent> <话>',
         '    | new <目录> <claude|codex|kimi> [话] | stop <agent>',
         'hiwd status | tasks [业务] [--open] [-n 20] | task <id>',
+        '    | review <任务id> --accept | review <任务id> --rework "意见"',
         '    | decisions | decide <id> <答复…> | assign <业务>/<项目> <话…>',
         'hiwd browser tabs | open <url> [--profile <id>] | snapshot | … [--tab <id>]'
       ].join('\n')

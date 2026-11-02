@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { optionalRpc } from './api-runtime.mjs'
-import { badRequest } from './business.mjs'
+import { apiError, badRequest } from './business.mjs'
 import { observeTerminal } from './business-terminals.mjs'
 import { locate, readChat, readTurnState } from './transcripts.mjs'
 import { issueConfirmation } from './confirmations.mjs'
@@ -88,21 +88,38 @@ const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s)
 
 const OPEN = new Set(['pending', 'dispatched'])
 
+const reviewerOf = (d) => (d.by.kind === 'owner' || d.role === 'leader' ? 'owner' : 'dispatcher')
+const awaitingReview = (d) => ({
+  ...d.review,
+  state: 'awaiting',
+  reviewer: reviewerOf(d),
+  round: d.review?.round ?? 1
+})
+
 /**
  * 从对话记录推状态：没收到 → pending；在干 → dispatched；干完有回话 → completed（最后一段话当汇报）。
  * bounded：只看到下一句派过去的话为止（同一终端后面又派了活时，前面那条只认它自己那段回话）。
  */
 function judge(d, items, working, bounded = false, canFinish = true) {
-  const key = norm(d.prompt).slice(0, 30)
+  const key = norm(d.reworkPrompt ?? d.prompt).slice(0, 30)
+  let after = -1
+  if (d.reworkAnchor) {
+    after = items.findLastIndex(
+      (item) => item.kind === 'assistant' && clip(item.text.trim(), 1200) === d.reworkAnchor
+    )
+    if (after < 0) {
+      return { status: 'dispatched' }
+    }
+  }
   let start = -1
-  for (let i = items.length - 1; i >= 0; i--) {
+  for (let i = items.length - 1; i > after; i--) {
     if (items[i].kind === 'user' && norm(items[i].text).includes(key)) {
       start = i
       break
     }
   }
   if (start < 0) {
-    return working ? { status: 'dispatched' } : { status: 'pending' }
+    return working || d.reworkPrompt ? { status: 'dispatched' } : { status: 'pending' }
   }
   if (working) {
     return { status: 'dispatched' }
@@ -186,15 +203,60 @@ export async function answerDispatch(id, text, send) {
     report: { ...d.report, summary: `${d.report?.summary ?? ''}\n\n**老板决定**：${text}` },
     updatedAt: new Date().toISOString()
   })
-  save(rows.map(({ alive, liveAgent, ...rest }) => rest))
+  save(rows.map(({ alive: _alive, liveAgent: _liveAgent, ...rest }) => rest))
   return recordDispatch({
     handle: d.handle,
     project: d.project,
     projectId: d.projectId,
     agent: d.agent,
     prompt: text,
-    by: { kind: 'cli', id: 'opc-owner', label: '老板' }
+    by: { kind: 'owner', id: 'opc-owner', label: '老板' }
   })
+}
+
+function reviewableDispatch(rows, id) {
+  const d = rows.find((x) => x.id === id && !x.parent)
+  if (!d) {
+    throw apiError(404, 'not_found', `派单不存在：${id}`)
+  }
+  if (d.review?.state !== 'awaiting') {
+    throw apiError(409, 'review_not_awaiting', '这条派单不在待复核状态')
+  }
+  return d
+}
+
+export function markDispatchRework(id, note, by, at = new Date().toISOString()) {
+  const rows = dispatches()
+  const d = reviewableDispatch(rows, id)
+  const text = `复核没通过：${note}`
+  Object.assign(d, {
+    status: 'dispatched',
+    blockedReason: undefined,
+    report: undefined,
+    reworkPrompt: text,
+    reworkAnchor: d.report?.summary,
+    review: { ...d.review, state: 'rework', note, by, at, round: d.review.round + 1 },
+    updatedAt: at
+  })
+  save(rows.map(({ alive: _alive, liveAgent: _liveAgent, ...rest }) => rest))
+  return d
+}
+
+export function markDispatchAccepted(id, by, at, note) {
+  const rows = dispatches()
+  const d = reviewableDispatch(rows, id)
+  Object.assign(d, {
+    review: {
+      ...d.review,
+      state: 'accepted',
+      ...(note !== undefined ? { note } : {}),
+      by,
+      at
+    },
+    updatedAt: at
+  })
+  save(rows.map(({ alive: _alive, liveAgent: _liveAgent, ...rest }) => rest))
+  return d
 }
 
 /**
@@ -218,7 +280,10 @@ export async function observeDispatches(listed) {
     if (next.status === d.status && next.report?.summary === d.report?.summary) {
       return
     }
-    Object.assign(d, next, { updatedAt: new Date().toISOString() })
+    Object.assign(d, next, {
+      ...(next.status === 'completed' ? { review: awaitingReview(d) } : {}),
+      updatedAt: new Date().toISOString()
+    })
     changed = true
   }
   // 同一终端上前面还没定论的派单：自己那段有回话 → 已汇报；没有 → 后面那句挂到它下面
@@ -294,11 +359,18 @@ export async function observeDispatches(listed) {
       }
       // 最新那条是追加的话：它的进展就是原任务的进展
       const root = d.parent && list.find((x) => x.id === d.parent)
-      if (root && (root.status !== d.status || root.report?.summary !== d.report?.summary)) {
+      const rootReview = root && d.status === 'completed' ? awaitingReview(root) : root?.review
+      if (
+        root &&
+        (root.status !== d.status ||
+          root.report?.summary !== d.report?.summary ||
+          JSON.stringify(root.review) !== JSON.stringify(rootReview))
+      ) {
         Object.assign(root, {
           status: d.status,
           report: d.report,
           blockedReason: d.blockedReason,
+          review: rootReview,
           updatedAt: d.updatedAt
         })
         changed = true
@@ -307,7 +379,7 @@ export async function observeDispatches(listed) {
   )
   if (changed) {
     // 只落盘结果字段，alive / liveAgent 是瞬时观察
-    save(rows.map(({ alive, liveAgent, ...rest }) => rest))
+    save(rows.map(({ alive: _alive, liveAgent: _liveAgent, ...rest }) => rest))
   }
   return rows
 }
@@ -332,6 +404,7 @@ export function dispatchTask(d, businessId, followUps = []) {
     project: d.project ? d.project.split(/[/\\]/).pop() : undefined,
     dispatchedBy: { kind: d.by.kind, id: d.by.id, label: d.by.label },
     terminal: d.alive ? d.handle : undefined,
-    followUps: followUps.length ? followUps.map((f) => clip(norm(f.prompt), 200)) : undefined
+    followUps: followUps.length ? followUps.map((f) => clip(norm(f.prompt), 200)) : undefined,
+    review: d.review
   }
 }

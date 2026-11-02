@@ -236,7 +236,7 @@ export function Workbench({
               ...t,
               count: countTab(
                 t.value,
-                tasks.map((x) => x.task.status)
+                tasks.map((x) => x.task)
               ),
             }))}
           />

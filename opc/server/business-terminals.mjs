@@ -10,9 +10,9 @@ export const FULL_ACCESS = {
 // Leader Agent 的岗位说明：开 Claude Code 当 Leader Agent 时作为系统提示追加（不进对话，不影响任务标题）
 export const LEADER_RULES = [
   '你是 HiveWard 里这个项目的 Leader Agent。老板把活交给你，你负责拆活、派给下属 Agent、验收、汇报。',
-  '派活和管下属用本机的 hiwd 命令：hiwd new <目录> <claude|codex|kimi> <话> 开下属并派活；hiwd read <agent> 看进度和汇报；hiwd tell <agent> <话> 追问、纠偏或打回。',
+  '派活和管下属用本机的 hiwd 命令：hiwd new <目录> <claude|codex|kimi> <话> 开下属并派活；hiwd read <agent> 看进度和汇报；hiwd tell <agent> <话> 追问、纠偏。',
   '跨电脑文件用 hiwd files ls <路径> --on <电脑> 浏览，hiwd files get <路径> --on <电脑> 取回；hiwd files put <本地文件> --on <电脑> 推入对方收件箱。',
-  '下属汇报后由你验收：通过了就 hiwd close <agent> 关掉它的终端（任务记录会保留，架构图上不再显示）；要返工的用 hiwd tell 打回，别关。',
+  '下属交活后先用 hiwd read 看汇报和实际改动，再 hiwd review <任务id> --accept 或 hiwd review <任务id> --rework "意见"；没看过的活不要直接通过。通过会按规则关终端并留下工作记录，打回会让同一个 Agent 接着改。',
   '对外的、不可撤回的事（发布、付款、发消息、删数据）必须先问老板。'
 ].join(' ')
 
@@ -22,9 +22,18 @@ export const agentModel = (agent, model) =>
 const quote = (s) =>
   process.platform === 'win32' ? `'${s.replaceAll("'", "''")}'` : `'${s.replaceAll("'", "'\\''")}'`
 /** 开 Agent 的命令行：完全访问模式；当 Leader Agent 的 Claude Code 再追加岗位说明 */
-export function agentCommand(agent, { role, model, project, business } = {}) {
+export function agentCommand(agent, { role, model, project, business, resume } = {}) {
   model = agentModel(agent, model)
   let command = FULL_ACCESS[agent] ?? agent
+  if (resume && agent === 'codex') {
+    if (model) {
+      command += ` --model ${quote(model)}`
+    }
+    return `${command} resume ${quote(resume)}`
+  }
+  if (resume) {
+    command += agent === 'claude' ? ` --resume ${quote(resume)}` : ` --session ${quote(resume)}`
+  }
   if (model) {
     command += ` --model ${quote(model)}`
   }
@@ -84,7 +93,7 @@ export async function terminalScreen(handle) {
   return response
 }
 
-export async function terminalChat(handle) {
+export async function locateTerminalSession(handle) {
   const [proc, list] = await Promise.all([
     rpc('terminal.inspectProcess', { terminal: handle }),
     rpc('terminal.list')
@@ -95,13 +104,18 @@ export async function terminalChat(handle) {
   const known = /^(codex|claude|kimi)$/i.exec(term?.agentIdentity ?? '')?.[1].toLowerCase()
   const pid = fence?.process?.pid ?? (known && cwd ? await agentPidIn(known, cwd) : null)
   if (!pid || !cwd) {
-    return { agent: null, source: null, items: [] }
+    return { agent: null, path: null, cwd }
   }
   const { agent, path } = await locate({
     pid,
     cwd,
     startedAt: Date.parse(fence?.process?.startTime) || undefined
   })
+  return { agent, path, cwd }
+}
+
+export async function terminalChat(handle) {
+  const { agent, path } = await locateTerminalSession(handle)
   return { agent, source: path, items: agent && path ? readChat(agent, path) : [] }
 }
 

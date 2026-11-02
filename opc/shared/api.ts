@@ -198,6 +198,61 @@ export interface Task {
   terminal?: string
   /** 派单任务没汇报完时又补充的话（hiwd tell），按先后 */
   followUps?: string[]
+  /** 派单任务交活后的复核（status 为 completed 后才有；复核前的旧派单没有） */
+  review?: TaskReview
+}
+
+/** 派单任务的复核：谁派的谁复核，老板能复核任何一条 */
+export type TaskReview = {
+  /** awaiting 完成·待复核；accepted 已通过（终端已关、已成工作记录）；rework 打回重做中 */
+  state: 'awaiting' | 'accepted' | 'rework'
+  /** 该谁复核：dispatcher = 派活的那个 Agent / 会话；owner = 老板 */
+  reviewer: 'dispatcher' | 'owner'
+  /** 最近一次复核意见（打回时必填） */
+  note?: string
+  by?: { kind: 'owner' | 'agent'; id: Id; label: string }
+  at?: IsoTime
+  /** 第几轮复核（打回一次加一） */
+  round: number
+}
+
+/** POST /api/tasks/:id/review */
+export type ReviewTaskRequest = {
+  verdict: 'accept' | 'rework'
+  /** rework 必填，原样发回 Agent 的终端 */
+  note?: string
+}
+export type ReviewTaskResponse = {
+  task: Task
+  /** accept 时：生成的工作记录 */
+  record?: WorkRecord
+  /** accept 时终端没关成功（不影响记录生成） */
+  closeError?: string
+}
+
+/** 工作记录：通过复核的一次派单（GET /api/records/:id） */
+export type WorkRecord = {
+  id: Id
+  taskId: Id
+  businessId?: Id
+  projectId?: Id
+  title: string
+  prompt: string
+  /** Agent 最后的汇报 */
+  summary: string
+  agent?: AgentKind
+  dispatchedBy: { kind: string; id: Id; label: string }
+  reviewedBy: { kind: 'owner' | 'agent'; id: Id; label: string }
+  startedAt: IsoTime
+  finishedAt: IsoTime
+  acceptedAt: IsoTime
+  /** 打回过几次 */
+  reworks: number
+  /** 能接着聊时才有：POST /api/records/:id/resume 在 cwd 开新终端接上这个会话 → ResumeRecordResponse */
+  resume?: { agent: AgentKind; sessionId: string; cwd: string }
+}
+export type ResumeRecordResponse = {
+  terminal: string
 }
 
 export interface Worker {
@@ -265,6 +320,8 @@ export type TimelineKind =
   | 'decision'
   | 'instruction'
   | 'system'
+  /** 通过复核的工作记录 */
+  | 'record'
 
 /** GET /api/timeline?businessId=&cursor=&limit= → Page<TimelineEvent>，按时间倒序 */
 export interface TimelineEvent {
@@ -284,6 +341,8 @@ export interface TimelineEvent {
   path?: string
   /** 属于业务里的哪个项目（能认出时） */
   projectId?: Id
+  /** kind 为 record 时：工作记录 id */
+  recordId?: Id
 }
 
 // ───────────── 指令 ─────────────
@@ -343,6 +402,8 @@ export interface TopologyNode {
   startedAt?: IsoTime
   /** 派单任务交了汇报的时间；有它时卡片显示「用时 X」 */
   finishedAt?: IsoTime
+  /** 派单开出来的 Worker：复核状态（awaiting 时卡片显示「完成·待复核」）← 派单记录 review.state */
+  review?: TaskReview['state']
   /** 节点底部的一行指标，例如 ["任务 9/14", "待决定 1"] */
   stats?: string[]
   /** 需要老板注意（有待决定或负责人失联） */
@@ -897,6 +958,9 @@ export const endpoints = {
   resolveDecision: { method: 'POST', path: '/api/decisions/:id/resolve' },
   timeline: { method: 'GET', path: '/api/timeline' }, // ?businessId=&projectId=&cursor=&limit= → Page<TimelineEvent>
   tasks: { method: 'GET', path: '/api/tasks' }, // ?businessId=&projectId=&status=（不传为全部业务，含已完成任务的汇报）
+  reviewTask: { method: 'POST', path: '/api/tasks/:id/review' }, // ReviewTaskRequest → ReviewTaskResponse（Agent 只能复核自己派的；/api/m/ 转发只限老板）
+  workRecord: { method: 'GET', path: '/api/records/:id' }, // → WorkRecord
+  resumeRecord: { method: 'POST', path: '/api/records/:id/resume' }, // → ResumeRecordResponse
   topology: { method: 'GET', path: '/api/topology' }, // ?businessId=（不传为公司级：老板 → 全部负责人 → 全部在岗下属）
   events: { method: 'GET', path: '/api/events' }, // SSE
   machines: { method: 'GET', path: '/api/machines' },

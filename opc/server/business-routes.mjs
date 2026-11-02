@@ -19,6 +19,8 @@ import {
   recentTimelineEvents
 } from './timeline.mjs'
 import { readFile } from 'node:fs/promises'
+import { reviewCaller, reviewTask, resumeWorkRecord } from './task-review.mjs'
+import { getWorkRecord } from './work-records.mjs'
 
 const resolving = new Map()
 function detail(snapshot, id) {
@@ -187,6 +189,24 @@ export function businessRoutes(readJson) {
         )
       }
     ],
+    [
+      'POST',
+      /^\/api\/tasks\/([^/]+)\/review$/,
+      async (req, [id], _url, context) =>
+        reviewTask(id, await readJson(req), reviewCaller(req), { remote: context?.isLan })
+    ],
+    [
+      'GET',
+      /^\/api\/records\/([^/]+)$/,
+      async (_req, [id]) => {
+        const record = getWorkRecord(id)
+        if (!record) {
+          throw apiError(404, 'not_found', `工作记录不存在：${id}`)
+        }
+        return record
+      }
+    ],
+    ['POST', /^\/api\/records\/([^/]+)\/resume$/, async (_req, [id]) => resumeWorkRecord(id)],
     // Agent 用 hiwd browser screenshot 存的截图，只开放 /tmp/opc-shot-<数字>.png 这一种
     [
       'GET',
