@@ -11,7 +11,7 @@ for (const name of readdirSync(stage)) {
 }
 cpSync(source, stage, {
   recursive: true,
-  filter: (path) => !/(?:^|\/)(?:node_modules|dist|\.git)(?:\/|$)|\.tsbuildinfo$/.test(path)
+  filter: (path) => !/(?:^|[\\/])(?:node_modules|dist|\.git)(?:[\\/]|$)|\.tsbuildinfo$/.test(path)
 })
 cpSync(resolve('opc/shared'), resolve('.opc-build/shared'), { recursive: true })
 const pnpm = process.env.npm_execpath
