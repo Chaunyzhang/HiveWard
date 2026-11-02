@@ -1,0 +1,320 @@
+// Per-PTY buffers preserve split ANSI/URLs; cache printed dev-server origins rather than kernel bind addresses.
+import {
+  MAX_CACHE_ENTRIES,
+  MAX_PENDING_ENTRIES,
+  PENDING_PRE_BIND_LIMIT,
+  PtyBuffer,
+  cacheKey,
+  dedupeChangeEvents,
+  extractUrlCandidates,
+  observedListenersByPort,
+  worktreeIdFromCacheKey,
+  type CacheKey,
+  type ListenerScanState
+} from './advertised-url-parsing'
+import { considerAdvertisedUrl } from './advertised-url-cache-update'
+import {
+  lookupBestAdvertisedUrl,
+  shouldEvictAdvertisedUrlAfterScan
+} from './advertised-url-reconciliation'
+import { ownRetainedString } from '../../shared/own-retained-string'
+
+export const MAX_ADVERTISED_URL_SCAN_SNAPSHOTS = 512
+export type HostKind = 'custom' | 'loopback' | 'private-ip' | 'public-ip'
+
+export type AdvertisedUrl = {
+  origin: string
+  host: string
+  hostKind: HostKind
+  protocol: 'http' | 'https'
+  port: number
+  ptyId: string
+  lastSeenAt: number
+  validatedListenerPid?: number
+}
+
+export type AdvertisedUrlChangeEvent = {
+  worktreeId: string
+  port: number
+}
+
+export type AdvertisedUrlListenerObservation = {
+  port: number
+  pid?: number
+}
+
+export type AdvertisedUrlWatcherOptions = {
+  now?: () => number
+  maxCacheEntries?: number
+}
+
+export class AdvertisedUrlWatcher {
+  private readonly buffers = new Map<string, PtyBuffer>()
+  private readonly ptyToWorktree = new Map<string, string>()
+  private readonly pending = new Map<string, string>()
+  private readonly cache = new Map<CacheKey, AdvertisedUrl>()
+  private readonly scanSnapshots = new Map<string, Map<number, number | undefined>>()
+  private readonly validationBaselines = new Map<CacheKey, ListenerScanState>()
+  private readonly startupAbsentAllowances = new Set<CacheKey>()
+  private readonly listeners = new Set<(event: AdvertisedUrlChangeEvent) => void>()
+  private readonly now: () => number
+  private readonly maxCacheEntries: number
+
+  constructor(options: AdvertisedUrlWatcherOptions = {}) {
+    this.now = options.now ?? Date.now
+    this.maxCacheEntries = options.maxCacheEntries ?? MAX_CACHE_ENTRIES
+  }
+
+  onDidChange(listener: (event: AdvertisedUrlChangeEvent) => void): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  bindPty(ptyId: string, worktreeId: string): void {
+    const pending = this.pending.get(ptyId)
+    if (this.ptyToWorktree.get(ptyId) === worktreeId && pending === undefined) {
+      return
+    }
+    this.ptyToWorktree.set(ptyId, worktreeId)
+    if (pending !== undefined) {
+      this.pending.delete(ptyId)
+      this.ingest(ptyId, pending)
+    }
+  }
+
+  unbindPty(ptyId: string): void {
+    this.ptyToWorktree.delete(ptyId)
+    this.buffers.delete(ptyId)
+    this.pending.delete(ptyId)
+    const removedEvents: AdvertisedUrlChangeEvent[] = []
+    for (const [key, entry] of this.cache) {
+      if (entry.ptyId !== ptyId) {
+        continue
+      }
+      // SSH forwards lack listener PIDs; PTY teardown supplies expiry evidence.
+      this.cache.delete(key)
+      this.validationBaselines.delete(key)
+      this.startupAbsentAllowances.delete(key)
+      const worktreeId = worktreeIdFromCacheKey(key, entry.port)
+      removedEvents.push({ worktreeId, port: entry.port })
+    }
+    for (const event of removedEvents) {
+      this.emitChange(event)
+    }
+  }
+
+  forgetWorktree(worktreeId: string): void {
+    // Reused worktree IDs must not inherit removed-worktree scan baselines.
+    for (const [ptyId, boundWorktreeId] of this.ptyToWorktree) {
+      if (boundWorktreeId !== worktreeId) {
+        continue
+      }
+      this.ptyToWorktree.delete(ptyId)
+      this.buffers.delete(ptyId)
+    }
+
+    this.scanSnapshots.delete(worktreeId)
+    const removedEvents: AdvertisedUrlChangeEvent[] = []
+    for (const [key, entry] of this.cache) {
+      const entryWorktreeId = worktreeIdFromCacheKey(key, entry.port)
+      if (entryWorktreeId !== worktreeId) {
+        continue
+      }
+      this.cache.delete(key)
+      this.validationBaselines.delete(key)
+      this.startupAbsentAllowances.delete(key)
+      removedEvents.push({ worktreeId, port: entry.port })
+    }
+    for (const event of dedupeChangeEvents(removedEvents)) {
+      this.emitChange(event)
+    }
+  }
+
+  ingest(ptyId: string, chunk: string, now?: number): void {
+    if (!chunk) {
+      return
+    }
+    const worktreeId = this.ptyToWorktree.get(ptyId)
+    if (!worktreeId) {
+      // Daemon data can precede spawn-handler workspace binding; replay on bindPty.
+      const prior = this.pending.get(ptyId) ?? ''
+      const combined = prior + chunk
+      const merged =
+        combined.length > PENDING_PRE_BIND_LIMIT
+          ? ownRetainedString(combined.slice(-PENDING_PRE_BIND_LIMIT))
+          : combined
+      // Reinsert to refresh LRU order before evicting old unbound PTYs.
+      this.pending.delete(ptyId)
+      this.pending.set(ptyId, merged)
+      while (this.pending.size > MAX_PENDING_ENTRIES) {
+        const oldest = this.pending.keys().next().value
+        if (oldest === undefined) {
+          break
+        }
+        this.pending.delete(oldest)
+      }
+      return
+    }
+    let buffer = this.buffers.get(ptyId)
+    if (!buffer) {
+      buffer = new PtyBuffer()
+      this.buffers.set(ptyId, buffer)
+    }
+    const finalized = buffer.ingest(chunk)
+    if (!finalized) {
+      return
+    }
+    const timestamp = now ?? this.now()
+    for (const url of extractUrlCandidates(finalized)) {
+      const events = considerAdvertisedUrl({
+        url,
+        ptyId,
+        worktreeId,
+        timestamp,
+        cache: this.cache,
+        validationBaselines: this.validationBaselines,
+        startupAbsentAllowances: this.startupAbsentAllowances,
+        currentScanState: this.currentScanStateFor(
+          worktreeId,
+          url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80
+        ),
+        maxCacheEntries: this.maxCacheEntries
+      })
+      for (const event of events) {
+        this.emitChange(event)
+      }
+    }
+  }
+
+  private emitChange(event: AdvertisedUrlChangeEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event)
+      } catch (error) {
+        console.warn('[advertised-url-watcher] listener failed', error)
+      }
+    }
+  }
+
+  lookup(worktreeId: string, port: number, currentListenerPid?: number): AdvertisedUrl | undefined {
+    const key = cacheKey(worktreeId, port)
+    const entry = this.cache.get(key)
+    if (!entry) {
+      return undefined
+    }
+    if (currentListenerPid !== undefined) {
+      if (entry.validatedListenerPid === undefined) {
+        entry.validatedListenerPid = currentListenerPid
+      } else if (entry.validatedListenerPid !== currentListenerPid) {
+        // A changed listener PID invalidates the old banner.
+        this.cache.delete(key)
+        this.validationBaselines.delete(key)
+        this.startupAbsentAllowances.delete(key)
+        this.emitChange({ worktreeId, port })
+        return undefined
+      }
+    }
+    return entry
+  }
+
+  invalidate(worktreeId: string, port: number): void {
+    const key = cacheKey(worktreeId, port)
+    this.validationBaselines.delete(key)
+    this.startupAbsentAllowances.delete(key)
+    if (this.cache.delete(key)) {
+      this.emitChange({ worktreeId, port })
+    }
+  }
+
+  /** Bind unvalidated URLs to capture-time listener state; later absent/changed listeners cannot bless them. */
+  reconcileScan(
+    worktreeIds: readonly string[],
+    observations: readonly AdvertisedUrlListenerObservation[]
+  ): void {
+    const observedByPort = observedListenersByPort(observations)
+    const worktreeSet = new Set(worktreeIds)
+    const removedEvents: AdvertisedUrlChangeEvent[] = []
+
+    for (const [key, entry] of this.cache) {
+      const worktreeId = worktreeIdFromCacheKey(key, entry.port)
+      if (!worktreeSet.has(worktreeId)) {
+        continue
+      }
+      const current = observedByPort.has(entry.port)
+        ? ({ kind: 'present', pid: observedByPort.get(entry.port) } as const)
+        : ({ kind: 'absent' } as const)
+
+      if (
+        shouldEvictAdvertisedUrlAfterScan({
+          key,
+          entry,
+          current,
+          validationBaselines: this.validationBaselines,
+          startupAbsentAllowances: this.startupAbsentAllowances
+        })
+      ) {
+        this.cache.delete(key)
+        this.validationBaselines.delete(key)
+        this.startupAbsentAllowances.delete(key)
+        removedEvents.push({ worktreeId, port: entry.port })
+      } else if (entry.validatedListenerPid === undefined) {
+        this.validationBaselines.set(key, current)
+      }
+    }
+
+    for (const worktreeId of worktreeSet) {
+      this.scanSnapshots.delete(worktreeId)
+      this.scanSnapshots.set(worktreeId, new Map(observedByPort))
+      while (this.scanSnapshots.size > MAX_ADVERTISED_URL_SCAN_SNAPSHOTS) {
+        const oldest = this.scanSnapshots.keys().next()
+        if (oldest.done || oldest.value === worktreeId) {
+          break
+        }
+        this.scanSnapshots.delete(oldest.value)
+      }
+    }
+    for (const event of removedEvents) {
+      this.emitChange(event)
+    }
+  }
+
+  /** SSH scans span workspaces; evict mismatched listener PIDs and pin only the winning URL. */
+  lookupBest(
+    worktreeIds: readonly string[],
+    port: number,
+    currentListenerPid?: number
+  ): AdvertisedUrl | undefined {
+    return lookupBestAdvertisedUrl({
+      worktreeIds,
+      port,
+      currentListenerPid,
+      cache: this.cache,
+      validationBaselines: this.validationBaselines,
+      startupAbsentAllowances: this.startupAbsentAllowances,
+      onEvict: (worktreeId) => this.emitChange({ worktreeId, port })
+    })
+  }
+
+  clear(): void {
+    this.buffers.clear()
+    this.ptyToWorktree.clear()
+    this.pending.clear()
+    this.cache.clear()
+    this.scanSnapshots.clear()
+    this.validationBaselines.clear()
+    this.startupAbsentAllowances.clear()
+  }
+
+  private currentScanStateFor(worktreeId: string, port: number): ListenerScanState | undefined {
+    const snapshot = this.scanSnapshots.get(worktreeId)
+    if (!snapshot) {
+      return undefined
+    }
+    return snapshot.has(port) ? { kind: 'present', pid: snapshot.get(port) } : { kind: 'absent' }
+  }
+}
+
+/** Process-wide singleton fed by the runtime and read by scanner enrichment. */
+export const advertisedUrlWatcher = new AdvertisedUrlWatcher()

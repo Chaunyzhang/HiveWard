@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Installed commands are symlinks; locate resources relative to their target.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+	DIR="$(cd "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+	SOURCE="$(readlink "$SOURCE")"
+	[[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+RESOURCES_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
+APP_DIR="$(cd "$RESOURCES_DIR/.." >/dev/null 2>&1 && pwd)"
+
+# orca-ide avoids the GNOME Orca name; -f excludes executable directories.
+ELECTRON=""
+for candidate in orca-ide orca Orca; do
+	if [ -f "$APP_DIR/$candidate" ] && [ -x "$APP_DIR/$candidate" ]; then
+		ELECTRON="$APP_DIR/$candidate"
+		break
+	fi
+done
+
+if [ -z "$ELECTRON" ]; then
+	echo "Unable to locate the Orca executable next to $RESOURCES_DIR" >&2
+	exit 1
+fi
+
+# The unpacked entrypoint runs directly in Electron's Node mode.
+CLI="$RESOURCES_DIR/app.asar.unpacked/out/cli/index.js"
+
+export ORCA_NODE_OPTIONS="${NODE_OPTIONS-}"
+export ORCA_NODE_REPL_EXTERNAL_MODULE="${NODE_REPL_EXTERNAL_MODULE-}"
+unset NODE_OPTIONS
+unset NODE_REPL_EXTERNAL_MODULE
+
+ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$CLI" "$@"

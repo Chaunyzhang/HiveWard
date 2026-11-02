@@ -1,0 +1,396 @@
+{
+  "menu": {
+    "checkForUpdates": "检查更新...",
+    "settings": "设置",
+    "exploreOrca": "探索 Orca",
+    "gettingStarted": "Orca 入门",
+    "reportCrash": "发送崩溃报告...",
+    "file": "文件",
+    "exit": "退出",
+    "quitApp": "退出 {{appName}}",
+    "edit": "编辑",
+    "appearance": "外观",
+    "toggleLeftSidebar": "显示/隐藏左侧边栏",
+    "toggleRightSidebar": "显示/隐藏右侧边栏",
+    "showStatusBar": "显示状态栏",
+    "showTasksButton": "显示任务按钮",
+    "showAutomationsButton": "显示自动化按钮",
+    "showMobileButton": "显示 Orca 手机端按钮",
+    "showTitlebarAppName": "显示标题栏应用名称",
+    "view": "查看",
+    "reload": "重新加载",
+    "forceReload": "强制重新加载",
+    "toggleDevTools": "切换开发者工具",
+    "resetSize": "重置缩放",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "openWorktreePalette": "打开工作树面板",
+    "window": "窗口",
+    "help": "帮助",
+    "paste": "粘贴",
+    "copy": "复制",
+    "selectAll": "全选",
+    "quitAndStopAllSessions": "完全退出...",
+    "quitAndStopAllSessionsTooltip": "同时停止所有终端会话，包括正在运行的智能体。普通退出会保留这些会话，以便 Orca 下次启动时重新连接。"
+  },
+  "tray": {
+    "openOrca": "打开 Orca",
+    "quit": "退出",
+    "minimizeNotice": {
+      "body": "Orca 仍在系统托盘中运行"
+    },
+    "activityWaiting": "Orca - 活动等待中",
+    "activityWaitingSuffix": "等待活动"
+  },
+  "auto": {
+    "components": {
+      "settings": {
+        "ProjectWindowsRuntimeSetting": {
+          "wslUnavailable": "WSL 不可用。请将此项目切换到 Windows 或修复 WSL。",
+          "distroMissing": "WSL 中未安装 {{value0}}。请选择已安装的发行版，或将此项目切换到 Windows。",
+          "distroRequired": "选择一个 WSL 发行版，或将此项目切换到 Windows。"
+        },
+        "PluginDevelopmentSection": {
+          "pathRequired": "请输入插件文件夹路径。",
+          "title": "开发",
+          "remove": "移除",
+          "pathLabel": "开发插件文件夹路径",
+          "placeholder": "插件文件夹路径",
+          "add": "添加路径"
+        },
+        "PluginMarketplaceBrowser": {
+          "manageSources": "管理源",
+          "refreshing": "正在刷新…",
+          "refresh": "刷新",
+          "noInstalledTitle": "没有已安装的插件",
+          "noInstalled": "您安装的插件将显示在此处。",
+          "loading": "正在加载目录插件…",
+          "tryAgain": "重试",
+          "noSourcesTitle": "未配置目录",
+          "addSource": "添加目录",
+          "noResultsTitle": "没有匹配的插件",
+          "noResults": "没有目录插件匹配此搜索。",
+          "clearSearch": "清除搜索",
+          "emptyTitle": "暂无内容",
+          "empty": "已配置的目录中没有任何插件。"
+        },
+        "PluginsSettingsSection": {
+          "systemLabel": "插件系统",
+          "loading": "正在加载插件…",
+          "noInstalledResultsTitle": "没有匹配的插件",
+          "noInstalledResults": "没有已安装的插件匹配此搜索。",
+          "emptyTitle": "尚未安装插件",
+          "empty": "浏览「全部」选项卡以从目录安装插件。",
+          "install": "安装插件",
+          "title": "插件"
+        },
+        "plugins": {
+          "search": {
+            "title": "插件",
+            "description": "安装和管理 Orca 插件（Alpha 版）。",
+            "install": "安装插件",
+            "permissions": "插件权限",
+            "logs": "插件日志",
+            "development": "开发插件"
+          }
+        }
+      }
+    },
+    "main": {
+      "window": {
+        "editableContextMenu": {
+          "table": "表格",
+          "insertRowAbove": "在上方插入行",
+          "insertRowBelow": "在下方插入行",
+          "deleteRow": "删除行",
+          "insertColumnLeft": "在左侧插入列",
+          "insertColumnRight": "在右侧插入列",
+          "deleteColumn": "删除列",
+          "deleteTable": "删除表格",
+          "addLink": "添加链接",
+          "format": "格式",
+          "bold": "粗体",
+          "italic": "斜体",
+          "strike": "删除线",
+          "inlineCode": "内联代码",
+          "codeBlock": "代码块",
+          "quote": "引用",
+          "paragraph": "段落",
+          "bodyText": "正文",
+          "heading1": "标题 1",
+          "heading2": "标题 2",
+          "heading3": "标题 3",
+          "heading4": "标题 4",
+          "heading5": "标题 5",
+          "bulletList": "项目符号列表",
+          "numberedList": "编号列表",
+          "checklist": "清单",
+          "insert": "插入",
+          "link": "链接",
+          "image": "图像",
+          "divider": "分隔线",
+          "paste": "粘贴",
+          "pasteAsPlainText": "粘贴为纯文本",
+          "addToDictionary": "添加到词典"
+        }
+      },
+      "ipc": {
+        "diagnostics": {
+          "uploadConfirm": {
+            "send": "发送",
+            "cancel": "取消",
+            "title": "要将此文件发送给支持团队吗？",
+            "message": "这将上传你已查看过的、经过脱敏处理的应用诊断文件。",
+            "detail": "诊断 ID：{{id}}\n诊断记录：{{records}}\n大小：{{sizeKb}} KB"
+          }
+        }
+      }
+    }
+  },
+  "runtimeRpc": {
+    "startupFailure": {
+      "unknownCause": "没有其他错误详情可用。",
+      "continueButton": "不使用 CLI 继续",
+      "title": "Orca CLI 不可用",
+      "message": "Orca 无法启动其本地命令传输通道。",
+      "detail": "Orca 仍可正常工作，但本会话中 orca status、orca terminal 和编排等命令不可用。\n\n{{guidance}}\n\n原因：{{cause}}",
+      "guidance": {
+        "permissionDenied": "Orca 无法写入其运行时文件。请检查 Orca 数据文件夹的权限，然后重启。",
+        "storageUnavailable": "磁盘可能已满或为只读。请释放空间，然后重启 Orca。",
+        "invalidPath": "Orca 的数据文件夹可能缺失、被移动或路径过长。请恢复它或使用更短的路径，然后重启 Orca。",
+        "addressInUse": "另一个进程可能占用了端口。请重启 Orca 以重试。",
+        "unknown": "请重启 Orca 以重试。"
+      }
+    }
+  },
+  "notifications": {
+    "agentStatus": {
+      "needsInput": "需要输入",
+      "working": "处理中",
+      "stopped": "已停止",
+      "failed": "已失败",
+      "finished": "已完成"
+    },
+    "bell": {
+      "attentionRequested": "需要关注",
+      "title": "{{worktree}} 中的终端响铃"
+    },
+    "test": {
+      "title": "Orca 通知已开启",
+      "body": "这是一条来自 Orca 的测试通知。"
+    },
+    "workspaceFallback": "工作区",
+    "agentTool": {
+      "usingWithInput": "正在使用 {{tool}}：{{input}}",
+      "using": "正在使用 {{tool}}",
+      "input": "工具输入：{{input}}"
+    },
+    "taskComplete": {
+      "title": "{{worktree}} 中的任务已完成",
+      "body": "一个编程智能体已完成工作。"
+    },
+    "permissionProbe": {
+      "body": "当智能体完成工作或终端需要关注时，Orca 会提醒你。"
+    },
+    "startupRegistration": {
+      "title": "Orca 已准备好向你发送通知",
+      "body": "允许通知后，当智能体完成工作或终端需要关注时，Orca 会提醒你。"
+    }
+  },
+  "rendererRecovery": {
+    "reload": "重新加载",
+    "copyCommands": "复制命令",
+    "quit": "辞职",
+    "stalledDetail": "Orca 在崩溃后重新加载了窗口，但它从未完成加载。",
+    "crashLoopDetail": "Orca 尝试连续恢复 {{recoveryCount}} 次但没有成功。",
+    "driverFallback": "如果这没有帮助，原因通常是图形驱动程序。",
+    "genericDetail": "这通常是图形驱动程序或安装问题。重新加载以重试，或退出并重新启动 Orca。",
+    "title": "Orca 一直无法加载",
+    "stalledMessage": "崩溃后重新加载时应用程序窗口停止响应。",
+    "crashLoopMessage": "应用程序窗口反复崩溃并自动停止重新加载。",
+    "tryAgain": "重试",
+    "launchFailedMessage": "Orca 无法启动绘制其窗口的进程。",
+    "launchFailedDetail": "Orca 重试了 {{recoveryCount}} 次，但未成功。",
+    "processLimitDetail": "由于你的用户帐户已达到进程数上限，系统拒绝创建新进程。这通常由失控的终端、开发服务器或智能体导致。请关闭其中一些，然后点击“重试”。",
+    "launchFailedGenericDetail": "系统拒绝启动它。请释放内存或关闭其他应用，然后点击“重试”。如果问题持续出现，请重新安装 Orca。",
+    "lowCommitMessage": "Windows 内存不足。",
+    "lowCommitDetail": "Windows 只剩下 {{availableMB}} MB 内存供应用程序使用，因此窗口在重新加载后再次耗尽内存。",
+    "lowCommitAdvice": "通过关闭未使用的应用程序或 Orca 工作区来释放内存，或增加 Windows 页面文件大小，然后单击“重新加载”。"
+  },
+  "worktree": {
+    "setupTerminalTitle": "初始设置"
+  },
+  "updates": {
+    "wslMoveInstallHeld": "项目正在移到其 WSL 主机。移动完成后再安装更新。",
+    "wslMoveUndoInstallHeld": "项目正在从其 WSL 主机移回。完成后再安装更新。"
+  },
+  "quitAndStopAllSessions": {
+    "title": "完全退出",
+    "message": "停止所有终端会话并退出 Orca？",
+    "detail": "Orca 会关闭所有终端标签页并停止其会话（包括在终端中运行的智能体），然后退出。普通退出会保留这些会话，以便 Orca 下次启动时重新连接。远程主机上的终端会话可能会在远程继续运行。未保存的终端工作将丢失，关闭的标签页在下次启动时不会恢复。此操作不可撤销。",
+    "confirm": "停止会话并退出",
+    "cancel": "取消",
+    "ok": "确定",
+    "unavailableMessage": "Orca 目前无法停止所有终端会话。",
+    "unavailableDetail": "未停止任何内容。请在终端打开后重试。如果某个终端显示它是在较新版本的 Orca 中打开的，请先重新打开它。如果终端已经打开，请退出并重新打开 Orca，然后重试。"
+  },
+  "gpuFallback": {
+    "recoveredLaunch": {
+      "keepSafeButton": "保持安全图形模式",
+      "tryHardwareButton": "尝试硬件加速",
+      "title": "安全图形模式已启用",
+      "message": "Orca 已在安全图形模式下恢复。",
+      "detail": "由于图形进程反复崩溃，已启用安全图形模式。保留它以获得稳定性，或重新启动并再次尝试硬件加速。"
+    },
+    "restartPrompt": {
+      "restartButton": "以安全图形模式重新启动",
+      "keepRunningButton": "继续运行",
+      "title": "以安全图形模式重新启动 Orca？",
+      "message": "Orca 的图形进程反复崩溃。",
+      "detail": "安全图形模式会为此 Orca 版本停用硬件加速和 WebGL。终端和 3D 内容的渲染可能会变慢。选择“继续运行”不会更改图形设置。"
+    }
+  },
+  "profileState": {
+    "startupRecovery": {
+      "quitButton": "退出",
+      "copyCommandButton": "复制恢复命令",
+      "copyCommandDetail": "复制恢复命令，然后在 Orca 关闭后运行它。",
+      "quitDetail": "退出 Orca，确定以哪份配置文件状态为准后再重试。",
+      "title": "无法打开 Orca 配置文件状态",
+      "message": "Orca 无法安全地打开此配置文件。"
+    },
+    "copyChoice": {
+      "lastSaved": "上次保存于 {{time}}。",
+      "useSqliteButton": "使用 SQLite（推荐）",
+      "useJsonButton": "使用 JSON",
+      "quitButton": "退出",
+      "title": "选择配置文件状态",
+      "message": "此配置文件有两个不一致的已保存副本。",
+      "cause": "这通常发生在用旧版本的 Orca 打开此配置文件之后。",
+      "sqliteOption": "SQLite：此版本的 Orca 保存的内容。在旧版本中所做的更改将被丢弃。",
+      "jsonOption": "JSON：包含在旧版本中所做的更改。此版本此后保存的更改将被丢弃。",
+      "archiveNote": "Orca 会在切换前归档两个副本，然后重新启动。"
+    },
+    "repairChoice": {
+      "sectionStartsEmpty": "{{section}}：没有可读取的备份，因此将从空白开始。",
+      "sectionRestored": "{{section}}：将从 {{time}} 保存的备份中恢复。",
+      "projectsForgotten": "Orca 将忘记你的项目及其工作区详情。磁盘上的文件不受影响。",
+      "newerProjectsRemoved": "该备份之后添加的项目将连同其工作区详情一起从 Orca 中移除。磁盘上的文件不受影响。",
+      "repairButton": "修复并重新启动",
+      "quitButton": "退出",
+      "title": "修复配置文件",
+      "message": "此配置文件已保存状态的一部分已损坏。",
+      "restUnchanged": "其他所有内容保持不变。",
+      "damagedCopyKept": "Orca 会在其数据文件夹中保留损坏文件的副本，然后重新启动。"
+    },
+    "recoveryNotApplied": {
+      "quitButton": "退出",
+      "title": "Orca 无法完成此配置文件的恢复",
+      "message": "Orca 无法应用所选的配置文件状态。",
+      "reopenDetail": "重新打开 Orca 以再次选择。"
+    },
+    "writeFailure": {
+      "title": "已停止保存",
+      "message": "Orca 已停止保存此配置文件。",
+      "indeterminateDetail": "Orca 无法确认你最近的更改是否已保存。在重新启动 Orca 之前，新的更改将不会被保存。",
+      "safeDetail": "此前保存的更改是安全的。在重新启动 Orca 之前，新的更改将不会被保存。",
+      "okButton": "确定"
+    },
+    "section": {
+      "projects": "项目",
+      "projectGroups": "项目组",
+      "folderWorkspaces": "文件夹工作区",
+      "reviewComments": "评审评论",
+      "workspaceDetails": "工作区详情",
+      "settings": "设置",
+      "windowLayout": "窗口布局",
+      "openTabs": "打开的标签页和终端",
+      "sshHosts": "SSH 主机",
+      "automations": "自动化",
+      "automationHistory": "自动化历史",
+      "onboarding": "入门引导进度",
+      "other": "其他已保存的应用状态"
+    },
+    "startupFailure": {
+      "noneFound": "（未找到）",
+      "sqlitePath": "SQLite 路径：{{path}}",
+      "sectionsDamaged": "此配置文件已保存状态的一部分已损坏：{{sections}}。其余内容均完好无损。",
+      "repairCommand": "关闭 Orca，然后运行 `{{command}}`，仅从备份中替换损坏的部分，并保留其余所有内容。Orca 会保留损坏文件的副本。",
+      "restoreWholeBackup": "如需改为恢复整份备份，请先运行 `{{exportsCommand}}`，再运行 `{{rollbackCommand}}`。",
+      "sqliteUnreadable": "Orca 无法安全地打开当前配置文件，因为其 SQLite 状态无法读取。",
+      "legacyJsonPath": "旧版 JSON 路径：{{path}}",
+      "retainedBackups": "保留的 SQLite 备份：",
+      "retainedExports": "保留的 JSON 导出：",
+      "chooseRecoveryArtifact": "关闭 Orca，然后运行 `{{command}}`，选择一份确认完好的恢复数据。",
+      "restoreCommands": "使用 `{{backupCommand}}` 恢复 SQLite，或使用 `{{revisionCommand}}` 恢复 JSON 导出。",
+      "authorityAmbiguous": "Orca 无法安全地确定以哪份配置文件状态为准：{{detail}}",
+      "authorityBothPreserved": "旧版本可能修改过 JSON 文件。两个副本均已保留，不会自动选择任何一个。",
+      "authorityCopyFirst": "关闭 Orca 并复制配置文件目录，然后再选择要保留的状态。",
+      "authorityKeepJson": "如需保留当前 JSON（包括旧版本中的修改），请运行 `{{command}}`。此操作会归档两个副本，不会合并其内容。",
+      "authorityInspect": "运行 `{{command}}` 以查看保留的恢复点。",
+      "authorityRestore": "请先选择要恢复的状态，再使用 `{{backupCommand}}` 或 `{{revisionCommand}}`。",
+      "newerSchema": "此配置文件由较新版本的 Orca 保存。请使用该版本或更新版本打开。你的配置文件未被更改。",
+      "revisionConflict": "Orca 启动期间，当前配置文件发生了更改。请关闭使用此配置文件的其他 Orca 进程，然后重新启动 Orca。",
+      "writerUnavailable": "Orca 无法启动配置文件保存功能。请重新启动 Orca；如果问题仍然存在，请修复或重新安装此版本。",
+      "publicationUnavailable": "Orca 无法将配置文件状态安全地保存到 {{directory}}。",
+      "publicationNeedsHardLinks": "此位置必须支持硬链接，且 Orca 需要创建硬链接的权限。",
+      "publicationMoveData": "在检查文件夹权限，或将整个 Orca 数据目录移动到支持硬链接的可写本地文件系统（如 APFS、NTFS 或 ext4）之前，请关闭 Orca 和 orcad。",
+      "publicationKeepFiles": "请保留原始目录和所有恢复文件。"
+    }
+  },
+  "startupFailure": {
+    "title": "Orca 无法启动",
+    "finishFailed": "Orca 无法完成启动：{{detail}}"
+  },
+  "localBuild": {
+    "chooseTitle": "选择本地 Orca 构建",
+    "chooseButton": "选择构建",
+    "manifestFilter": "Orca 更新清单",
+    "sameVersionError": "此构建与正在运行的应用版本相同。请再次运行 pn build:mac 以创建具有唯一版本的构建。",
+    "noLiveTerminals": "没有需要重新连接的活动终端。",
+    "liveTerminals_one": "{{count}} 个活动终端将在重新启动后重新连接。",
+    "liveTerminals_other": "{{count}} 个活动终端将在重新启动后重新连接。",
+    "confirmTitle": "使用本地 Orca 构建？",
+    "schemaCompatibility": "工作区卡片和设置与状态架构 {{schemaVersion}} 兼容。",
+    "signatureRequirement": "该构建必须具有与 Orca 相同的有效代码签名，否则安装将停止。",
+    "useButton": "使用本地构建",
+    "cancelButton": "取消"
+  },
+  "native": {
+    "about": {
+      "gpu": {
+        "unknownStatus": "状态不可用",
+        "enabled": "启用",
+        "disabled": "已禁用",
+        "unavailable": "不可用",
+        "safeMode": "已禁用（安全图形模式）",
+        "software": "软件渲染",
+        "unknown": "未知（{{status}}）",
+        "summary": "GPU 加速：{{status}}"
+      }
+    },
+    "dialog": {
+      "importCookies": "导入 Cookie",
+      "spaceTitle": "Orca 空间测试版",
+      "dashboardTitle": "Orca 智能体仪表盘",
+      "cookieFiles": "Cookie 文件",
+      "allFiles": "所有文件",
+      "importPetBundle": "选择 .codex-pet 包",
+      "pickPet": "选择宠物",
+      "petImage": "宠物图片",
+      "importWarpTheme": "导入 Warp 主题",
+      "warpThemeYaml": "Warp 主题 YAML",
+      "importWarpFolder": "导入 Warp 主题文件夹",
+      "images": "图片",
+      "repoIconImages": "仓库图标图片",
+      "audio": "音频"
+    }
+  },
+  "installDirAcl": {
+    "cause": "Orca 安装文件夹的 Windows 权限阻止了 Orca 自身的沙箱进程读取随应用附带的文件。",
+    "repaired": "Orca 已修复权限。请重新加载以应用。",
+    "repairing": "Orca 正在修复权限。",
+    "repairFailed": "Orca 无法修复权限，这通常意味着该文件夹需要管理员权限。",
+    "runCommands": "在以管理员身份运行的命令提示符中执行以下命令，然后重新启动 Orca："
+  }
+}

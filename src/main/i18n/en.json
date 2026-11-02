@@ -1,0 +1,408 @@
+{
+  "menu": {
+    "checkForUpdates": "Check for Updates...",
+    "settings": "Settings",
+    "exploreOrca": "Explore Orca",
+    "gettingStarted": "Getting Started with Orca",
+    "reportCrash": "Report Crash...",
+    "file": "File",
+    "exit": "Exit",
+    "quitApp": "Quit {{appName}}",
+    "edit": "Edit",
+    "appearance": "Appearance",
+    "toggleLeftSidebar": "Toggle Left Sidebar",
+    "toggleRightSidebar": "Toggle Right Sidebar",
+    "showStatusBar": "Show Status Bar",
+    "showTasksButton": "Show Tasks Button",
+    "showAutomationsButton": "Show Automations Button",
+    "showMobileButton": "Show Orca Mobile Button",
+    "showTitlebarAppName": "Show Titlebar App Name",
+    "view": "View",
+    "reload": "Reload",
+    "forceReload": "Force Reload",
+    "toggleDevTools": "Toggle Developer Tools",
+    "resetSize": "Reset Size",
+    "zoomIn": "Zoom In",
+    "zoomOut": "Zoom Out",
+    "openWorktreePalette": "Open Worktree Palette",
+    "window": "Window",
+    "help": "Help",
+    "paste": "Paste",
+    "copy": "Copy",
+    "selectAll": "Select All",
+    "quitAndStopAllSessions": "Quit Completely...",
+    "quitAndStopAllSessionsTooltip": "Also stops every terminal session, including running agents. Plain Quit keeps them running so Orca reattaches on next launch."
+  },
+  "tray": {
+    "openOrca": "Open Orca",
+    "quit": "Quit",
+    "minimizeNotice": {
+      "body": "Orca is still running in the system tray"
+    },
+    "activityWaiting": "Orca - activity waiting",
+    "activityWaitingSuffix": "activity waiting"
+  },
+  "auto": {
+    "components": {
+      "settings": {
+        "ProjectWindowsRuntimeSetting": {
+          "wslUnavailable": "WSL is not available. Switch this project to Windows or repair WSL.",
+          "distroMissing": "{{value0}} is not installed in WSL. Choose an installed distro or switch this project to Windows.",
+          "distroRequired": "Choose a WSL distro or switch this project to Windows."
+        },
+        "PluginDevelopmentSection": {
+          "pathRequired": "Enter a plugin folder path.",
+          "title": "Development",
+          "remove": "Remove",
+          "pathLabel": "Development plugin folder path",
+          "placeholder": "Path to a plugin folder",
+          "add": "Add path"
+        },
+        "PluginMarketplaceBrowser": {
+          "manageSources": "Manage sources",
+          "refreshing": "Refreshing…",
+          "refresh": "Refresh",
+          "noInstalledTitle": "No plugins installed",
+          "noInstalled": "Plugins you install appear here.",
+          "loading": "Loading catalog plugins…",
+          "tryAgain": "Try again",
+          "noSourcesTitle": "No catalogs configured",
+          "addSource": "Add catalog",
+          "noResultsTitle": "No matching plugins",
+          "noResults": "No catalog plugins match this search.",
+          "clearSearch": "Clear search",
+          "emptyTitle": "Nothing listed yet",
+          "empty": "The configured catalogs do not list any plugins."
+        },
+        "PluginsSettingsSection": {
+          "systemLabel": "Plugin system",
+          "loading": "Loading plugins…",
+          "noInstalledResultsTitle": "No matching plugins",
+          "noInstalledResults": "No installed plugins match this search.",
+          "emptyTitle": "No plugins installed yet",
+          "empty": "Browse the All tab to install plugins from a catalog.",
+          "install": "Install plugin",
+          "title": "Plugins"
+        },
+        "plugins": {
+          "search": {
+            "title": "Plugins",
+            "description": "Install and manage Orca plugins (Alpha).",
+            "install": "install plugin",
+            "permissions": "plugin permissions",
+            "logs": "plugin logs",
+            "development": "development plugins"
+          }
+        }
+      }
+    },
+    "main": {
+      "window": {
+        "editableContextMenu": {
+          "table": "Table",
+          "insertRowAbove": "Insert row above",
+          "insertRowBelow": "Insert row below",
+          "deleteRow": "Delete row",
+          "insertColumnLeft": "Insert column left",
+          "insertColumnRight": "Insert column right",
+          "deleteColumn": "Delete column",
+          "deleteTable": "Delete table",
+          "addLink": "Add link",
+          "format": "Format",
+          "bold": "Bold",
+          "italic": "Italic",
+          "strike": "Strike",
+          "inlineCode": "Inline code",
+          "codeBlock": "Code block",
+          "quote": "Quote",
+          "paragraph": "Paragraph",
+          "bodyText": "Body text",
+          "heading1": "Heading 1",
+          "heading2": "Heading 2",
+          "heading3": "Heading 3",
+          "heading4": "Heading 4",
+          "heading5": "Heading 5",
+          "bulletList": "Bullet list",
+          "numberedList": "Numbered list",
+          "checklist": "Checklist",
+          "insert": "Insert",
+          "link": "Link",
+          "image": "Image",
+          "divider": "Divider",
+          "paste": "Paste",
+          "pasteAsPlainText": "Paste as plain text",
+          "addToDictionary": "Add to dictionary"
+        }
+      },
+      "ipc": {
+        "diagnostics": {
+          "uploadConfirm": {
+            "send": "Send",
+            "cancel": "Cancel",
+            "title": "Send this file to support?",
+            "message": "This uploads the redacted app diagnostics file you reviewed.",
+            "detail": "Diagnostic ID: {{id}}\nDiagnostic records: {{records}}\nSize: {{sizeKb}} KB"
+          }
+        }
+      }
+    }
+  },
+  "runtimeRpc": {
+    "startupFailure": {
+      "unknownCause": "No additional error details were available.",
+      "continueButton": "Continue without CLI",
+      "title": "Orca CLI unavailable",
+      "message": "Orca couldn't start its local command transport.",
+      "detail": "Orca will continue to work, but commands such as orca status, orca terminal, and orchestration are unavailable for this session.\n\n{{guidance}}\n\nCause: {{cause}}",
+      "guidance": {
+        "permissionDenied": "Orca couldn't write its runtime file. Check permissions on Orca's data folder, then restart.",
+        "storageUnavailable": "Your disk may be full or read-only. Free up space, then restart Orca.",
+        "invalidPath": "Orca's data folder may be missing, moved, or at a path that is too long. Restore it or use a shorter path, then restart Orca.",
+        "addressInUse": "Another process may be holding the port. Restart Orca to try again.",
+        "unknown": "Restart Orca to try again."
+      }
+    }
+  },
+  "rendererRecovery": {
+    "reload": "Reload",
+    "copyCommands": "Copy Commands",
+    "quit": "Quit",
+    "stalledDetail": "Orca reloaded the window after a crash, but it never finished loading.",
+    "crashLoopDetail": "Orca tried to recover {{recoveryCount}} times in a row without success.",
+    "driverFallback": "If that does not help, the cause is usually a graphics driver.",
+    "genericDetail": "This is often a graphics-driver or installation problem. Reload to try again, or quit and relaunch Orca.",
+    "title": "Orca keeps failing to load",
+    "stalledMessage": "The app window stopped responding while reloading after a crash.",
+    "crashLoopMessage": "The app window crashed repeatedly and stopped reloading automatically.",
+    "lowCommitMessage": "Windows is out of memory.",
+    "lowCommitDetail": "Windows has only {{availableMB}} MB of memory left for apps, so the window ran out of memory again after reloading.",
+    "lowCommitAdvice": "Free memory by closing unused apps or Orca workspaces, or increase the Windows page file size, then click Reload.",
+    "tryAgain": "Try Again",
+    "launchFailedMessage": "Orca couldn't start the process that draws its window.",
+    "launchFailedDetail": "Orca retried {{recoveryCount}} times without success.",
+    "processLimitDetail": "The system refused to create a new process because your user account reached its process limit. This is often caused by runaway terminals, dev servers, or agents. Close some of them, then click Try Again.",
+    "launchFailedGenericDetail": "The system refused to start it. Free up memory or close other apps, then click Try Again. If this keeps happening, reinstall Orca."
+  },
+  "notifications": {
+    "agentStatus": {
+      "needsInput": "needs input",
+      "working": "working",
+      "stopped": "stopped",
+      "failed": "failed",
+      "finished": "finished"
+    },
+    "bell": {
+      "attentionRequested": "Attention requested",
+      "title": "Bell in {{worktree}}"
+    },
+    "test": {
+      "title": "Orca notifications are on",
+      "body": "This is a test notification from Orca."
+    },
+    "workspaceFallback": "workspace",
+    "agentTool": {
+      "usingWithInput": "Using {{tool}}: {{input}}",
+      "using": "Using {{tool}}",
+      "input": "Tool input: {{input}}"
+    },
+    "taskComplete": {
+      "title": "Task complete in {{worktree}}",
+      "body": "A coding agent finished working."
+    },
+    "permissionProbe": {
+      "body": "Orca will alert you when agents finish or terminals need attention."
+    },
+    "startupRegistration": {
+      "title": "Orca is ready to notify you",
+      "body": "Allow notifications so Orca can alert you when agents finish or terminals need attention."
+    }
+  },
+  "worktree": {
+    "setupTerminalTitle": "Setup"
+  },
+  "updates": {
+    "wslMoveInstallHeld": "A project is moving to its WSL host. Install the update once the move finishes.",
+    "wslMoveUndoInstallHeld": "A project is coming back from its WSL host. Install the update once that finishes."
+  },
+  "quitAndStopAllSessions": {
+    "confirm": "Stop Sessions and Quit",
+    "cancel": "Cancel",
+    "title": "Quit Completely",
+    "message": "Stop all terminal sessions and quit Orca?",
+    "detail": "Orca closes every terminal tab and stops its session, including agents running in terminals, then quits. Plain Quit keeps them running so Orca reattaches on next launch. Terminal sessions on remote hosts may keep running there. Unsaved terminal work is lost, and the closed tabs don't come back on next launch. This can't be undone.",
+    "ok": "OK",
+    "unavailableMessage": "Orca can't stop every terminal session right now.",
+    "unavailableDetail": "Nothing was stopped. Try again once your terminals have opened. If a terminal says it was opened in a newer version of Orca, reopen it first. If your terminals are already open, quit and reopen Orca, then try again."
+  },
+  "gpuFallback": {
+    "recoveredLaunch": {
+      "keepSafeButton": "Keep Safe Graphics Mode",
+      "tryHardwareButton": "Try Hardware Acceleration",
+      "title": "Safe Graphics Mode is Active",
+      "message": "Orca recovered in Safe Graphics Mode.",
+      "detail": "Safe Graphics Mode was enabled after repeated graphics crashes. Keep it for stability, or restart and try hardware acceleration again."
+    },
+    "restartPrompt": {
+      "restartButton": "Restart in Safe Graphics Mode",
+      "keepRunningButton": "Keep Running",
+      "title": "Restart Orca in Safe Graphics Mode?",
+      "message": "Orca's graphics process has crashed repeatedly.",
+      "detail": "Safe graphics mode disables hardware acceleration and WebGL for this Orca version. Terminals and 3D content may render more slowly. Keep Running leaves graphics settings unchanged."
+    }
+  },
+  "localBuild": {
+    "chooseTitle": "Choose a Local Orca Build",
+    "chooseButton": "Choose Build",
+    "manifestFilter": "Orca update manifest",
+    "sameVersionError": "This build has the same version as the running app. Run pn build:mac again to create a uniquely versioned build.",
+    "noLiveTerminals": "No live terminals need to reconnect.",
+    "liveTerminals_one": "{{count}} live terminal will reconnect after restart.",
+    "liveTerminals_other": "{{count}} live terminals will reconnect after restart.",
+    "confirmTitle": "Use Local Orca Build?",
+    "schemaCompatibility": "Workspace cards and settings are compatible with state schema {{schemaVersion}}.",
+    "signatureRequirement": "The build must have the same valid code signature as Orca or installation will stop.",
+    "useButton": "Use Local Build",
+    "cancelButton": "Cancel"
+  },
+  "profileState": {
+    "startupRecovery": {
+      "quitButton": "Quit",
+      "copyCommandButton": "Copy recovery command",
+      "copyCommandDetail": "Copy the recovery command, then run it after Orca closes.",
+      "quitDetail": "Quit Orca and resolve the profile-state authority before retrying.",
+      "title": "Orca profile state cannot be opened",
+      "message": "Orca cannot safely open this profile."
+    },
+    "copyChoice": {
+      "lastSaved": "Last saved {{time}}.",
+      "useSqliteButton": "Use SQLite (Recommended)",
+      "useJsonButton": "Use JSON",
+      "quitButton": "Quit",
+      "title": "Choose profile state",
+      "message": "This profile has two saved copies that don’t match.",
+      "cause": "This usually happens after opening the profile in an older version of Orca.",
+      "sqliteOption": "SQLite: what this version of Orca saved. Changes made in the older version are discarded.",
+      "jsonOption": "JSON: includes changes made in the older version. Changes this version saved since then are discarded.",
+      "archiveNote": "Orca archives both copies before switching, then restarts."
+    },
+    "repairChoice": {
+      "sectionStartsEmpty": "{{section}}: no readable backup, so it will start empty.",
+      "sectionRestored": "{{section}}: restored from the backup saved {{time}}.",
+      "projectsForgotten": "Orca will forget your projects and their workspace details. Files on disk are not touched.",
+      "newerProjectsRemoved": "Projects added after that backup will be removed from Orca, along with their workspace details. Files on disk are not touched.",
+      "repairButton": "Repair and Restart",
+      "quitButton": "Quit",
+      "title": "Repair profile",
+      "message": "Part of this profile's saved state is damaged.",
+      "restUnchanged": "Everything else stays as it is now.",
+      "damagedCopyKept": "Orca keeps a copy of the damaged file in its data folder, then restarts."
+    },
+    "recoveryNotApplied": {
+      "quitButton": "Quit",
+      "title": "Orca could not finish recovering this profile",
+      "message": "Orca could not apply the selected profile state.",
+      "reopenDetail": "Reopen Orca to choose again."
+    },
+    "writeFailure": {
+      "title": "Saving stopped",
+      "message": "Orca has stopped saving this profile.",
+      "indeterminateDetail": "Orca could not confirm whether your most recent change was saved. New changes will not be saved until you restart Orca.",
+      "safeDetail": "Changes saved before this point are safe. New changes will not be saved until you restart Orca.",
+      "okButton": "OK"
+    },
+    "section": {
+      "projects": "Projects",
+      "projectGroups": "Project groups",
+      "folderWorkspaces": "Folder workspaces",
+      "reviewComments": "Review comments",
+      "workspaceDetails": "Workspace details",
+      "settings": "Settings",
+      "windowLayout": "Window layout",
+      "openTabs": "Open tabs and terminals",
+      "sshHosts": "SSH hosts",
+      "automations": "Automations",
+      "automationHistory": "Automation history",
+      "onboarding": "Onboarding progress",
+      "other": "Other saved app state"
+    },
+    "startupFailure": {
+      "noneFound": "(none found)",
+      "sqlitePath": "SQLite path: {{path}}",
+      "sectionsDamaged": "Part of this profile's saved state is damaged: {{sections}}. Everything else is intact.",
+      "repairCommand": "Stop Orca, then run `{{command}}` to replace only the damaged parts from backups and keep everything else. Orca keeps a copy of the damaged file.",
+      "restoreWholeBackup": "To restore a whole backup instead, run `{{exportsCommand}}`, then `{{rollbackCommand}}`.",
+      "sqliteUnreadable": "Orca cannot safely open the active profile because its SQLite state is unreadable.",
+      "legacyJsonPath": "Legacy JSON path: {{path}}",
+      "retainedBackups": "Retained SQLite backups:",
+      "retainedExports": "Retained JSON exports:",
+      "chooseRecoveryArtifact": "Stop Orca, then run `{{command}}` and choose a known-good recovery artifact.",
+      "restoreCommands": "Restore SQLite with `{{backupCommand}}`, or restore a JSON export with `{{revisionCommand}}`.",
+      "authorityAmbiguous": "Orca cannot safely choose a profile-state authority: {{detail}}",
+      "authorityBothPreserved": "An older build may have changed the JSON file. Both copies are preserved; neither is selected automatically.",
+      "authorityCopyFirst": "Stop Orca and copy the profile directory before choosing which state to keep.",
+      "authorityKeepJson": "To keep the current JSON, including edits from an older build, run `{{command}}`. This archives both copies and does not merge their contents.",
+      "authorityInspect": "Run `{{command}}` to inspect retained recovery points.",
+      "authorityRestore": "Use `{{backupCommand}}` or `{{revisionCommand}}` only after selecting the state you want to restore.",
+      "newerSchema": "This profile was saved by a newer version of Orca. Open it with that version or a newer release. Your profile has not been changed.",
+      "revisionConflict": "The active profile changed while Orca was starting. Close other Orca processes using this profile, then restart Orca.",
+      "writerUnavailable": "Orca could not start profile persistence. Restart Orca; if the problem continues, repair or reinstall this build.",
+      "publicationUnavailable": "Orca could not safely publish profile state in {{directory}}.",
+      "publicationNeedsHardLinks": "This location must support hard links, and Orca needs permission to create them.",
+      "publicationMoveData": "Close Orca and orcad before checking folder permissions or moving the complete Orca data directory to a writable local filesystem that supports hard links, such as APFS, NTFS, or ext4.",
+      "publicationKeepFiles": "Keep the original directory and all recovery files."
+    }
+  },
+  "startupFailure": {
+    "title": "Orca could not start",
+    "finishFailed": "Orca could not finish starting: {{detail}}"
+  },
+  "native": {
+    "about": {
+      "gpu": {
+        "safeMode": "Disabled (Safe Graphics Mode)",
+        "unknownStatus": "Status unavailable",
+        "enabled": "Enabled",
+        "software": "Software rendering",
+        "disabled": "Disabled",
+        "unavailable": "Unavailable",
+        "unknown": "Unknown ({{status}})",
+        "summary": "GPU acceleration: {{status}}"
+      }
+    },
+    "dialog": {
+      "spaceTitle": "Orca Space Beta",
+      "dashboardTitle": "Orca Agent Dashboard",
+      "importCookies": "Import Cookies",
+      "cookieFiles": "Cookie Files",
+      "allFiles": "All Files",
+      "importPetBundle": "Pick a .codex-pet bundle",
+      "pickPet": "Pick pet",
+      "petImage": "Pet image",
+      "importWarpTheme": "Import Warp Theme",
+      "warpThemeYaml": "Warp theme YAML",
+      "importWarpFolder": "Import Warp Theme Folder",
+      "images": "Images",
+      "repoIconImages": "Repo icon images",
+      "audio": "Audio"
+    }
+  },
+  "installDirAcl": {
+    "cause": "Windows permissions on Orca's install folder are blocking its own sandboxed processes from reading the files it shipped with.",
+    "repaired": "Orca repaired the permissions. Reload to use them.",
+    "repairing": "Orca is repairing the permissions now.",
+    "repairFailed": "Orca could not repair them, which usually means the folder needs an administrator.",
+    "runCommands": "Run these in an Administrator Command Prompt, then relaunch Orca:"
+  },
+  "plugins": {
+    "frameSaveAs": {
+      "title": "Save File",
+      "allFiles": "All Files"
+    },
+    "frameOpenExternal": {
+      "open": "Open",
+      "cancel": "Cancel",
+      "message": "{{plugin}} wants to open {{host}}",
+      "alwaysAllow": "Always allow {{host}} for this plugin"
+    }
+  }
+}

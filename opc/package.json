@@ -1,0 +1,6 @@
+{
+  "name": "opc-cockpit",
+  "version": "1.4.214",
+  "private": true,
+  "type": "module"
+}

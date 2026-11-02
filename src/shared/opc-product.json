@@ -1,0 +1,13 @@
+{
+  "name": "HiveWard",
+  "appId": "local.opc.app",
+  "dataDirectory": "OPC-Engine",
+  "devDataDirectory": "OPC-Engine-Dev",
+  "scheme": "opc-engine",
+  "runtimeMetadata": "opc-runtime.json",
+  "cliName": "opc-engine",
+  "vendorServices": false,
+  "homeDirectory": ".opc-engine",
+  "globalCliRegistration": false,
+  "keychainName": "OPC Engine"
+}

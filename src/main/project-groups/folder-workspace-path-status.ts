@@ -1,0 +1,262 @@
+import { resolveQualifiedFolderWorkspaceResult } from '../../shared/folder-workspace-execution-host'
+import { parseExecutionHostId, type ExecutionHostId } from '../../shared/execution-host'
+import { stat as statLocalPath } from 'node:fs/promises'
+import { isPathInsideOrEqual } from '../../shared/cross-platform-path'
+import type {
+  FolderWorkspacePathStatus,
+  FolderWorkspacePathStatusRequest
+} from '../../shared/folder-workspace-path-status'
+import { getProjectGroupSubtreeIds } from '../../shared/project-groups'
+import type { FolderWorkspace } from '../../shared/folder-workspace-types'
+import type { ProjectGroup } from '../../shared/project-group-types'
+import type { Repo } from '../../shared/repo-types'
+import { blockedWslDistroForPath } from '../wsl/wsl-unc-access-gate'
+
+type FolderWorkspacePathStatusStore = {
+  getRepos: () => Repo[]
+  getProjectGroups?: () => ProjectGroup[]
+  getFolderWorkspaces?: () => FolderWorkspace[]
+}
+
+export type FolderWorkspacePathConnectionResolution =
+  | { kind: 'local' }
+  | { kind: 'ssh'; connectionId: string }
+  | { kind: 'ambiguous' }
+
+function getFolderScopeCandidateRepos(args: {
+  folderPath: string
+  projectGroupId?: string | null
+  connectionId?: string | null
+  projectGroups: readonly ProjectGroup[]
+  repos: readonly Repo[]
+}): Repo[] {
+  const groupIds = args.projectGroupId
+    ? getProjectGroupSubtreeIds(args.projectGroups, args.projectGroupId)
+    : null
+  const groupRepos = groupIds
+    ? args.repos.filter(
+        (repo) => typeof repo.projectGroupId === 'string' && groupIds.has(repo.projectGroupId)
+      )
+    : []
+  const pathRepos = args.repos.filter(
+    (repo) =>
+      !(groupIds && typeof repo.projectGroupId === 'string' && groupIds.has(repo.projectGroupId)) &&
+      isPathInsideOrEqual(args.folderPath, repo.path)
+  )
+  if (args.connectionId) {
+    return [
+      ...groupRepos,
+      ...pathRepos.filter((repo) => (repo.connectionId ?? null) === args.connectionId)
+    ]
+  }
+  if (groupRepos.length === 0) {
+    return pathRepos
+  }
+  const groupConnectionIds = new Set(groupRepos.map((repo) => repo.connectionId ?? null))
+  return [
+    ...groupRepos,
+    ...pathRepos.filter((repo) => groupConnectionIds.has(repo.connectionId ?? null))
+  ]
+}
+
+export function inferFolderWorkspacePathConnection(args: {
+  folderPath: string
+  projectGroupId?: string | null
+  connectionId?: string | null
+  projectGroups: readonly ProjectGroup[]
+  repos: readonly Repo[]
+}): FolderWorkspacePathConnectionResolution {
+  const candidateRepos = getFolderScopeCandidateRepos(args)
+  let hasLocalRepo = false
+  const connectionIds = new Set<string>()
+  for (const repo of candidateRepos) {
+    if (repo.connectionId) {
+      connectionIds.add(repo.connectionId)
+    } else {
+      hasLocalRepo = true
+    }
+  }
+  if (args.connectionId) {
+    const hasDifferentSshConnection = [...connectionIds].some(
+      (connectionId) => connectionId !== args.connectionId
+    )
+    if (hasLocalRepo || hasDifferentSshConnection) {
+      return { kind: 'ambiguous' }
+    }
+    return { kind: 'ssh', connectionId: args.connectionId }
+  }
+  if (hasLocalRepo && connectionIds.size > 0) {
+    return { kind: 'ambiguous' }
+  }
+  if (connectionIds.size === 0) {
+    return { kind: 'local' }
+  }
+  if (connectionIds.size === 1) {
+    return { kind: 'ssh', connectionId: [...connectionIds][0] }
+  }
+  return { kind: 'ambiguous' }
+}
+
+function pathStatErrorReason(error: unknown): 'missing' | 'unavailable' {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unavailable'
+}
+
+async function statFolderPath(
+  path: string,
+  connection: FolderWorkspacePathConnectionResolution
+): Promise<FolderWorkspacePathStatus> {
+  if (connection.kind === 'ambiguous') {
+    return { path, exists: false, reason: 'ambiguous-connection' }
+  }
+  if (connection.kind === 'ssh') {
+    // Why: this process serves no SSH filesystem.
+    return { path, exists: false, reason: 'unavailable' }
+  }
+
+  // A stat of a stopped distro's \\wsl.localhost folder boots it (E9): unknown, never missing.
+  // A user act on the distro (runAsWslUserAct) passes and may start it.
+  if (await blockedWslDistroForPath(path)) {
+    return { path, exists: false, reason: 'unavailable' }
+  }
+  try {
+    const stats = await statLocalPath(path)
+    return stats.isDirectory()
+      ? { path, exists: true }
+      : { path, exists: false, reason: 'not-directory' }
+  } catch (error) {
+    return { path, exists: false, reason: pathStatErrorReason(error) }
+  }
+}
+
+export function getResolvedFolderWorkspacePathStatus(
+  workspace: Pick<FolderWorkspace, 'folderPath'>,
+  hostId: ExecutionHostId
+): Promise<FolderWorkspacePathStatus> {
+  const host = parseExecutionHostId(hostId)
+  if (host?.kind === 'runtime') {
+    return Promise.resolve({ path: workspace.folderPath, exists: false, reason: 'unavailable' })
+  }
+  return statFolderPath(
+    workspace.folderPath,
+    host?.kind === 'ssh' ? { kind: 'ssh', connectionId: host.targetId } : { kind: 'local' }
+  )
+}
+
+export async function getFolderWorkspacePathStatusForPath(args: {
+  folderPath: string
+  projectGroupId?: string | null
+  connectionId?: string | null
+  projectGroups: readonly ProjectGroup[]
+  repos: readonly Repo[]
+}): Promise<FolderWorkspacePathStatus> {
+  const connection = inferFolderWorkspacePathConnection(args)
+  return statFolderPath(args.folderPath, connection)
+}
+
+export function resolveFolderWorkspaceStatusPath(args: {
+  store: FolderWorkspacePathStatusStore
+  request: FolderWorkspacePathStatusRequest
+}): { folderPath: string; projectGroupId: string | null; connectionId?: string | null } {
+  const { request } = args
+  if (request.scope === 'project-group') {
+    const group = args.store
+      .getProjectGroups?.()
+      .find((entry) => entry.id === request.projectGroupId)
+    if (!group?.parentPath) {
+      throw new Error('folder_workspace_path_scope_not_found')
+    }
+    return {
+      folderPath: group.parentPath,
+      projectGroupId: group.id,
+      connectionId: group.connectionId ?? null
+    }
+  }
+
+  if (request.scope === 'path') {
+    return {
+      folderPath: request.path,
+      projectGroupId: null,
+      connectionId: request.connectionId ?? null
+    }
+  }
+
+  const workspace = args.store
+    .getFolderWorkspaces?.()
+    .find((entry) => entry.id === request.folderWorkspaceId)
+  if (!workspace) {
+    throw new Error('folder_workspace_path_scope_not_found')
+  }
+  const group = args.store
+    .getProjectGroups?.()
+    .find((entry) => entry.id === workspace.projectGroupId)
+  return {
+    folderPath: workspace.folderPath,
+    projectGroupId: workspace.projectGroupId,
+    connectionId: workspace.connectionId ?? group?.connectionId ?? null
+  }
+}
+
+export async function getFolderWorkspacePathStatus(
+  store: FolderWorkspacePathStatusStore,
+  request: FolderWorkspacePathStatusRequest
+): Promise<FolderWorkspacePathStatus> {
+  if (request.scope === 'folder-workspace') {
+    const result = resolveQualifiedFolderWorkspaceResult(
+      {
+        folderWorkspaces: store.getFolderWorkspaces?.() ?? [],
+        projectGroups: store.getProjectGroups?.() ?? [],
+        repos: store.getRepos()
+      },
+      request.folderWorkspaceId
+    )
+    if (result.kind === 'missing') {
+      throw new Error('folder_workspace_path_scope_not_found')
+    }
+    if (result.kind === 'ambiguous') {
+      const paths = new Set(
+        store
+          .getFolderWorkspaces?.()
+          .filter((row) => row.id === request.folderWorkspaceId)
+          .map((row) => row.folderPath)
+      )
+      return {
+        path: paths.size === 1 ? [...paths][0] : request.folderWorkspaceId,
+        exists: false,
+        reason: 'ambiguous-connection'
+      }
+    }
+    return getResolvedFolderWorkspacePathStatus(result.value.workspace, result.value.hostId)
+  }
+  const scope = resolveFolderWorkspaceStatusPath({ store, request })
+  return getFolderWorkspacePathStatusForPath({
+    folderPath: scope.folderPath,
+    projectGroupId: scope.projectGroupId,
+    connectionId: scope.connectionId,
+    projectGroups: store.getProjectGroups?.() ?? [],
+    repos: store.getRepos()
+  })
+}
+
+export function folderWorkspacePathRefusal(status: FolderWorkspacePathStatus): string | null {
+  if (status.exists) {
+    return null
+  }
+  if (status.reason === 'missing') {
+    return `folder_workspace_path_missing:${status.path}`
+  }
+  if (status.reason === 'not-directory') {
+    return `folder_workspace_path_not_directory:${status.path}`
+  }
+  if (status.reason === 'ambiguous-connection') {
+    return `folder_workspace_connection_ambiguous:${status.path}`
+  }
+  return `folder_workspace_path_unavailable:${status.path}`
+}
+
+export function assertFolderWorkspacePathUsable(status: FolderWorkspacePathStatus): void {
+  const refusal = folderWorkspacePathRefusal(status)
+  if (refusal) {
+    throw new Error(refusal)
+  }
+}

@@ -1,0 +1,395 @@
+import { useState } from 'react'
+import { useQueries } from '@tanstack/react-query'
+import type { OrcaTerminal, TopologyNode } from '@shared/api'
+import { Laptop } from 'lucide-react'
+import { MachineScope, useCurrentMachineId, useFleet } from '@/lib/machine'
+import {
+  decisionsQuery,
+  overviewQuery,
+  tasksQuery,
+  topologyQuery,
+} from '@/lib/opc-api'
+import { agentStatusStyle } from '@/lib/opc-format'
+import { terminalsQuery } from '@/lib/orca-live'
+import { cn } from '@/lib/utils'
+import { Page } from '@/components/layout/page'
+import {
+  TopologyCanvas,
+  type MachineGroup,
+} from '@/components/opc/topology-canvas'
+import { DecisionList } from '@/features/decisions/decision-list'
+import { ProjectTerminals } from '@/features/terminal/project-terminals'
+import { AgentSheet } from './agent-sheet'
+import { ProjectHeader, type ProjectTab } from './project-header'
+import { TaskFeed } from './task-feed'
+import { countTab, taskTabs, type TaskTab } from './task-status'
+
+/**
+ * 工作台（驾驶舱 / 项目页共用）：项目页顶部多一块项目信息（logo、名字、目录）。为"集中处理"服务，只放三样东西——
+ * Agent 架构图（谁在做什么）· 待办（要我决定的事）· 任务与汇报（做了什么）。
+ * 每块功能一个大框，大框里不再套小框：小块都是"隐藏的框"，悬停才变灰显出来。
+ * 点架构图节点打开该 Agent 的详情。
+ * 首页把局域网里配对过、在线的电脑合在一起看：架构图里每台电脑一列，任务和待办标明来自哪台。
+ */
+export function Workbench({
+  businessId,
+  tab = 'overview',
+  terminal,
+}: {
+  businessId?: string
+  /** 项目页的标签 */
+  tab?: ProjectTab
+  /** 终端标签里选中的终端 */
+  terminal?: string
+}) {
+  const [open, setOpen] = useState<Opened | null>(null)
+  const [taskTab, setTaskTab] = useState<TaskTab>('all')
+  const viewing = useCurrentMachineId()
+  const allFleet = useFleet()
+  // 业务页只看正在看的那台电脑
+  const fleet = businessId ? allFleet.slice(0, 1) : allFleet
+  const multi = fleet.length > 1
+  const ids = fleet.map((f) => f.id)
+
+  const overviews = useQueries({ queries: ids.map(overviewQuery) })
+  const topologies = useQueries({
+    queries: ids.map((m) => topologyQuery(m, businessId)),
+  })
+  const taskLists = useQueries({
+    queries: ids.map((m) => tasksQuery(m, businessId)),
+  })
+  const decisionLists = useQueries({ queries: ids.map(decisionsQuery) })
+  // 首页额外挂上 Orca 里真实在跑的 Agent（按项目分组），点开就是它的对话
+  const terminalLists = useQueries({
+    queries: ids.map((m) => ({ ...terminalsQuery(m), enabled: !businessId })),
+  })
+
+  const groups: MachineGroup[] = fleet.map((f, i) => {
+    // 不属于任何业务的 Agent 单独成支；已经挂在业务下的不重复画
+    // 旧版后台还会带一个老板节点，不画
+    const rest = (topologies[i].data?.nodes ?? []).filter(
+      (n) => n.kind !== 'owner'
+    )
+    const placed = new Set(rest.map((n) => n.terminal).filter(Boolean))
+    const rows = rest.filter((n) => n.kind === 'leader')
+    return {
+      id: f.id,
+      machine: f.machine,
+      nodes: [
+        ...rest,
+        ...(businessId
+          ? []
+          : orcaNodes(
+              (terminalLists[i].data ?? []).filter(
+                (t) => !placed.has(t.handle)
+              ),
+              rows
+            )),
+      ],
+    }
+  })
+  const machineName = (i: number) =>
+    fleet[i].machine?.name ?? (fleet[i].id ? '那台电脑' : '本机')
+
+  const workers = groups.flatMap((g) =>
+    g.nodes.filter((n) => n.kind === 'worker')
+  )
+  const liveWorkers = workers.filter((n) => n.liveness === 'live').length
+
+  // 任务合成一张列表；多台电脑时标明来自哪台，业务名到各自那台电脑上找
+  const tasks = taskLists.flatMap((q, i) =>
+    (q.data ?? []).map((task) => ({ task, i }))
+  )
+  const origin = new Map(tasks.map(({ task, i }) => [task, i]))
+  const businessesOf = (i: number) => overviews[i]?.data?.businesses ?? []
+
+  const pendingOf = (i: number) =>
+    (decisionLists[i].data ?? []).filter(
+      (d) =>
+        d.state === 'pending' && (!businessId || d.businessId === businessId)
+    ).length
+  const pending = fleet.reduce((sum, _, i) => sum + pendingOf(i), 0)
+  const withPending = fleet.flatMap((f, i) => (pendingOf(i) ? [{ f, i }] : []))
+
+  const openIndex = open ? ids.indexOf(open.machine) : -1
+  const project = businessId
+    ? businessesOf(0).find((b) => b.id === businessId)
+    : undefined
+
+  if (project && tab === 'terminal') {
+    // 终端填满窗口剩下的高度
+    return (
+      <Page className='flex h-full flex-col gap-5'>
+        <ProjectHeader project={project} tab={tab} />
+        <ProjectTerminals
+          businessId={project.id}
+          workspacePath={project.workspacePath}
+          selected={terminal}
+        />
+      </Page>
+    )
+  }
+
+  return (
+    <Page className='space-y-5'>
+      {project && <ProjectHeader project={project} tab={tab} />}
+      <div className='grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]'>
+        <Panel
+          title='Agent 架构'
+          meta={`${multi ? `${fleet.length} 台电脑 · ` : ''}${liveWorkers}/${workers.length} 个下属在线`}
+          actions={<Legend />}
+        >
+          {topologies.map((q, i) => (
+            <LoadError
+              key={i}
+              query={q}
+              prefix={multi ? machineName(i) : undefined}
+            />
+          ))}
+          <TopologyCanvas
+            groups={groups}
+            open={open ?? undefined}
+            onOpen={(node, machine) => setOpen({ node, machine })}
+          />
+        </Panel>
+
+        <Panel
+          title='待办'
+          meta={pending ? `${pending} 件要你决定` : undefined}
+        >
+          <div className='max-h-[560px] overflow-y-auto px-2 pb-3'>
+            {decisionLists.map((q, i) => (
+              <LoadError
+                key={i}
+                query={q}
+                prefix={multi ? machineName(i) : undefined}
+              />
+            ))}
+            {withPending.length === 0 ? (
+              <MachineScope id={ids[0]}>
+                <DecisionList businessId={businessId} />
+              </MachineScope>
+            ) : (
+              withPending.map(({ f, i }) => (
+                <MachineScope key={f.id ?? 'self'} id={f.id}>
+                  {multi && (
+                    <h3 className='mt-2 flex items-center gap-1.5 px-2 text-xs text-muted-foreground'>
+                      <Laptop className='size-3' />
+                      {machineName(i)}
+                    </h3>
+                  )}
+                  <DecisionList businessId={businessId} />
+                </MachineScope>
+              ))
+            )}
+          </div>
+        </Panel>
+      </div>
+
+      <Panel
+        title='任务与汇报'
+        actions={
+          <Segmented
+            value={taskTab}
+            onChange={setTaskTab}
+            options={taskTabs.map((t) => ({
+              ...t,
+              count: countTab(
+                t.value,
+                tasks.map((x) => x.task.status)
+              ),
+            }))}
+          />
+        }
+      >
+        <div className='px-2 pb-3'>
+          {taskLists.map((q, i) => (
+            <LoadError
+              key={i}
+              query={q}
+              prefix={multi ? machineName(i) : undefined}
+            />
+          ))}
+          <TaskFeed
+            tasks={tasks.map((x) => x.task)}
+            tab={taskTab}
+            showBusiness={!businessId}
+            businessOf={(t) =>
+              businessesOf(origin.get(t) ?? 0).find(
+                (b) => b.id === t.businessId
+              )
+            }
+            machineOf={
+              multi ? (t) => machineName(origin.get(t) ?? 0) : undefined
+            }
+          />
+        </div>
+      </Panel>
+
+      <MachineScope id={open?.machine ?? viewing}>
+        <AgentSheet
+          node={open?.node ?? null}
+          tasks={openIndex >= 0 ? (taskLists[openIndex].data ?? []) : []}
+          businesses={openIndex >= 0 ? businessesOf(openIndex) : []}
+          // 业务页链接只对正在看的那台电脑有效
+          showBusinessLink={!businessId && open?.machine === viewing}
+          onClose={() => setOpen(null)}
+        />
+      </MachineScope>
+    </Page>
+  )
+}
+
+type Opened = { node: TopologyNode; machine: string | null }
+
+/** 读失败要说出来，不能默默显示成"没有" */
+function LoadError({
+  query,
+  prefix,
+}: {
+  query: { error: Error | null }
+  prefix?: string
+}) {
+  if (!query.error) return null
+  return (
+    <p className='px-4 py-2 text-xs text-danger'>
+      {prefix && `${prefix}：`}读取失败：{query.error.message}
+    </p>
+  )
+}
+
+/**
+ * 没经派单、在 Orca 里直接开的 Agent：按所在目录挂到对应那一行的总 Agent 下；
+ * 哪一行都对不上的项目单独成一行（只有直线、没有总 Agent），这些 Agent 挂在下面。
+ */
+function orcaNodes(
+  terminals: OrcaTerminal[],
+  rows: TopologyNode[]
+): TopologyNode[] {
+  const inside = (path: string, root?: string) =>
+    !!root && (path === root || path.startsWith(root + '/'))
+  const extra = new Map<string, OrcaTerminal[]>()
+  const nodes: TopologyNode[] = []
+  for (const t of terminals) {
+    if (!t.agent) continue
+    const row = rows.find((n) => inside(t.project, n.project))
+    if (row) nodes.push(orcaWorker(t, row.id))
+    else extra.set(t.project, [...(extra.get(t.project) ?? []), t])
+  }
+  for (const [project, list] of extra) {
+    const root = `dir:${project}`
+    const id = `dir-leader:${project}`
+    const label = project.split('/').pop() ?? project
+    nodes.push(
+      { id: root, kind: 'project', project, label, unregistered: true },
+      {
+        id,
+        kind: 'leader',
+        parentId: root,
+        project,
+        label,
+        activity: `${list.length} 个 Agent 在跑`,
+      },
+      ...list.map((t) => orcaWorker(t, id))
+    )
+  }
+  return nodes
+}
+
+function orcaWorker(t: OrcaTerminal, parentId: string): TopologyNode {
+  return {
+    id: `orca:${t.handle}`,
+    kind: 'worker',
+    parentId,
+    label: t.agent!,
+    agent: t.agent!,
+    liveness: 'live',
+    // 终端标题前面常带 Agent 自己画的转圈 / 星号，去掉
+    activity: t.title?.replace(/^[\u2800-\u28ff✳✻✽✶✢·*]+\s*/u, '') || '终端',
+    sublabel: '没经派单',
+    terminal: t.handle,
+    state:
+      t.status === 'working'
+        ? 'working'
+        : t.status === 'permission'
+          ? 'blocked'
+          : 'idle',
+  }
+}
+
+function Panel({
+  title,
+  meta,
+  actions,
+  children,
+  className,
+}: {
+  title: string
+  meta?: string
+  actions?: React.ReactNode
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <section
+      className={cn(
+        'flex min-w-0 flex-col overflow-hidden rounded-xl panel',
+        className
+      )}
+    >
+      <header className='flex h-12 shrink-0 items-center gap-3 px-4'>
+        <h2 className='text-[13px] font-medium'>{title}</h2>
+        {meta && <span className='text-xs text-muted-foreground'>{meta}</span>}
+        {actions && (
+          <div className='ms-auto flex items-center gap-3'>{actions}</div>
+        )}
+      </header>
+      {children}
+    </section>
+  )
+}
+
+/** 分段切换：几个状态就几栏，当前栏是实心的。 */
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T
+  onChange: (v: T) => void
+  options: { value: T; label: string; count: number }[]
+}) {
+  return (
+    <div className='flex rounded-md bg-muted p-0.5'>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type='button'
+          onClick={() => onChange(o.value)}
+          className={cn(
+            'flex h-6 items-center gap-1.5 rounded-[5px] px-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground',
+            o.value === value && 'bg-panel text-foreground shadow-sm'
+          )}
+        >
+          {o.label}
+          <span className='font-mono text-[10px] text-muted-foreground'>
+            {o.count}
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function Legend() {
+  return (
+    <span className='hidden items-center gap-3 text-[11px] text-muted-foreground md:flex'>
+      {Object.values(agentStatusStyle).map((l) => (
+        <span key={l.label} className='flex items-center gap-1.5'>
+          <span className={cn('size-1.5 rounded-full', l.dot)} />
+          {l.label}
+        </span>
+      ))}
+    </span>
+  )
+}

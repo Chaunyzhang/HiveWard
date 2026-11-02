@@ -1,0 +1,34 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": [
+    "../electron.vite.config.*",
+    "./vitest.config.ts",
+    "./build-plugins/**/*",
+    "./scripts/vitest-host-ports-setup.ts",
+    "./scripts/vitest-caller-identity-env-setup.ts",
+    "./scripts/vitest-inherited-git-env-setup.ts",
+    "./scripts/vitest-real-agent-home-write-guard.ts",
+    "./scripts/vitest-bun-node-builtins.ts",
+    "./scripts/vitest-dom-setup.ts",
+    "./scripts/happy-dom-offscreen-canvas.ts",
+    "./scripts/happy-dom-mutation-observer-retention.ts",
+    "./scripts/happy-dom-animation-cancel.ts",
+    "./scripts/vitest-node-runtime-pool.ts",
+    "./scripts/vitest-module-cache-resolution-key.ts",
+    "../src/main/**/*",
+    "../src/cli/runtime/transport.ts",
+    "../src/cli/runtime/envelope-schema.ts",
+    "../src/cli/runtime/types.ts",
+    "../src/cli/runtime/runtime-access-denied.ts",
+    "../src/cli/runtime/runtime-pid-liveness.ts",
+    "../src/shared/**/*",
+    "../src/packages/process-host/src/__fixtures__/**/*",
+    "../src/wsl-guest/**/*",
+    "../src/types/**/*",
+    "../src/browser-preload/**/*"
+  ],
+  "compilerOptions": {
+    "composite": true,
+    "types": ["electron-vite/node"]
+  }
+}

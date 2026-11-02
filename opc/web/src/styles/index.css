@@ -1,0 +1,401 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import './theme.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  html {
+    @apply overflow-x-hidden;
+  }
+  /* 系统字体：SF Pro + 苹方，冷静、无外部依赖；正文 14px，辅助 12–13px */
+  html {
+    font-family:
+      -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
+      'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply min-h-svh w-full bg-background text-sm text-foreground;
+  }
+
+  /* Override Radix scroll locking for sticky headers */
+  body[data-scroll-locked] {
+    overflow: unset !important;
+  }
+
+  /* Cursor pointer for buttons */
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* Prevent focus zoom on mobile devices */
+  @media screen and (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
+  }
+}
+
+@utility container {
+  margin-inline: auto;
+  padding-inline: 2rem;
+}
+
+@utility no-scrollbar {
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  &::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+@utility faded-bottom {
+  @apply after:pointer-events-none after:absolute after:inset-s-0 after:bottom-0 after:hidden after:h-32 after:w-full after:rounded-b-2xl after:bg-[linear-gradient(180deg,transparent_10%,var(--background)_70%)] md:after:block;
+}
+
+/* ── Panel & lift system ───────────────────────────────────────────
+   静止：扁平面板（平涂底色 + 1px 细边），无阴影、无渐变。
+   悬停/键盘聚焦：可交互元素才浮起来 —— 上移 + 三层投影，2.5D 悬浮感。
+   浮起只表示"手在这里"，不表示选中；鼠标移开就落回去。 */
+@utility panel {
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+}
+/* 大框里的小块（节点、列表行）：静止时透明、没有边，等于"隐藏的框"；
+   悬停时底色变灰把框显出来。lift 再叠一层上浮投影，只给架构图节点用。 */
+@utility hover-box {
+  background-color: transparent;
+  transition: background-color 160ms ease;
+  &:hover,
+  &:focus-visible,
+  &[data-open='true'] {
+    background-color: var(--accent);
+    outline: none;
+  }
+}
+@utility lift {
+  transition:
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 200ms ease;
+  &:hover,
+  &:focus-visible {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-float);
+    outline: none;
+  }
+  &:active {
+    transform: translateY(-2px);
+    transition-duration: 90ms;
+  }
+}
+@utility lift-sm {
+  transition:
+    transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  &:hover,
+  &:focus-visible {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-float-sm);
+    outline: none;
+  }
+}
+/* 示意图画布：点阵底 */
+@utility dot-canvas {
+  background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+/* 正在进行的那一行（运行中的命令、干活中…）：一道亮光从左扫到右，同 Claude 桌面端 */
+@utility shimmer-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 40%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 60%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer-text 2s linear infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    color: var(--foreground);
+  }
+}
+@keyframes shimmer-text {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+/* 等宽大写小标签（STATUS / LAST BACKUP 那种） */
+@utility mono-label {
+  @apply font-mono text-[11px] tracking-[0.14em] text-muted-foreground uppercase;
+}
+
+.CollapsibleContent {
+  overflow: hidden;
+}
+.CollapsibleContent[data-state='open'] {
+  animation: slideDown 300ms ease-out;
+}
+.CollapsibleContent[data-state='closed'] {
+  animation: slideUp 300ms ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    height: var(--radix-collapsible-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+
+/* ── 架构图的主干：电脑在上，每块业务一行挂在左边这根竖线上 ── */
+@layer components {
+  .vtree {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    margin-inline-start: 28px;
+    padding-top: 24px;
+  }
+  .vtree > li {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding-inline-start: 24px;
+  }
+  .vtree > li::before {
+    content: '';
+    position: absolute;
+    inset-inline-start: 0;
+    top: 50%;
+    width: 24px;
+    border-top: 1px solid var(--border);
+  }
+  .vtree > li::after {
+    content: '';
+    position: absolute;
+    inset-inline-start: 0;
+    top: -12px;
+    bottom: -12px;
+    border-inline-start: 1px solid var(--border);
+  }
+  .vtree > li:first-child::after {
+    top: -24px;
+  }
+  .vtree > li:last-child::after {
+    bottom: 50%;
+  }
+}
+
+/* ── 横向组织树：根在左，子节点向右竖排，连线用 1px 细线 ── */
+@layer components {
+  .htree ul {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-inline-start: 28px;
+  }
+  .htree li {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .htree ul > li {
+    padding-inline-start: 20px;
+  }
+  .htree ul > li::before {
+    content: '';
+    position: absolute;
+    inset-inline-start: 0;
+    top: 50%;
+    width: 20px;
+    border-top: 1px solid var(--border);
+  }
+  .htree ul > li::after {
+    content: '';
+    position: absolute;
+    inset-inline-start: 0;
+    top: -5px;
+    bottom: -5px;
+    border-inline-start: 1px solid var(--border);
+  }
+  .htree ul > li:first-child::after {
+    top: 50%;
+  }
+  .htree ul > li:last-child::after {
+    bottom: 50%;
+  }
+  .htree ul > li:only-child::after {
+    display: none;
+  }
+  .htree li > ul::before {
+    content: '';
+    position: absolute;
+    inset-inline-start: -28px;
+    top: 50%;
+    width: 28px;
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* 桌面 App：左上角给红绿灯让位，顶栏空白处可拖动窗口；嵌在 HiveWard 主窗口里时不贴窗口左边，不用让位 */
+html.is-desktop .app-top-bar {
+  -webkit-app-region: drag;
+}
+html.is-desktop:not(.is-embedded) .app-top-bar {
+  padding-inline-start: 84px;
+}
+html.is-desktop .app-top-bar :is(a, button, input, [role='button']) {
+  -webkit-app-region: no-drag;
+}
+
+/* Agent 回复的 Markdown 排版（features/live/markdown.tsx）：对齐 Claude 桌面端的阅读节奏 */
+@layer components {
+  .md {
+    overflow-wrap: anywhere;
+  }
+  .md > * + * {
+    margin-top: 0.9em;
+  }
+  .md :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+    line-height: 1.4;
+    margin-top: 1.5em;
+  }
+  .md > :is(h1, h2, h3, h4, h5, h6):first-child {
+    margin-top: 0;
+  }
+  .md :is(h1, h2, h3, h4, h5, h6) + * {
+    margin-top: 0.5em;
+  }
+  .md h1 {
+    font-size: 1.3em;
+  }
+  .md h2 {
+    font-size: 1.17em;
+  }
+  .md h3 {
+    font-size: 1.05em;
+  }
+  .md :is(ul, ol) {
+    padding-inline-start: 1.5em;
+  }
+  .md ul {
+    list-style: disc;
+  }
+  .md ol {
+    list-style: decimal;
+  }
+  .md li::marker {
+    color: var(--muted-foreground);
+  }
+  .md li + li,
+  .md li > :is(ul, ol, p) {
+    margin-top: 0.35em;
+  }
+  .md li > ul {
+    list-style: circle;
+  }
+  .md input[type='checkbox'] {
+    margin-inline-end: 0.4em;
+    vertical-align: -0.1em;
+  }
+  .md strong {
+    font-weight: 600;
+  }
+  .md a {
+    text-decoration: underline;
+    text-decoration-color: color-mix(
+      in oklab,
+      var(--muted-foreground) 60%,
+      transparent
+    );
+    text-underline-offset: 4px;
+  }
+  .md a:hover {
+    text-decoration-color: var(--foreground);
+  }
+  .md code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    padding: 0.12em 0.4em;
+    border-radius: 5px;
+    background: var(--muted);
+  }
+  .md pre {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.65;
+    padding: 0.85em 1em;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: color-mix(in oklab, var(--muted) 55%, transparent);
+    overflow-x: auto;
+  }
+  .md pre code {
+    font-size: inherit;
+    padding: 0;
+    background: none;
+  }
+  .md blockquote {
+    border-inline-start: 3px solid var(--border);
+    padding-inline-start: 1em;
+    color: var(--muted-foreground);
+  }
+  .md hr {
+    border-top: 1px solid var(--border);
+    margin-block: 1.6em;
+  }
+  .md-table {
+    overflow-x: auto;
+  }
+  .md table {
+    border-collapse: collapse;
+    font-size: 0.93em;
+  }
+  .md :is(th, td) {
+    padding: 0.5em 1.2em 0.5em 0;
+    border-bottom: 1px solid var(--border);
+    text-align: start;
+    vertical-align: top;
+  }
+  .md th {
+    font-weight: 500;
+    color: var(--muted-foreground);
+  }
+  .md tr:last-child td {
+    border-bottom: none;
+  }
+}

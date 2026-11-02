@@ -1,0 +1,20 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  // Why only roots: src/main files come in through imports. check-runtime-electron-ratchet.mjs
+  // keeps Electron out of that graph.
+  "include": [
+    "../src/cli/**/*",
+    "../src/shared/**/*",
+    "../src/shared/editor-language/monaco-language-associations.json",
+    "../src/packages/process-host/src/__fixtures__/**/*",
+    // Loaded by path beside its launcher, so no import reaches it.
+    "../src/main/persistence/profile-state/profile-state-backup-worker-entry.ts"
+  ],
+  "compilerOptions": {
+    // The CLI runs on Node 24; Node20 models synchronous ESM imports from CommonJS.
+    "module": "Node20",
+    "moduleResolution": "Node16",
+    "rootDir": "../src",
+    "outDir": "../out"
+  }
+}
