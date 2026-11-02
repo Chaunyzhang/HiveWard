@@ -1,3 +1,4 @@
+import { pathKey } from './workspace-path.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as fs from 'node:fs'
@@ -7,7 +8,7 @@ import * as crypto from 'node:crypto'
 import * as util from 'node:util'
 import vm from 'node:vm'
 
-async function fixture(t) {
+async function fixture(t, platform = process.platform) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-transcripts-'))
   t.after(() => fs.rmSync(home, { recursive: true, force: true }))
   let now = Date.now()
@@ -27,6 +28,7 @@ async function fixture(t) {
     Buffer,
     Date: Clock,
     process: {
+      platform,
       kill(pid) {
         if (!processes.has(pid)) {
           throw new Error('ESRCH')
@@ -73,6 +75,10 @@ async function fixture(t) {
     )
   const modules = {
     'node:child_process': { execFile },
+    './workspace-path.mjs': { pathKey },
+    '@orca/process-host': {
+      runProcess: ({ program, args }) => util.promisify(execFile)(program, args)
+    },
     'node:crypto': crypto,
     'node:fs': {
       ...fs,
@@ -105,6 +111,15 @@ async function fixture(t) {
     )
   })
   await source.evaluate()
+  source.namespace.configureWindowsProcesses(async () =>
+    [...processes].map(([pid, command]) => ({
+      pid,
+      command,
+      name: command,
+      ppid: [...children].find(([, ids]) => ids.includes(pid))?.[0] ?? 0,
+      creationTimeMs: startedAt
+    }))
+  )
   const cwd = '/project/test'
   const write = (relative, value = '') => {
     const file = path.join(home, relative)
@@ -322,4 +337,15 @@ test('concurrent cache misses share one lookup', async (t) => {
   const results = await Promise.all(Array.from({ length: 10 }, () => f.locate(1)))
   assert.ok(results.every((r) => r.path === a))
   assert.equal(f.calls.filter((c) => c.command === 'pgrep').length, 1)
+})
+
+test('Windows native process rows locate Claude child sessions without Unix subprocesses', async (t) => {
+  const f = await fixture(t, 'win32')
+  f.processes.set(410, 'powershell.exe')
+  f.processes.set(411, 'C:\\Users\\me\\.local\\bin\\claude.exe')
+  f.children.set(410, [411])
+  const expected = f.transcript('windows-session')
+  f.session(411, 'windows-session')
+  assert.equal((await f.locate(410)).path, expected)
+  assert.equal(f.calls.length, 0)
 })

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
-import type { OrcaTerminal, TopologyNode } from '@shared/api'
+import type { OrcaTerminal, Project, TopologyNode } from '@shared/api'
 import { Laptop } from 'lucide-react'
 import { MachineScope, useCurrentMachineId, useFleet } from '@/lib/machine'
 import {
@@ -21,11 +21,12 @@ import { DecisionList } from '@/features/decisions/decision-list'
 import { ProjectTerminals } from '@/features/terminal/project-terminals'
 import { AgentSheet } from './agent-sheet'
 import { ProjectHeader, type ProjectTab } from './project-header'
+import { NewProjectButton, ProjectList } from './projects-panel'
 import { TaskFeed } from './task-feed'
 import { countTab, taskTabs, type TaskTab } from './task-status'
 
 /**
- * 工作台（驾驶舱 / 项目页共用）：项目页顶部多一块项目信息（logo、名字、目录）。为"集中处理"服务，只放三样东西——
+ * 工作台（驾驶舱 / 业务页共用）：业务页顶部多一块业务信息（logo、名字、目录）和它的项目列表。为"集中处理"服务，只放三样东西——
  * Agent 架构图（谁在做什么）· 待办（要我决定的事）· 任务与汇报（做了什么）。
  * 每块功能一个大框，大框里不再套小框：小块都是"隐藏的框"，悬停才变灰显出来。
  * 点架构图节点打开该 Agent 的详情。
@@ -37,7 +38,7 @@ export function Workbench({
   terminal,
 }: {
   businessId?: string
-  /** 项目页的标签 */
+  /** 业务页的标签 */
   tab?: ProjectTab
   /** 终端标签里选中的终端 */
   terminal?: string
@@ -115,6 +116,27 @@ export function Workbench({
   const project = businessId
     ? businessesOf(0).find((b) => b.id === businessId)
     : undefined
+  // 点项目：打开它的 Leader Agent（架构图里的那个节点；后台还没给节点时按项目现拼一个）
+  const openProject = (p: Project) => {
+    const node =
+      groups[0]?.nodes.find(
+        (n) => n.kind === 'leader' && n.projectId === p.id
+      ) ??
+      ({
+        id: `leader:${p.id}`,
+        kind: 'leader',
+        projectId: p.id,
+        businessId: p.businessId,
+        label: p.name,
+        agent: p.leader?.agent,
+        liveness: p.leader?.liveness,
+        terminal:
+          p.leader && p.leader.liveness !== 'exited'
+            ? p.leader.terminal
+            : undefined,
+      } satisfies TopologyNode)
+    setOpen({ node, machine: ids[0] })
+  }
 
   if (project && tab === 'terminal') {
     // 终端填满窗口剩下的高度
@@ -153,37 +175,55 @@ export function Workbench({
           />
         </Panel>
 
-        <Panel
-          title='待办'
-          meta={pending ? `${pending} 件要你决定` : undefined}
-        >
-          <div className='max-h-[560px] overflow-y-auto px-2 pb-3'>
-            {decisionLists.map((q, i) => (
-              <LoadError
-                key={i}
-                query={q}
-                prefix={multi ? machineName(i) : undefined}
-              />
-            ))}
-            {withPending.length === 0 ? (
-              <MachineScope id={ids[0]}>
-                <DecisionList businessId={businessId} />
-              </MachineScope>
-            ) : (
-              withPending.map(({ f, i }) => (
-                <MachineScope key={f.id ?? 'self'} id={f.id}>
-                  {multi && (
-                    <h3 className='mt-2 flex items-center gap-1.5 px-2 text-xs text-muted-foreground'>
-                      <Laptop className='size-3' />
-                      {machineName(i)}
-                    </h3>
-                  )}
+        <div className='flex min-w-0 flex-col gap-5'>
+          {project && (
+            <Panel
+              title='项目'
+              meta={
+                project.projects?.length
+                  ? String(
+                      project.projects.filter((p) => p.status === 'active')
+                        .length
+                    )
+                  : undefined
+              }
+              actions={<NewProjectButton business={project} />}
+            >
+              <ProjectList business={project} onOpen={openProject} />
+            </Panel>
+          )}
+          <Panel
+            title='待办'
+            meta={pending ? `${pending} 件要你决定` : undefined}
+          >
+            <div className='max-h-[560px] overflow-y-auto px-2 pb-3'>
+              {decisionLists.map((q, i) => (
+                <LoadError
+                  key={i}
+                  query={q}
+                  prefix={multi ? machineName(i) : undefined}
+                />
+              ))}
+              {withPending.length === 0 ? (
+                <MachineScope id={ids[0]}>
                   <DecisionList businessId={businessId} />
                 </MachineScope>
-              ))
-            )}
-          </div>
-        </Panel>
+              ) : (
+                withPending.map(({ f, i }) => (
+                  <MachineScope key={f.id ?? 'self'} id={f.id}>
+                    {multi && (
+                      <h3 className='mt-2 flex items-center gap-1.5 px-2 text-xs text-muted-foreground'>
+                        <Laptop className='size-3' />
+                        {machineName(i)}
+                      </h3>
+                    )}
+                    <DecisionList businessId={businessId} />
+                  </MachineScope>
+                ))
+              )}
+            </div>
+          </Panel>
+        </div>
       </div>
 
       <Panel
@@ -259,8 +299,8 @@ function LoadError({
 }
 
 /**
- * 没经派单、在 Orca 里直接开的 Agent：按所在目录挂到对应那一行的总 Agent 下；
- * 哪一行都对不上的项目单独成一行（只有直线、没有总 Agent），这些 Agent 挂在下面。
+ * 没经派单、在 Orca 里直接开的 Agent：按所在目录挂到对应那一行的 Leader Agent 下；
+ * 哪一行都对不上的项目单独成一行（只有直线、没有 Leader Agent），这些 Agent 挂在下面。
  */
 function orcaNodes(
   terminals: OrcaTerminal[],
@@ -272,7 +312,10 @@ function orcaNodes(
   const nodes: TopologyNode[] = []
   for (const t of terminals) {
     if (!t.agent) continue
-    const row = rows.find((n) => inside(t.project, n.project))
+    // 落在多个项目目录里时归最深的那个
+    const row = rows
+      .filter((n) => inside(t.project, n.project))
+      .sort((a, b) => (b.project?.length ?? 0) - (a.project?.length ?? 0))[0]
     if (row) nodes.push(orcaWorker(t, row.id))
     else extra.set(t.project, [...(extra.get(t.project) ?? []), t])
   }
@@ -281,7 +324,7 @@ function orcaNodes(
     const id = `dir-leader:${project}`
     const label = project.split('/').pop() ?? project
     nodes.push(
-      { id: root, kind: 'project', project, label, unregistered: true },
+      { id: root, kind: 'business', project, label, unregistered: true },
       {
         id,
         kind: 'leader',
@@ -308,6 +351,7 @@ function orcaWorker(t: OrcaTerminal, parentId: string): TopologyNode {
     activity: t.title?.replace(/^[\u2800-\u28ff✳✻✽✶✢·*]+\s*/u, '') || '终端',
     sublabel: '没经派单',
     terminal: t.handle,
+    startedAt: t.startedAt,
     state:
       t.status === 'working'
         ? 'working'

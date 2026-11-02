@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { InviteButtons } from './index'
+import { spaced } from './verify-code'
 
 /**
  * 别的电脑邀请这台加入组织：在哪个页面都弹出来让老板确认。
@@ -44,6 +45,17 @@ export function InvitePrompt() {
                 {m.name}
                 {m.user && ` · ${m.user}`} · {m.address}
               </p>
+              {invitation.verifyCode && (
+                <div className='rounded-md border px-3 py-2.5 text-center'>
+                  <p className='text-[11px] text-muted-foreground'>确认码</p>
+                  <p className='mt-1 font-mono text-2xl tracking-[0.3em] text-foreground'>
+                    {spaced(invitation.verifyCode)}
+                  </p>
+                  <p className='mt-1 text-[11px] text-muted-foreground'>
+                    和「{m.name}」屏幕上显示的一样才同意，不一样就拒绝
+                  </p>
+                </div>
+              )}
               <p className='flex gap-2 rounded-md bg-attention/10 px-3 py-2 text-xs leading-5 text-attention'>
                 <TriangleAlert className='mt-0.5 size-3.5 shrink-0' />
                 同意后，组织里的电脑都能在这台电脑上开终端、跑命令、控制

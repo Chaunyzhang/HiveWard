@@ -178,7 +178,7 @@ test('business identity defaults to auto, preserves user names, and builds versi
     name: 'Legacy Placeholder',
     workspacePath: dir
   }
-  const expectedLogo = `/api/projects/${encodeURIComponent(business.id)}/logo?v=${Math.trunc((await stat(icon)).mtimeMs)}`
+  const expectedLogo = `/api/businesses/${encodeURIComponent(business.id)}/logo?v=${Math.trunc((await stat(icon)).mtimeMs)}`
   assert.deepEqual(await businessIdentity(business), {
     name: 'Detected Product',
     nameSource: 'auto',

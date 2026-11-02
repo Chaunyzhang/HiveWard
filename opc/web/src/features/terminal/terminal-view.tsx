@@ -33,6 +33,34 @@ const themeNow = () =>
 
 type Conn = 'connecting' | 'live' | 'reconnecting' | 'exited' | 'error'
 
+const FONT = 13
+const MIN_FONT = 7
+
+/** 只看时按引擎原来的行列显示：缩小字号把整屏装进窗口，不放大 */
+function fitByFont(t: Terminal, el: HTMLElement) {
+  const screen = el.querySelector<HTMLElement>('.xterm-screen')
+  if (!screen || el.clientWidth === 0 || el.clientHeight === 0) {
+    return
+  }
+  const { width, height } = screen.getBoundingClientRect()
+  if (width === 0 || height === 0) {
+    return
+  }
+  const size = t.options.fontSize ?? FONT
+  // 减掉容器的 ps-3 / pt-2 留白
+  const scale = Math.min(
+    (el.clientWidth - 16) / width,
+    (el.clientHeight - 12) / height
+  )
+  const next = Math.max(
+    MIN_FONT,
+    Math.min(FONT, Math.floor(size * scale * 2) / 2)
+  )
+  if (next !== size) {
+    t.options.fontSize = next
+  }
+}
+
 /**
  * 真终端：xterm.js 接后台的 WebSocket（/api/orca/terminals/:handle/stream）。
  * 连上先收一帧 snapshot 还原当前屏幕和滚动历史，之后是输出流；键盘输入、尺寸变化发回去。
@@ -67,7 +95,7 @@ export function TerminalView({
     }
     const t = new Terminal({
       fontFamily: '"SF Mono", Menlo, Monaco, monospace',
-      fontSize: 13,
+      fontSize: FONT,
       lineHeight: 1.2,
       cursorBlink: true,
       scrollback: 10_000,
@@ -128,9 +156,12 @@ export function TerminalView({
           if (claimed.current) {
             // 重连：之前接管过，照这个窗口的大小再报一次
             socket.send({ type: 'resize', cols: t.cols, rows: t.rows })
-          } else if (frame.cols !== t.cols || frame.rows !== t.rows) {
-            // 只看：按引擎的大小显示，全屏界面（Claude Code 等）才不会错行
-            t.resize(frame.cols, frame.rows)
+          } else {
+            // 只看：按引擎的大小显示，全屏界面（Claude Code 等）才不会错行；字号缩到装得下
+            if (frame.cols !== t.cols || frame.rows !== t.rows) {
+              t.resize(frame.cols, frame.rows)
+            }
+            requestAnimationFrame(() => fitByFont(t, el))
           }
           // 快照里可能有旧的终端查询（问光标位置等），xterm 会自动回话；回放期间的回话一律不发
           replaying = true
@@ -159,7 +190,8 @@ export function TerminalView({
         }
         claimed.current = true
         setOwned(true)
-        // 先按窗口排版（触发 onResize 发 resize），后台收到输入时按这个大小接管
+        // 先恢复字号、按窗口排版（触发 onResize 发 resize），后台收到输入时按这个大小接管
+        t.options.fontSize = FONT
         f.fit()
       }
       socket.send({ type: 'input', data })
@@ -201,8 +233,13 @@ export function TerminalView({
     const ro = new ResizeObserver(() => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
-        if (claimed.current && el.clientWidth > 0 && el.clientHeight > 0) {
+        if (el.clientWidth === 0 || el.clientHeight === 0) {
+          return
+        }
+        if (claimed.current) {
           fit.current?.fit()
+        } else if (term.current) {
+          fitByFont(term.current, el)
         }
       })
     })

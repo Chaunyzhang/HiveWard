@@ -1,3 +1,4 @@
+import { terminalCliParams } from './terminal-cli.mjs'
 // 直连本机 Orca 引擎（与 `orca` CLI 同一条路）：
 // 读 ~/Library/Application Support/OPC-Engine/opc-runtime.json 拿 unix socket + authToken，
 // 每行发一个 JSON { id, authToken, method, params }，回包同样按行、按 id 对应。
@@ -6,12 +7,10 @@ import { exitRegionGuard } from './agent-exit-region.mjs'
 import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { dataDir } from './data-dir.mjs'
 import { join } from 'node:path'
 
-let META_PATH =
-  process.env.ORCA_RUNTIME_META ??
-  join(homedir(), 'Library/Application Support/OPC-Engine/opc-runtime.json')
+let META_PATH = process.env.ORCA_RUNTIME_META ?? join(dataDir(), '..', 'opc-runtime.json')
 const TIMEOUT_MS = 15_000
 
 export class OrcaUnavailable extends Error {}
@@ -34,7 +33,7 @@ function open() {
   } catch {
     throw new OrcaUnavailable('读不到 Orca 运行时信息，Orca 没开？')
   }
-  const unix = meta?.transports?.find((t) => t.kind === 'unix')
+  const unix = meta?.transports?.find((t) => t.kind === 'unix' || t.kind === 'named-pipe')
   if (!unix || !meta.authToken) {
     throw new OrcaUnavailable('Orca 运行时信息不完整')
   }
@@ -86,6 +85,7 @@ function open() {
 /** 调一个 Orca RPC 方法；成功返回 result，失败抛错（带 Orca 的错误码）。 */
 export async function call(method, params) {
   if (method === 'terminal.create') {
+    params = terminalCliParams(params)
     await exitRegionGuard().beforeRpc(method, params)
   }
   if (!conn) {

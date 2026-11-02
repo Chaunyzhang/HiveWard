@@ -73,7 +73,7 @@ export interface BusinessSummary {
   name: string
   /** 名字来源：auto 从项目里认出来（productName / README 标题 / 目录名…），user 老板改过 */
   nameSource?: 'auto' | 'user'
-  /** 项目自己的 logo（/api/projects/:id/logo?v=…）；认不出时为空，网页画素色占位图标 */
+  /** 项目自己的 logo（/api/businesses/:id/logo?v=…）；认不出时为空，网页画素色占位图标 */
   logo?: string
   /** 旧数据里的 emoji 图标，已不再显示 */
   icon?: string
@@ -86,10 +86,55 @@ export interface BusinessSummary {
   kind?: 'git' | 'folder'
   /** 业务目录已不存在（记录保留，不删） */
   missing?: boolean
+  /** 旧版「一块业务一个负责人」：网页已不用，只为局域网里的旧版本电脑保留，之后删 */
   leader: LeaderSeat | null
+  /** 这块业务下的项目（含已归档），按创建时间排 */
+  projects: Project[]
   counts: BusinessCounts
   lastEvent?: TimelineEvent
   updatedAt: IsoTime
+}
+
+// ───────────── 业务里的项目 ─────────────
+
+/**
+ * 业务 = 登记的文件夹（视频、玉石、某个 App）。项目 = 业务下面由一个 Leader Agent 带的一条线：
+ * 视频业务里的一个选题、App 的「运营」「构建」、玉石的「后台监控」「SEO 优化」。
+ * 分几个项目由老板定，不套模板；一个项目只有一个 Leader Agent，Leader Agent 再派下属。
+ */
+export type Project = {
+  id: Id
+  businessId: Id
+  name: string
+  /** 项目在业务目录里的子目录（相对路径，如 "选题/AI 省钱"）；空 = 整个业务目录 */
+  dir?: string
+  /** 绝对路径 = 业务 workspacePath + dir；Leader Agent 在这里开 */
+  path: string
+  status: 'active' | 'archived'
+  /** 这个项目的 Leader Agent；还没开过为 null */
+  leader: ProjectLeader | null
+  counts: {
+    /** 还开着的下属 Agent */
+    workersLive: number
+    /** 派单总数 / 已汇报数（Leader Agent 和下属的派单都算） */
+    dispatches: number
+    dispatchesDone: number
+  }
+  createdAt: IsoTime
+  updatedAt: IsoTime
+}
+
+export type ProjectLeader = {
+  /** Leader Agent 所在终端（handle）；终端没了仍保留最后一个，liveness 为 exited */
+  terminal: string
+  agent: AgentKind
+  model?: string
+  liveness: Liveness
+  /** 手上的活走到哪了，同 TopologyNode.state */
+  state?: NodeState
+  /** 正在做什么（最近一条派单的第一行） */
+  activity?: string
+  startedAt: IsoTime
 }
 
 // ───────────── 目标 / 任务 / 下属 ─────────────
@@ -126,6 +171,7 @@ export interface TaskReport {
 
 export interface Task {
   id: Id
+  projectId?: Id
   businessId: Id
   objectiveId: Id
   runId: Id
@@ -139,8 +185,8 @@ export interface Task {
   report?: TaskReport
   /** ← task-list updated_at/completed_at，或 worker_done.created_at，最后回退任务 created_at（Orca 不提供其他更新时间）。 */
   updatedAt: IsoTime
-  /** 派单任务（opc new / tell）才有：谁派的 ← OPC 派单记录 data/dispatches.json */
-  /** owner = 老板在架构图的老板卡上直接派给总 Agent 的 */
+  /** 派单任务（hiwd new / tell）才有：谁派的 ← OPC 派单记录 data/dispatches.json */
+  /** owner = 老板在架构图的老板卡上直接派给 Leader Agent 的 */
   dispatchedBy?: {
     kind: 'claude-desktop' | 'claude-code' | 'grok' | 'cli' | 'owner'
     id: Id
@@ -150,7 +196,7 @@ export interface Task {
   project?: string
   /** 派单任务的终端还在时：它的 handle，点开能看实时输出 */
   terminal?: string
-  /** 派单任务没汇报完时又补充的话（opc tell），按先后 */
+  /** 派单任务没汇报完时又补充的话（hiwd tell），按先后 */
   followUps?: string[]
 }
 
@@ -236,6 +282,8 @@ export interface TimelineEvent {
   decisionId?: Id
   /** 项目目录（还没登记成项目的终端也能看出在哪） */
   path?: string
+  /** 属于业务里的哪个项目（能认出时） */
+  projectId?: Id
 }
 
 // ───────────── 指令 ─────────────
@@ -253,18 +301,22 @@ export interface Instruction {
 // ───────────── 组织示意图 ─────────────
 
 /**
- * 架构图像并联电路：每块业务一行的根是项目节点（kind: project，项目 = 引擎里的项目），
- * 项目 → 这块业务的总 Agent（leader）有两条并联的路——一条直连，一条经过这块业务自己的
- * Grok Bot（kind: grok，leader.via 指向它）；总 Agent 后面挂它的下属（worker）。
- * 不属于任何业务的派单目录也是一行（unregistered: true），只有直连，没有 Grok。
+ * 架构图：每块业务一组，根是业务节点（kind: business，id `business:<业务 id>`）。
+ * 业务 → 它的每个项目各一个 Leader Agent（kind: leader，带 projectId，label 是项目名），
+ * 业务到 Leader Agent 之间有这块业务的 Grok Bot 并联（kind: grok，leader.via 指向它）；Leader Agent 后面挂下属（worker）。
+ * 业务目录里开着、但不属于任何项目的 Agent，挂在一个 projectId 为空、label「未归项目」的 leader 下（没有就不出）。
+ * 不属于任何业务的派单目录也是一组（unregistered: true），只有直连，没有 Grok。
  */
 export interface TopologyNode {
   id: Id
-  kind: 'project' | 'owner' | 'grok' | 'leader' | 'worker'
+  /** project 是旧版的业务根节点，新版改叫 business；网页两种都认，等局域网里没有旧版本后删 */
+  kind: 'business' | 'project' | 'owner' | 'grok' | 'leader' | 'worker'
+  /** leader / worker：属于哪个项目 */
+  projectId?: Id
   /** owner 是旧版老板节点的兼容占位：3a 后台起 topology 不再返回它，后续由前端清理后移除 */
   /** 不是登记过的项目，只是有人在这个目录里派过活 */
   unregistered?: boolean
-  /** 树结构：project 无 parent（一行的根）；leader 的 parent 是 project；worker 的 parent 是 leader；grok 不在树里，由 leader.via 引用 */
+  /** 树结构：business 无 parent（一组的根）；leader 的 parent 是 business；worker 的 parent 是 leader；grok 不在树里，由 leader.via 引用 */
   parentId?: Id
   label: string
   sublabel?: string
@@ -279,7 +331,7 @@ export interface TopologyNode {
   dispatchId?: Id
   /** 对应的 Orca 终端 ← terminal.list: handle；有它就能在详情里看这个 Agent 的对话、直接说话 */
   terminal?: string
-  /** 总 Agent 是某个派单会话（比如在项目目录里开着的 Claude Code）时：它的派单方 id ← 派单记录 by.id，点开看它派出去的活 */
+  /** Leader Agent 是某个派单会话（比如在项目目录里开着的 Claude Code）时：它的派单方 id ← 派单记录 by.id，点开看它派出去的活 */
   dispatcher?: Id
   /** leader：和直连并联的那个 Grok Bot 节点的 id */
   via?: Id
@@ -287,6 +339,10 @@ export interface TopologyNode {
   project?: string
   /** 最近一次心跳 / 活动时间 */
   lastSeenAt?: IsoTime
+  /** Agent 开始干的时间：派单任务取派单时间，Leader Agent / 终端取 Agent 进程启动时间；卡片第三行「运行 X」 */
+  startedAt?: IsoTime
+  /** 派单任务交了汇报的时间；有它时卡片显示「用时 X」 */
+  finishedAt?: IsoTime
   /** 节点底部的一行指标，例如 ["任务 9/14", "待决定 1"] */
   stats?: string[]
   /** 需要老板注意（有待决定或负责人失联） */
@@ -350,6 +406,8 @@ export interface OrcaTerminal {
   connected: boolean
   writable: boolean
   lastOutputAt?: number
+  /** 前台 Agent 进程的启动时间 ← terminal.inspectProcess；不是 Agent 或查不到时省略 */
+  startedAt?: IsoTime
   /** 屏幕最后一行 */
   preview: string
 }
@@ -395,9 +453,13 @@ export interface OrcaCreateTerminalRequest {
   project: string
   /** 新开的 Agent 一律完全访问模式启动 */
   agent?: 'claude' | 'codex' | 'kimi'
+  /** 显式覆盖模型；Kimi 默认 kimi-code/k3.1-pro */
+  model?: string
   title?: string
-  /** leader：开出来当这一行的总 Agent，Claude Code 会带上总 Agent 的岗位说明 */
+  /** leader：开出来当这一行的 Leader Agent，Claude Code 会带上 Leader Agent 的岗位说明 */
   role?: 'leader'
+  /** 开在哪个项目里：终端在项目目录开，开出来的 Agent 归这个项目；role=leader 时成为这个项目的 Leader Agent */
+  projectId?: Id
 }
 
 /**
@@ -435,19 +497,50 @@ export interface CreateBusinessRequest {
   authority: string
 }
 
-/** 登记项目（= 业务）：目录必须存在，git / folder 自动判断 */
-export type CreateProjectRequest = {
+/** 登记业务：目录必须存在，git / folder 自动判断 */
+export type RegisterBusinessRequest = {
   path: string
   name?: string
 }
 
-/** 改项目 / 业务：项目名同步引擎 displayName */
-export type UpdateProjectRequest = {
+/** 改业务：名字同步引擎 displayName */
+export type UpdateBusinessRequest = {
   name?: string
   icon?: string
   status?: BusinessStatus
   leaderAgent?: AgentKind
   leaderModel?: string
+}
+
+/** 在业务里新建项目；带 agent 就顺手开它的 Leader Agent（出口地区不合规时项目照建，Leader Agent 不开，返回 leaderError） */
+export type CreateBusinessProjectRequest = {
+  name: string
+  /** 子目录（相对业务目录）；不存在就建 */
+  dir?: string
+  agent?: AgentKind
+  model?: string
+  /** 开出 Leader Agent 后发给它的第一句话 */
+  prompt?: string
+}
+
+export type CreateBusinessProjectResponse = {
+  project: Project
+  /** 带了 agent 但没开成（比如 exit_region_blocked）时的原因 */
+  leaderError?: { code: string; message: string }
+}
+
+/** 改项目：改名、归档 / 恢复（归档不关终端） */
+export type UpdateBusinessProjectRequest = {
+  name?: string
+  status?: 'active' | 'archived'
+}
+
+/** 给项目开 Leader Agent：已有活着的 Leader Agent 时，不带 replace 就只把 prompt 发给它；replace=true 另开一个顶替（旧的不关） */
+export type LaunchProjectLeaderRequest = {
+  agent: AgentKind
+  model?: string
+  prompt?: string
+  replace?: boolean
 }
 
 export interface CreateObjectiveRequest {
@@ -555,6 +648,12 @@ export interface Machine {
   lastSeenAt?: IsoTime
   /** 对方的 OPC 版本 */
   version?: string
+  /** 成员通道已加密并核对过证书指纹；本机表示已启用 TLS；未配对或旧成员为 false */
+  secure?: boolean
+  /** TLS 指纹变化、旧成员需要重入或连接错误；不得静默回退 HTTP */
+  error?: { code: string; message: string }
+  /** 系统：darwin / win32 / linux */
+  platform?: string
   /** 在线时顺带取的概况，离线或没配对时为空 */
   summary?: {
     orcaReachable: boolean
@@ -579,6 +678,8 @@ export type MachineInvitation = {
   machine: { id: Id; name: string; address: string; user?: string }
   organization: { id: Id; name: string }
   expiresAt: IsoTime
+  /** 6 位确认码：双方证书指纹、邀请 id、双方随机数的 SHA-256 派生；先提交摘要再揭示，必须在两台屏幕核对后同意 */
+  verifyCode: string
 }
 
 /** 移出/退出的持久通知，保留最近 50 条；网页按 id 去重展示。 */
@@ -628,12 +729,152 @@ export type MachineRemovalResponse = {
 // POST /api/machines/:id/rename，{name} → {ok:true}（本地显示名）。
 // 配对码及旧 pair/unpair 路由已删除；旧 peers.json 凭据原样保留并迁移组织。
 
+// ───────────── 跨电脑文件 ─────────────
+
+/**
+ * 每台电脑只开放自己设定的「共享目录」给组织里的电脑和本机 Agent 读写。
+ * 路径一律用目标电脑自己的格式（Windows 是 D:\\视频\\a.mp4），由目标电脑校验：
+ * 绝对路径、不准 ..、先解析软链 / junction 再判断必须落在共享目录里；隐藏目录和系统目录不列。
+ * 别的电脑经 /api/m/<机器>/files/… 访问，只走加密且核对过证书的组织通道（Machine.secure），明文一律拒绝。
+ */
+export type FileRoot = {
+  id: Id
+  /** 显示名：业务名、收件箱、下载、D 盘… */
+  label: string
+  path: string
+  kind: 'business' | 'inbox' | 'home' | 'drive' | 'custom'
+  /** 别的电脑能不能往里写 */
+  writable: boolean
+}
+
+export type FileEntry = {
+  name: string
+  /** 目标电脑格式的绝对路径 */
+  path: string
+  type: 'file' | 'dir'
+  /** 文件字节数；目录为空 */
+  size?: number
+  modifiedAt: IsoTime
+}
+
+/** GET /api/files/roots */
+export type FileRootsResponse = {
+  roots: FileRoot[]
+  /** 别人推过来、没指定目录时落在这里 */
+  inbox: string
+  /** 目标电脑的系统，网页按它拼路径分隔符 */
+  platform: string
+  /** 单个文件上限（字节） */
+  maxBytes: number
+}
+
+/** GET /api/files/list?path= ：只列一层，目录在前，按名字排；超过上限截断 */
+export type FileListResponse = {
+  path: string
+  /** 上一级（还在共享目录里时）；到共享目录根为 null */
+  parent: string | null
+  entries: FileEntry[]
+  truncated: boolean
+}
+
+/**
+ * GET /api/files/read?path= ：原样返回文件内容（流式，支持 Range），content-disposition 带文件名。
+ * POST /api/files/write?path=<目标文件>&overwrite=0|1 ：请求体是文件原始字节（流式），父目录不存在就建；
+ *   已存在且 overwrite=0 → 409 file_exists。不带 path 时写进收件箱（文件名用 x-opc-filename 头）。
+ * POST /api/files/mkdir { path } → { path }
+ */
+export type FileWriteResponse = {
+  path: string
+  size: number
+}
+
+/** GET / POST /api/files/settings：本机共享哪些目录；只能在本机改，别的电脑来改一律 403 */
+export type FileShareSettings = {
+  /** 额外共享的目录（业务目录和收件箱默认共享，不用列） */
+  roots: { path: string; label?: string; writable: boolean }[]
+  /** 收件箱位置；默认 ~/HiveWard 收件箱 */
+  inbox: string
+  /** 别的电脑上的 Agent 往这台写：只能写收件箱 / 共享目录都能写 / 不准写 */
+  agentWrite: 'inbox' | 'roots' | 'none'
+}
+
+// ───────────── 跨电脑剪贴板 ─────────────
+
+/**
+ * 一台复制、另一台粘贴：组织里打开了同步的电脑之间互相推剪贴板（文字、图片、文件）。
+ * 两边都要打开才生效；只走加密通道；密码管理器标成隐藏 / 临时的内容一律不推；
+ * 剪贴板内容不写进时间线和日志，只记「从哪台收到了什么类型」。
+ */
+export type ClipboardSettings = {
+  /** 默认关 */
+  enabled: boolean
+  /** 复制的文件总大小不超过这个就直接传过去放进对方剪贴板；超过只提醒去「文件」里收 */
+  maxFileBytes: number
+}
+
+export type ClipboardEvent = {
+  direction: 'sent' | 'received'
+  machine: { id: Id; name: string }
+  kind: 'text' | 'image' | 'files'
+  /** 文件个数 */
+  count?: number
+  bytes?: number
+  at: IsoTime
+  /** 没同步的原因：隐藏内容 / 文件太大 / 对方没开 / 通道没加密… */
+  skipped?: string
+}
+
+/** GET /api/clipboard */
+export type ClipboardStatus = {
+  settings: ClipboardSettings
+  /** 最近 20 条，新的在前 */
+  recent: ClipboardEvent[]
+}
+
+/** 成员间 POST /api/clipboard/push；只允许 TLS 认证成员调用，origin 必须等于已认证成员 id */
+export type ClipboardPush = {
+  /** 接收去重及防回声用的随机事件 id */
+  eventId: Id
+  origin: Id
+} & (
+  | { kind: 'text'; text: string; html?: string; rtf?: string }
+  | { kind: 'image'; /** PNG 字节的 base64；不进入 recent、日志或时间线 */ png: string }
+)
+
+export type ClipboardFileEntry = {
+  /** 以 / 分隔的相对路径；禁止绝对路径、..、隐藏项和反斜杠 */
+  path: string
+  type: 'file' | 'directory'
+  /** type=file 时必填；目录不传 */
+  size?: number
+}
+
+/** 成员间 POST /api/clipboard/files：先建会话，再逐项目流式上传，最后 commit */
+export type ClipboardFileManifest = {
+  eventId: Id
+  origin: Id
+  kind: 'files'
+  /** 顶层文件/目录数量 */
+  count: number
+  totalBytes: number
+  entries: ClipboardFileEntry[]
+}
+
+/** 文件超限时只发这个提醒，绝不发送文件清单或正文 */
+export type ClipboardNotice = {
+  eventId: Id
+  origin: Id
+  kind: 'files'
+  reason: 'files_too_large'
+  count: number
+  bytes: number
+}
+
 // ───────────── 路由表 ─────────────
 
 export const endpoints = {
   overview: { method: 'GET', path: '/api/overview' },
   businessDetail: { method: 'GET', path: '/api/businesses/:id' },
-  leaderScreen: { method: 'GET', path: '/api/businesses/:id/leader/screen' },
   workerScreen: { method: 'GET', path: '/api/workers/:dispatchId/screen' },
   orcaTerminals: { method: 'GET', path: '/api/orca/terminals' },
   orcaProjects: { method: 'GET', path: '/api/orca/projects' },
@@ -642,18 +883,20 @@ export const endpoints = {
   orcaSend: { method: 'POST', path: '/api/orca/terminals/:handle/send' },
   orcaCreate: { method: 'POST', path: '/api/orca/terminals' },
   orcaClose: { method: 'POST', path: '/api/orca/terminals/:handle/close' },
-  createBusiness: { method: 'POST', path: '/api/businesses' }, // 旧接口，同 POST /api/projects
-  createProject: { method: 'POST', path: '/api/projects' }, // CreateProjectRequest → { business }
-  updateProject: { method: 'PATCH', path: '/api/projects/:id' }, // UpdateProjectRequest → { business }
-  projectLogo: { method: 'GET', path: '/api/projects/:id/logo' }, // ?v=<logo 文件 mtime>，二进制图片
-  deleteProject: { method: 'DELETE', path: '/api/projects/:id' }, // 从引擎移除项目（不删磁盘文件），记录标 removedAt
-  launchLeader: { method: 'POST', path: '/api/businesses/:id/leader' },
+  registerBusiness: { method: 'POST', path: '/api/businesses' }, // RegisterBusinessRequest → { business }
+  updateBusiness: { method: 'PATCH', path: '/api/businesses/:id' }, // UpdateBusinessRequest → { business }
+  businessLogo: { method: 'GET', path: '/api/businesses/:id/logo' }, // ?v=<logo 文件 mtime>，二进制图片
+  deleteBusiness: { method: 'DELETE', path: '/api/businesses/:id' }, // 从引擎移除（不删磁盘文件），记录标 removedAt
+  businessProjects: { method: 'GET', path: '/api/businesses/:id/projects' }, // → { projects: Project[] }
+  createBusinessProject: { method: 'POST', path: '/api/businesses/:id/projects' }, // CreateBusinessProjectRequest → CreateBusinessProjectResponse
+  updateBusinessProject: { method: 'PATCH', path: '/api/businesses/:id/projects/:projectId' }, // UpdateBusinessProjectRequest → { project }
+  launchProjectLeader: { method: 'POST', path: '/api/businesses/:id/projects/:projectId/leader' }, // LaunchProjectLeaderRequest → { project, terminal }
   createObjective: { method: 'POST', path: '/api/businesses/:id/objectives' },
   sendInstruction: { method: 'POST', path: '/api/businesses/:id/instructions' },
   decisions: { method: 'GET', path: '/api/decisions' }, // ?state=pending
   resolveDecision: { method: 'POST', path: '/api/decisions/:id/resolve' },
-  timeline: { method: 'GET', path: '/api/timeline' }, // ?businessId=&cursor=&limit= → Page<TimelineEvent>
-  tasks: { method: 'GET', path: '/api/tasks' }, // ?businessId=&status=（不传为全部业务，含已完成任务的汇报）
+  timeline: { method: 'GET', path: '/api/timeline' }, // ?businessId=&projectId=&cursor=&limit= → Page<TimelineEvent>
+  tasks: { method: 'GET', path: '/api/tasks' }, // ?businessId=&projectId=&status=（不传为全部业务，含已完成任务的汇报）
   topology: { method: 'GET', path: '/api/topology' }, // ?businessId=（不传为公司级：老板 → 全部负责人 → 全部在岗下属）
   events: { method: 'GET', path: '/api/events' }, // SSE
   machines: { method: 'GET', path: '/api/machines' },
@@ -669,5 +912,19 @@ export const endpoints = {
   renameOrganization: { method: 'POST', path: '/api/machines/organization/rename' },
   renameMachine: { method: 'POST', path: '/api/machines/:id/rename' }, // { name }
   removeMachine: { method: 'POST', path: '/api/machines/:id/remove' },
+  fileRoots: { method: 'GET', path: '/api/files/roots' }, // → FileRootsResponse
+  fileList: { method: 'GET', path: '/api/files/list' }, // ?path= → FileListResponse
+  fileRead: { method: 'GET', path: '/api/files/read' }, // ?path= → 文件字节（Range）
+  fileWrite: { method: 'POST', path: '/api/files/write' }, // ?path=&overwrite= 原始字节 → FileWriteResponse
+  fileMkdir: { method: 'POST', path: '/api/files/mkdir' }, // { path } → { path }
+  fileSettings: { method: 'GET', path: '/api/files/settings' }, // → FileShareSettings（POST 同形状改，只限本机）
+  clipboard: { method: 'GET', path: '/api/clipboard' }, // → ClipboardStatus
+  clipboardSettings: { method: 'POST', path: '/api/clipboard/settings' }, // ClipboardSettings → ClipboardStatus（只限本机）
+  clipboardPush: { method: 'POST', path: '/api/clipboard/push' }, // 成员间：ClipboardPush
+  clipboardNotice: { method: 'POST', path: '/api/clipboard/notice' }, // 成员间：ClipboardNotice
+  clipboardFiles: { method: 'POST', path: '/api/clipboard/files' }, // 成员间：ClipboardFileManifest
+  clipboardFileEntry: { method: 'POST', path: '/api/clipboard/files/:eventId/entry?index=' }, // 成员间：原始文件字节
+  clipboardFileDirectory: { method: 'POST', path: '/api/clipboard/files/:eventId/directory?index=' }, // 成员间：建空目录
+  clipboardFileCommit: { method: 'POST', path: '/api/clipboard/files/:eventId/commit' }, // 成员间：完整后原子应用
   onMachine: { method: 'ANY', path: '/api/m/:machineId/*' } // 转发到那台电脑的 /api/*
 } as const

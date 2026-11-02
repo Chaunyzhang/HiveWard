@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto'
+import { tlsJson } from './lan-tls.mjs'
+import { nonceCommitment } from './lan-invitation-verification.mjs'
+import { loadLanCertificate } from './lan-certificate.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
@@ -8,6 +12,8 @@ import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { createOrganization } from './lan-organization.mjs'
 
+const fingerprint = (id) => createHash('sha256').update(id).digest('hex')
+const socketFor = (id) => ({ encrypted: true, remoteAddress: '127.0.0.1', getPeerCertificate: () => ({ raw: Buffer.from(id) }) })
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 async function api(port, path = '/api/machines', body) {
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
@@ -97,7 +103,7 @@ test(
         if (child.exitCode !== null) {
           throw new Error(output)
         }
-        if (output.includes('orca-bridge on')) {
+        if (output.includes('bridge on')) {
           return dir
         }
         await pause(50)
@@ -131,7 +137,7 @@ test(
         await api(18817, `/api/machines/invitations/${rejected.data.id}/reject`, {})
       )
       assert.equal((await api(18807)).data.invitations[0].status, 'rejected')
-      assert.equal((await api(18818, '/api/overview')).status, 401)
+      assert.equal((await api(18818, '/api/overview')).status, 403)
       const cancelled = await api(18807, '/api/machines/invite', { address: '127.0.0.1:18818' })
       assert.equal(
         (await api(18807, `/api/machines/invitations/${cancelled.data.id}/cancel`, {})).status,
@@ -205,8 +211,10 @@ test(
           headers: { authorization: `Bearer ${token}` }
         })
         log(`GET ${port} overview with revoked credential`, { status: response.status })
-        assert.equal(response.status, 401)
+        assert.equal(response.status, 403)
       }
+      const bHello = await (await fetch('http://127.0.0.1:18818/lan/hello')).json()
+      await assert.rejects(tlsJson(loadLanCertificate(aDir), { address: '127.0.0.1:18818', ...bHello }, '/api/overview', { token: staleA }), { status: 401 })
       assert.equal((await api(18807, '/api/m/B/api/overview')).status, 404)
       const leave = await api(18827, '/api/machines/organization/leave', {})
       log('POST C leave', leave)
@@ -237,7 +245,15 @@ test(
         oldB = await api(18847)
       log('GET migrated A /api/machines', oldA)
       log('GET migrated B /api/machines', oldB)
-      assert.equal(oldA.data.organization.id, oldB.data.organization.id)
+      assert.equal(oldA.data.organization, null)
+      assert.equal(oldB.data.organization, null)
+      assert.equal(oldA.data.machines.find((m) => m.id === 'legacy-B').secure, false)
+      assert.equal((await api(18837, '/api/m/legacy-B/api/overview')).data.error.code, 'tls_rejoin_required')
+      await api(18837, '/api/machines/legacy-B/remove', {})
+      await api(18847, '/api/machines/legacy-A/remove', {})
+      const rejoin = await api(18837, '/api/machines/invite', { address: '127.0.0.1:18848' })
+      assert.equal(rejoin.status, 200)
+      assert.equal((await api(18847, `/api/machines/invitations/${rejoin.data.id}/accept`, {})).status, 200)
       assert.equal((await api(18837, '/api/m/legacy-B/api/overview')).status, 200)
       assert.equal((await api(18807, '/api/machines/pair-code', {})).status, 404)
       assert.equal((await api(18807, '/api/machines/pair', {})).status, 404)
@@ -281,16 +297,21 @@ test('expiry, flood limiting and invalid consent never grant credentials', async
     now: () => clock,
     ttl: 1000
   })
-  const req = { socket: { remoteAddress: '127.0.0.1' } }
+  const req = { socket: socketFor('A') }
   const body = (n) => ({
     id: `inv-${n}`,
-    machine: { id: 'A', name: 'A', user: 'tester', port: 18808 },
+    machine: { id: 'A', name: 'A', user: 'tester', port: 18808, tlsPort: 18809 },
+    commitment: nonceCommitment('d'.repeat(64)),
     organization: { id: 'org', name: 'Test' },
     capability: 'a'.repeat(64),
     expires: clock + 1000
   })
   try {
     await org.receive(req, '/lan/invitations', body(1))
+    await assert.rejects(org.receive(req, '/lan/invitations/inv-1/verify', {
+      capability: 'a'.repeat(64), nonce: 'e'.repeat(64)
+    }), { code: 'invalid_commitment' })
+
     clock += 1001
     await assert.rejects(org.action('inv-1', 'accept'), { code: 'invite_expired' })
     log('advance injected clock; POST expired accept', {
@@ -353,6 +374,7 @@ test('offline membership and removal deliveries survive restart', { timeout: 800
       id: 'B',
       name: 'B',
       address: '127.0.0.1:18818',
+      fingerprint: fingerprint('B'), tlsPort: 18819,
       inboundToken: 'b'.repeat(64),
       outboundToken: 'a'.repeat(64)
     }
@@ -363,6 +385,7 @@ test('offline membership and removal deliveries survive restart', { timeout: 800
   const options = {
     machine: { id: 'A', name: 'A' },
     lanPort: 18808,
+    identity: () => ({ fingerprint: fingerprint('A'), tlsPort: 18809 }),
     read: () => structuredClone(stored),
     save: (_file, value) => {
       stored = structuredClone(value)
@@ -374,11 +397,14 @@ test('offline membership and removal deliveries survive restart', { timeout: 800
     },
     remote: async (_address, path, options) => {
       if (path === '/lan/hello') {
-        return { id: 'C', name: 'C' }
+        return { id: 'C', name: 'C', fingerprint: fingerprint('C'), tlsPort: 18829 }
       }
       if (path === '/lan/invitations') {
         invitation = options.body
-        return {}
+        return { nonce: 'e'.repeat(64) }
+      }
+      if (path.endsWith('/verify')) {
+        return { ok: true }
       }
       if (!online) {
         throw new Error('offline')
@@ -390,7 +416,7 @@ test('offline membership and removal deliveries survive restart', { timeout: 800
   let org = createOrganization(options)
   try {
     const invite = await org.invite('127.0.0.1:18828')
-    await org.receive({ headers: {} }, `/lan/invitations/${invite.id}/decision`, {
+    await org.receive({ headers: {}, socket: socketFor('C') }, `/lan/invitations/${invite.id}/decision`, {
       capability: invitation.capability,
       accept: true,
       token: 'c'.repeat(64)

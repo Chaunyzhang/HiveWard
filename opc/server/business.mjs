@@ -1,3 +1,4 @@
+import { pathKey } from './workspace-path.mjs'
 import { dataDir } from './data-dir.mjs'
 // OPC owns registration only. Runtime activity always comes from Orca.
 import { homedir } from 'node:os'
@@ -14,7 +15,7 @@ export function workspacePath(value) {
     throw badRequest('workspacePath 不能为空')
   }
   const path =
-    value === '~' ? homedir() : value.startsWith('~/') ? join(homedir(), value.slice(2)) : value
+    value === '~' ? homedir() : /^~[/\\]/.test(value) ? join(homedir(), value.slice(2)) : value
   if (!isAbsolute(path)) {
     throw badRequest('workspacePath 必须是绝对路径或 ~/ 路径')
   }
@@ -23,10 +24,11 @@ export function workspacePath(value) {
 /** 引擎落库的路径都是 realpath（/tmp 是 /private/tmp 的软链），比较前先归一 */
 export function canonicalPath(path) {
   try {
-    return realpathSync(path)
+    path = realpathSync(path)
   } catch {
-    return path
+    // Missing paths still need consistent Windows comparison.
   }
+  return pathKey(path)
 }
 export function businesses() {
   try {
@@ -83,7 +85,7 @@ export function updateBusiness(id, patch) {
 }
 export function registerBusiness(body) {
   const rows = businesses()
-  if (rows.some((b) => b.workspacePath === body.workspacePath)) {
+  if (rows.some((b) => canonicalPath(b.workspacePath) === canonicalPath(body.workspacePath))) {
     throw apiError(409, 'business_exists', '此目录已登记业务')
   }
   const row = {

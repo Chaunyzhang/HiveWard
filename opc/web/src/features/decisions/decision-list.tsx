@@ -245,8 +245,8 @@ function Actions({
           onChange={(e) => setReply(e.target.value)}
           placeholder={
             compact
-              ? '回复负责人…'
-              : '回复负责人：点选项时一起带上，或点「自定义」单独发送'
+              ? '回复 Leader Agent…'
+              : '回复 Leader Agent：点选项时一起带上，或点「自定义」单独发送'
           }
           rows={compact ? 1 : 3}
           className='min-h-8 flex-1 resize-none py-1.5 text-xs md:text-xs'

@@ -22,6 +22,7 @@ import { Route as AuthenticatedTimelineIndexRouteImport } from './routes/_authen
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
 import { Route as AuthenticatedMachinesIndexRouteImport } from './routes/_authenticated/machines/index'
 import { Route as AuthenticatedLiveIndexRouteImport } from './routes/_authenticated/live/index'
+import { Route as AuthenticatedFilesIndexRouteImport } from './routes/_authenticated/files/index'
 import { Route as AuthenticatedBrowserIndexRouteImport } from './routes/_authenticated/browser/index'
 import { Route as AuthenticatedSettingsAppearanceRouteImport } from './routes/_authenticated/settings/appearance'
 import { Route as AuthenticatedBBusinessIdRouteImport } from './routes/_authenticated/b/$businessId'
@@ -94,6 +95,11 @@ const AuthenticatedLiveIndexRoute = AuthenticatedLiveIndexRouteImport.update({
   path: '/live/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedFilesIndexRoute = AuthenticatedFilesIndexRouteImport.update({
+  id: '/files/',
+  path: '/files/',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedBrowserIndexRoute =
   AuthenticatedBrowserIndexRouteImport.update({
     id: '/browser/',
@@ -125,6 +131,7 @@ export interface FileRoutesByFullPath {
   '/b/$businessId': typeof AuthenticatedBBusinessIdRoute
   '/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
   '/browser/': typeof AuthenticatedBrowserIndexRoute
+  '/files/': typeof AuthenticatedFilesIndexRoute
   '/live/': typeof AuthenticatedLiveIndexRoute
   '/machines/': typeof AuthenticatedMachinesIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
@@ -141,6 +148,7 @@ export interface FileRoutesByTo {
   '/b/$businessId': typeof AuthenticatedBBusinessIdRoute
   '/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
   '/browser': typeof AuthenticatedBrowserIndexRoute
+  '/files': typeof AuthenticatedFilesIndexRoute
   '/live': typeof AuthenticatedLiveIndexRoute
   '/machines': typeof AuthenticatedMachinesIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
@@ -160,6 +168,7 @@ export interface FileRoutesById {
   '/_authenticated/b/$businessId': typeof AuthenticatedBBusinessIdRoute
   '/_authenticated/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
   '/_authenticated/browser/': typeof AuthenticatedBrowserIndexRoute
+  '/_authenticated/files/': typeof AuthenticatedFilesIndexRoute
   '/_authenticated/live/': typeof AuthenticatedLiveIndexRoute
   '/_authenticated/machines/': typeof AuthenticatedMachinesIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
@@ -179,6 +188,7 @@ export interface FileRouteTypes {
     | '/b/$businessId'
     | '/settings/appearance'
     | '/browser/'
+    | '/files/'
     | '/live/'
     | '/machines/'
     | '/settings/'
@@ -195,6 +205,7 @@ export interface FileRouteTypes {
     | '/b/$businessId'
     | '/settings/appearance'
     | '/browser'
+    | '/files'
     | '/live'
     | '/machines'
     | '/settings'
@@ -213,6 +224,7 @@ export interface FileRouteTypes {
     | '/_authenticated/b/$businessId'
     | '/_authenticated/settings/appearance'
     | '/_authenticated/browser/'
+    | '/_authenticated/files/'
     | '/_authenticated/live/'
     | '/_authenticated/machines/'
     | '/_authenticated/settings/'
@@ -321,6 +333,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedLiveIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/files/': {
+      id: '/_authenticated/files/'
+      path: '/files'
+      fullPath: '/files/'
+      preLoaderRoute: typeof AuthenticatedFilesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/browser/': {
       id: '/_authenticated/browser/'
       path: '/browser'
@@ -367,6 +386,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedBBusinessIdRoute: typeof AuthenticatedBBusinessIdRoute
   AuthenticatedBrowserIndexRoute: typeof AuthenticatedBrowserIndexRoute
+  AuthenticatedFilesIndexRoute: typeof AuthenticatedFilesIndexRoute
   AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
   AuthenticatedMachinesIndexRoute: typeof AuthenticatedMachinesIndexRoute
   AuthenticatedTimelineIndexRoute: typeof AuthenticatedTimelineIndexRoute
@@ -378,6 +398,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedBBusinessIdRoute: AuthenticatedBBusinessIdRoute,
   AuthenticatedBrowserIndexRoute: AuthenticatedBrowserIndexRoute,
+  AuthenticatedFilesIndexRoute: AuthenticatedFilesIndexRoute,
   AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
   AuthenticatedMachinesIndexRoute: AuthenticatedMachinesIndexRoute,
   AuthenticatedTimelineIndexRoute: AuthenticatedTimelineIndexRoute,

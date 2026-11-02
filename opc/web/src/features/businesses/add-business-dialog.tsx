@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { FolderOpen, LoaderCircle } from 'lucide-react'
 import { desktop } from '@/lib/desktop'
 import { useMachineId } from '@/lib/machine'
-import { useAddProject } from '@/lib/opc-api'
+import { useRegisterBusiness } from '@/lib/opc-api'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -16,10 +16,10 @@ import {
 import { Input } from '@/components/ui/input'
 
 /**
- * 加项目：选一个目录（git 仓库或普通文件夹都行），它就成了一块业务，有自己的总 Agent。
+ * 加业务：选一个目录（git 仓库或普通文件夹都行），它就成了一块业务，业务下面再分项目。
  * 在 HiveWard App 里看本机时可以用系统的选目录框；看别的电脑时只能手填那台电脑上的路径。
  */
-export function AddProjectDialog({
+export function AddBusinessDialog({
   open,
   onOpenChange,
 }: {
@@ -28,7 +28,7 @@ export function AddProjectDialog({
 }) {
   const [path, setPath] = useState('')
   const [name, setName] = useState('')
-  const add = useAddProject()
+  const add = useRegisterBusiness()
   const navigate = useNavigate()
   const remote = useMachineId() !== null
   const pick = !remote ? desktop?.pickFolder : undefined
@@ -67,10 +67,11 @@ export function AddProjectDialog({
       <DialogContent className='sm:max-w-md'>
         <form onSubmit={submit} className='grid gap-4'>
           <DialogHeader>
-            <DialogTitle>加项目</DialogTitle>
+            <DialogTitle>加业务</DialogTitle>
             <DialogDescription>
               选一个目录，git
-              仓库或普通文件夹都行。每个项目就是一块业务，有自己的总 Agent。
+              仓库或普通文件夹都行。一个目录就是一块业务，业务下面再分项目，每个项目一个总
+              Agent。
             </DialogDescription>
           </DialogHeader>
           <div className='grid gap-1.5'>
@@ -86,7 +87,7 @@ export function AddProjectDialog({
                   setPath(e.target.value)
                   add.reset()
                 }}
-                placeholder='/Users/你/Projects/某个项目'
+                placeholder='/Users/你/Projects/某个目录'
                 className='font-mono text-xs'
               />
               {pick && (
@@ -111,7 +112,7 @@ export function AddProjectDialog({
             <label htmlFor='project-name' className='text-xs font-medium'>
               名字{' '}
               <span className='text-muted-foreground'>
-                （可不填，默认用项目自己的名字）
+                （可不填，默认用目录里认出来的名字）
               </span>
             </label>
             <Input
@@ -130,7 +131,7 @@ export function AddProjectDialog({
             </Button>
             <Button type='submit' disabled={!path.trim() || add.isPending}>
               {add.isPending && <LoaderCircle className='animate-spin' />}
-              加为项目
+              加为业务
             </Button>
           </DialogFooter>
         </form>

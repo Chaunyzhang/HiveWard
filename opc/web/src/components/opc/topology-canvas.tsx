@@ -19,12 +19,14 @@ import {
   agentStatusStyle,
   livenessStyle,
   type AgentStatus,
+  duration,
   timeAgo,
 } from '@/lib/opc-format'
 import { useOrcaTerminals } from '@/lib/orca-live'
 import { cn } from '@/lib/utils'
 import { useSettledStatus } from '@/hooks/use-settled-status'
 import { AgentLogo } from './agent-logo'
+import { GrokBotAvatar } from './grokbot-avatar'
 import { ProjectLogo } from './project-logo'
 
 /** 一台电脑和它的架构节点；id 为 null 是本机 */
@@ -37,10 +39,11 @@ export type MachineGroup = {
 /**
  * Agent 架构图：可拖动、可缩放的点阵画布。
  *   电脑（局域网里几台就并排几列）
- *    └ 每个项目（= 一块业务）一行：[项目] ──直线── [总 Agent] → 下属
- *                                  ╰─ Grok Bot ─╯  像并联的灯泡，从直线上分出去再接回来
- * 没登记成项目、但有人在里面派过活的目录也是一行，只有直线、没有 Grok。
- * 点项目进项目页（在那儿派活）；点 Grok 灯泡、总 Agent、下属打开详情（终端画面、任务、汇报）。
+ *    └ 每块业务一组：[业务] ──直线──┬ [项目 A] → [Leader Agent] → 下属
+ *                      ╰ Grok Bot ╯ └ [项目 B] → [Leader Agent] → 下属
+ *      Grok Bot 像并联的灯泡，从直线上分出去再接回来；一个项目一个 Leader Agent。
+ * 没登记成业务、但有人在里面派过活的目录也是一组，只有直线、没有 Grok。
+ * 点业务进业务页；点 Grok 灯泡、Leader Agent、下属打开详情（终端画面、任务、汇报）。
  * 每台电脑那一列包在 MachineScope 里，开详情都直接发到那台电脑。
  */
 export function TopologyCanvas({
@@ -78,29 +81,55 @@ function MachineColumn({
 }: NodeProps & { group: MachineGroup }) {
   const childrenOf = (id: string) => nodes.filter((n) => n.parentId === id)
   const byId = (id?: string) => nodes.find((n) => n.id === id)
-  const rows = nodes.filter((n) => n.kind === 'leader')
+  // 每块业务一组：根是业务节点（旧版后台叫 project），下面并排它的各个项目
+  const roots = nodes.filter(
+    (n) => (n.kind === 'business' || n.kind === 'project') && !n.parentId
+  )
   return (
     <div>
       <ComputerCard machine={machine} />
-      {rows.length > 0 ? (
+      {roots.length > 0 ? (
         <ul className='vtree'>
-          {rows.map((row) => (
-            <li key={row.id}>
-              <ProjectCard
-                row={row}
-                root={byId(row.parentId)}
-                machine={machineId === null ? null : (machine ?? null)}
-              />
-              <Wire grok={byId(row.via)} {...open} />
-              <ul className='htree'>
-                <Branch node={row} childrenOf={childrenOf} {...open} />
-              </ul>
-            </li>
-          ))}
+          {roots.map((root) => {
+            const leaders = childrenOf(root.id).filter(
+              (n) => n.kind === 'leader'
+            )
+            return (
+              <li key={root.id}>
+                <BusinessCard
+                  root={root}
+                  machine={machineId === null ? null : (machine ?? null)}
+                />
+                <Wire grok={byId(leaders.find((n) => n.via)?.via)} {...open} />
+                <div className='htree'>
+                  <ul className='ms-0'>
+                    {leaders.map((n) =>
+                      n.projectId || isUnassigned(n) ? (
+                        <ProjectBranch
+                          key={n.id}
+                          leader={n}
+                          root={root}
+                          childrenOf={childrenOf}
+                          {...open}
+                        />
+                      ) : (
+                        <Branch
+                          key={n.id}
+                          node={n}
+                          childrenOf={childrenOf}
+                          {...open}
+                        />
+                      )
+                    )}
+                  </ul>
+                </div>
+              </li>
+            )
+          })}
         </ul>
       ) : (
         <p className='ms-7 pt-6 text-[13px] text-muted-foreground'>
-          还没有项目，在左边「项目」旁边点 + 加一个。
+          还没有业务，在左边「业务」旁边点 + 加一个。
         </p>
       )}
     </div>
@@ -319,29 +348,22 @@ function ComputerCard({ machine }: { machine?: Machine }) {
   )
 }
 
-/**
- * 项目卡：每个项目（= 一块业务）一张，写着项目名和目录，点进去是项目页（在那儿给总 Agent 派活）。
- * 旧版后台还没有项目节点时，用总 Agent 这一行自己的业务名和目录。
- */
-function ProjectCard({
-  row,
+/** 业务卡：每块业务一张，写着业务名和目录，点进去是业务页（在那儿建项目、看终端）。 */
+function BusinessCard({
   root,
   machine,
 }: {
-  row: TopologyNode
-  root?: TopologyNode
+  root: TopologyNode
   /** 这一列是哪台电脑；null 为本机 */
   machine: Machine | null
 }) {
   const navigate = useNavigate()
   const switchTo = useSwitchMachine()
-  const project = root?.kind === 'project' ? root : undefined
-  const label = project?.label ?? row.label
-  const path = project?.project ?? row.project
-  const businessId = project?.businessId ?? row.businessId
-  const unregistered = project ? !!project.unregistered : !row.businessId
+  const path = root.project
+  const businessId = root.businessId
+  const unregistered = !!root.unregistered
   const Icon = unregistered ? FolderOpen : FolderGit2
-  // 登记过的项目画它自己的 logo（到它所在那台电脑的概况里找）
+  // 登记过的业务画它自己的 logo（到它所在那台电脑的概况里找）
   const machineId = machine && !machine.self ? machine.id : null
   const { data } = useQuery({
     ...overviewQuery(machineId),
@@ -357,7 +379,7 @@ function ProjectCard({
         ) : (
           <Icon className='size-3.5 shrink-0 text-muted-foreground' />
         )}
-        <p className='truncate text-sm font-medium'>{label}</p>
+        <p className='truncate text-sm font-medium'>{root.label}</p>
         {businessId && (
           <ChevronRight className='ms-auto size-3.5 shrink-0 text-muted-foreground' />
         )}
@@ -370,9 +392,9 @@ function ProjectCard({
           {path.replace(/^\/Users\/[^/]+/, '~')}
         </p>
       )}
-      {(row.stats?.length || unregistered) && (
+      {(root.stats?.length || unregistered) && (
         <p className='mt-1.5 truncate font-mono text-[11px] text-muted-foreground'>
-          {unregistered ? '没登记成项目' : row.stats?.join(' · ')}
+          {unregistered ? '没登记成业务' : root.stats?.join(' · ')}
         </p>
       )}
     </>
@@ -386,7 +408,7 @@ function ProjectCard({
     <button
       type='button'
       onClick={async () => {
-        // 别的电脑上的项目：先切到那台电脑再进项目页
+        // 别的电脑上的业务：先切到那台电脑再进业务页
         await switchTo(machine)
         void navigate({ to: '/b/$businessId', params: { businessId } })
       }}
@@ -401,7 +423,7 @@ const LIT_FOR = 30 * 60_000
 const recent = (iso: string) => Date.now() - new Date(iso).getTime() < LIT_FOR
 
 /**
- * 项目到总 Agent 是一条直线；这个项目的 Grok Bot 像并联的灯泡，从直线上分出去再接回来。
+ * 业务到它的 Leader Agent 们是一条直线；这块业务的 Personal Agent（现在是 Grok Bot）像并联的灯泡，从直线上分出去再接回来。
  * 最近 30 分钟派过活的灯泡是亮的。没登记的目录没有 Grok，只有直线。
  */
 function Wire({ grok, openId, onOpen }: NodeProps & { grok?: TopologyNode }) {
@@ -417,7 +439,7 @@ function Wire({ grok, openId, onOpen }: NodeProps & { grok?: TopologyNode }) {
           <button
             type='button'
             data-open={grok.id === openId}
-            title={grok.activity}
+            title={`Grok Bot · ${grok.activity ?? ''}`}
             onClick={() => onOpen?.(grok)}
             className={cn(
               'absolute start-1/2 top-3 size-10 -translate-1/2 overflow-hidden rounded-full border-2 bg-panel transition-shadow hover:scale-105',
@@ -427,10 +449,14 @@ function Wire({ grok, openId, onOpen }: NodeProps & { grok?: TopologyNode }) {
               grok.id === openId && 'ring-2 ring-ring'
             )}
           >
-            <AgentLogo agent='grokbot' className='size-full' />
+            <GrokBotAvatar
+              seed={grok.businessId ?? grok.id}
+              mood={lit ? 'working' : 'idle'}
+              className='size-full p-1'
+            />
           </button>
           <span className='absolute start-1/2 top-[38px] -translate-x-1/2 text-center text-[10px] leading-3 whitespace-nowrap text-muted-foreground'>
-            Grok Bot
+            Personal Agent
             {grok.lastSeenAt && <> · {timeAgo(grok.lastSeenAt)}</>}
           </span>
         </>
@@ -467,12 +493,67 @@ function Branch({
   )
 }
 
+const isUnassigned = (n: TopologyNode) =>
+  n.kind === 'leader' && !n.projectId && n.id.endsWith(':unassigned')
+
+/**
+ * 业务下的一个项目：[项目] → [Leader Agent] → 下属。
+ * 「未归项目」没有 Leader Agent，下属直接挂在项目卡后面。
+ */
+function ProjectBranch({
+  leader,
+  root,
+  childrenOf,
+  ...rest
+}: NodeProps & {
+  leader: TopologyNode
+  root: TopologyNode
+  childrenOf: (id: string) => TopologyNode[]
+}) {
+  const unassigned = isUnassigned(leader)
+  const kids = unassigned ? childrenOf(leader.id) : [leader]
+  // 项目子目录：相对业务目录显示
+  const dir =
+    leader.project && root.project && leader.project !== root.project
+      ? leader.project.slice(root.project.length).replace(/^\//, '')
+      : undefined
+  return (
+    <li>
+      <div
+        className={cn(
+          'w-40 shrink-0 rounded-lg border bg-panel px-3 py-2',
+          unassigned && 'border-dashed bg-panel/60'
+        )}
+      >
+        <p
+          className={cn(
+            'truncate text-[13px] font-medium',
+            unassigned && 'font-normal text-muted-foreground'
+          )}
+        >
+          {leader.label}
+        </p>
+        <p className='truncate font-mono text-[11px] text-muted-foreground'>
+          {unassigned ? '不属于任何项目' : (dir ?? '整个业务目录')}
+        </p>
+      </div>
+      {kids.length > 0 && (
+        <ul>
+          {kids.map((k) => (
+            <Branch key={k.id} node={k} childrenOf={childrenOf} {...rest} />
+          ))}
+        </ul>
+      )}
+    </li>
+  )
+}
+
 function StateChip({ status }: { status: AgentStatus }) {
   const s = agentStatusStyle[status]
   return (
     <span
       className={cn(
-        'ms-auto flex shrink-0 items-center gap-1 rounded px-1.5 text-[11px] leading-4',
+        'flex shrink-0 items-center gap-1 rounded px-1.5 text-[11px] leading-4',
         s.chip
       )}
     >
@@ -499,7 +580,8 @@ function useNodeStatus(n: TopologyNode): AgentStatus | undefined {
 
 function Node({ node: n, openId, onOpen }: NodeProps & { node: TopologyNode }) {
   const leader = n.kind === 'leader'
-  // 总 Agent 这格只写是哪个 Agent，项目名在项目卡上
+  // Leader Agent 这格只写是哪家 Agent，项目名在前面的项目卡上
+  const project = leader && !!n.projectId
   const vacant = leader && !n.agent && !n.terminal && !n.dispatcher
   const status = useNodeStatus(n)
   if (vacant) {
@@ -510,9 +592,11 @@ function Node({ node: n, openId, onOpen }: NodeProps & { node: TopologyNode }) {
         onClick={() => onOpen?.(n)}
         className='block w-56 shrink-0 rounded-lg border border-dashed bg-panel/60 px-3 py-2 text-start hover:bg-accent'
       >
-        <p className='text-[13px] text-muted-foreground'>还没有总 Agent</p>
+        <p className='truncate text-[13px] text-muted-foreground'>
+          还没开 Leader Agent
+        </p>
         <p className='mt-0.5 text-[11px] text-muted-foreground'>
-          派第一个任务时会开一个 Claude Code 当总 Agent
+          {project ? '点开选一家开' : '在业务页建个项目，给它开 Leader Agent'}
         </p>
       </button>
     )
@@ -520,6 +604,17 @@ function Node({ node: n, openId, onOpen }: NodeProps & { node: TopologyNode }) {
 
   // 有状态标签时不再画在线圆点
   const live = n.liveness && !status ? livenessStyle[n.liveness] : null
+  // 第二行标题：在干的活；没有时 Leader Agent 写身份，下属写终端名
+  const title =
+    n.activity || (leader ? `${n.sublabel ?? n.agent} · Leader Agent` : n.label)
+  const ran = n.startedAt
+    ? n.finishedAt
+      ? `用时 ${duration(n.startedAt, n.finishedAt)}`
+      : `运行 ${duration(n.startedAt)}`
+    : n.lastSeenAt
+      ? `最近活动 ${timeAgo(n.lastSeenAt)}`
+      : undefined
+  const meta = [ran, ...(n.stats ?? [])].filter(Boolean).join(' · ')
   return (
     <button
       type='button'
@@ -530,43 +625,25 @@ function Node({ node: n, openId, onOpen }: NodeProps & { node: TopologyNode }) {
         n.liveness === 'exited' && 'opacity-60'
       )}
     >
-      <div className='flex items-center gap-2'>
-        {live && (
-          <span
-            title={live.label}
-            className={cn('size-1.5 shrink-0 rounded-full', live.dot)}
-          />
-        )}
+      <div className='flex h-5 items-center gap-2'>
         <AgentLogo agent={n.agent} className='size-4' />
-        <span
-          className={cn(
-            'truncate',
-            leader
-              ? 'text-[13px] font-medium'
-              : 'font-mono text-xs text-muted-foreground'
-          )}
-        >
-          {leader ? (n.sublabel ?? n.agent) : n.label}
-        </span>
         {status ? (
           <StateChip status={status} />
         ) : (
-          n.lastSeenAt && (
-            <span className='ms-auto shrink-0 text-[11px] text-muted-foreground'>
-              {timeAgo(n.lastSeenAt)}
+          live && (
+            <span className='flex items-center gap-1 text-[11px] text-muted-foreground'>
+              <span className={cn('size-1.5 rounded-full', live.dot)} />
+              {live.label}
             </span>
           )
         )}
       </div>
-      {n.activity && (
-        <p className='mt-1 line-clamp-1 text-[13px] leading-5'>{n.activity}</p>
-      )}
-      {!leader && n.sublabel && (
-        <p className='truncate text-xs text-muted-foreground'>{n.sublabel}</p>
-      )}
-      {n.stats && n.stats.length > 0 && (
-        <p className='mt-1 truncate font-mono text-[11px] text-muted-foreground'>
-          {n.stats.join(' · ')}
+      <p className='mt-1 line-clamp-1 text-[13px] leading-5 font-medium'>
+        {title}
+      </p>
+      {meta && (
+        <p className='mt-0.5 truncate text-[11px] text-muted-foreground tabular-nums'>
+          {meta}
         </p>
       )}
     </button>

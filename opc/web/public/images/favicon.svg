@@ -1,4 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svgjs="http://svgjs.com/svgjs" width="24" height="24"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokewidth="2" strokelinecap="round" strokelinejoin="round">
-  <path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"></path>
-</svg><style>@media (prefers-color-scheme: light) { :root { filter: contrast(1) brightness(0.8); } }
-</style></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect x="0" y="0" width="512" height="512" rx="112.64" fill="#17171A"/>
+  <g transform="translate(256 256) scale(0.78)">
+  <g stroke="#8A847C" stroke-width="22.8">
+    <line x1="0" y1="-152" x2="131.64" y2="-76"/>
+    <line x1="131.64" y1="-76" x2="131.64" y2="76"/>
+    <line x1="131.64" y1="76" x2="0" y2="152"/>
+    <line x1="0" y1="152" x2="-131.64" y2="76"/>
+    <line x1="-131.64" y1="76" x2="-131.64" y2="-76"/>
+    <line x1="-131.64" y1="-76" x2="0" y2="-152"/>
+    <line x1="0" y1="0" x2="-131.64" y2="-76"/>
+    <line x1="0" y1="0" x2="131.64" y2="-76"/>
+    <line x1="0" y1="0" x2="0" y2="152"/>
+  </g>
+  <g fill="#FFA41C" stroke="#FFA41C" stroke-width="18" stroke-linejoin="round">
+    <polygon points="0,-54.97 47.6,-27.48 47.6,27.48 0,54.97 -47.6,27.48 -47.6,-27.48"/>
+    <polygon points="0,-206.97 47.6,-179.48 47.6,-124.52 0,-97.03 -47.6,-124.52 -47.6,-179.48"/>
+    <polygon points="131.64,-130.97 179.24,-103.48 179.24,-48.52 131.64,-21.03 84.03,-48.52 84.03,-103.48"/>
+    <polygon points="131.64,21.03 179.24,48.52 179.24,103.48 131.64,130.97 84.03,103.48 84.03,48.52"/>
+    <polygon points="0,97.03 47.6,124.52 47.6,179.48 0,206.97 -47.6,179.48 -47.6,124.52"/>
+    <polygon points="-131.64,21.03 -84.03,48.52 -84.03,103.48 -131.64,130.97 -179.24,103.48 -179.24,48.52"/>
+    <polygon points="-131.64,-130.97 -84.03,-103.48 -84.03,-48.52 -131.64,-21.03 -179.24,-48.52 -179.24,-103.48"/>
+  </g>
+  </g>
+</svg>

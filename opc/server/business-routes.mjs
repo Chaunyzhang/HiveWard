@@ -1,6 +1,13 @@
-import { getBusiness, updateBusiness, canonicalPath, apiError, badRequest } from './business.mjs'
-import { bounded, ensureRepo, rpc, iso } from './api-runtime.mjs'
-import { FULL_ACCESS, agentCommand, terminalScreen } from './business-terminals.mjs'
+import {
+  businessProjects,
+  createBusinessProject,
+  getProject,
+  updateProject
+} from './business-projects.mjs'
+import { launchProjectLeader } from './project-leaders.mjs'
+import { getBusiness, updateBusiness, apiError, badRequest } from './business.mjs'
+import { bounded, rpc, iso } from './api-runtime.mjs'
+import { FULL_ACCESS, terminalScreen } from './business-terminals.mjs'
 import { snapshot, invalidate, topology, OWNER } from './orchestration.mjs'
 import { registerProject, removeProject, renameProjectRepo } from './projects.mjs'
 import { recordDispatch, answerDispatch } from './dispatches.mjs'
@@ -13,7 +20,6 @@ import {
 } from './timeline.mjs'
 import { readFile } from 'node:fs/promises'
 
-const launching = new Map()
 const resolving = new Map()
 function detail(snapshot, id) {
   const found = snapshot.details.find((d) => d.business.id === id)
@@ -42,6 +48,7 @@ async function stubSummary(b) {
     kind: b.kind,
     missing: b.missing,
     leader: null,
+    projects: businessProjects(b.id),
     lastEvent: latestTimelineEvent(b.id),
     updatedAt: b.updatedAt,
     counts: {
@@ -72,6 +79,61 @@ export function businessRoutes(readJson) {
   const routes = [
     [
       'GET',
+      /^\/api\/businesses\/([^/]+)\/projects$/,
+      async (_req, [id]) => ({ projects: detail(await snapshot(), id).business.projects })
+    ],
+    [
+      'POST',
+      /^\/api\/businesses\/([^/]+)\/projects$/,
+      async (req, [id]) => {
+        await snapshot()
+        const body = await readJson(req)
+        let project = createBusinessProject(id, body)
+        invalidate()
+        if (!body.agent) {
+          return { project }
+        }
+        try {
+          const launched = await launchProjectLeader(id, project.id, body)
+          invalidate()
+          return { project: launched.project }
+        } catch (e) {
+          invalidate()
+          return {
+            project: getProject(project.id, id),
+            leaderError: { code: e.code ?? 'orca_error', message: e.message }
+          }
+        }
+      }
+    ],
+    [
+      'PATCH',
+      /^\/api\/businesses\/([^/]+)\/projects\/([^/]+)$/,
+      async (req, [id, projectId]) => {
+        getProject(projectId, id)
+        const { name, status } = await readJson(req)
+        const project = updateProject(projectId, {
+          ...(name !== undefined ? { name } : {}),
+          ...(status !== undefined ? { status } : {})
+        })
+        invalidate()
+        return { project }
+      }
+    ],
+    [
+      'POST',
+      /^\/api\/businesses\/([^/]+)\/projects\/([^/]+)\/leader$/,
+      async (req, [id, projectId]) => {
+        try {
+          return await launchProjectLeader(id, projectId, await readJson(req))
+        } finally {
+          invalidate()
+        }
+      }
+    ],
+
+    [
+      'GET',
       /^\/api\/overview$/,
       async () => {
         const s = await snapshot()
@@ -93,6 +155,7 @@ export function businessRoutes(readJson) {
         await snapshot()
         return listTimeline({
           businessId: url.searchParams.get('businessId') ?? undefined,
+          projectId: url.searchParams.get('projectId') ?? undefined,
           cursor: url.searchParams.get('cursor') ?? undefined,
           limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined
         })
@@ -117,11 +180,14 @@ export function businessRoutes(readJson) {
           ...(url.searchParams.has('businessId') ? [] : s.orphanTasks)
         ]
         return all.filter(
-          (t) => !url.searchParams.has('status') || t.status === url.searchParams.get('status')
+          (t) =>
+            (!url.searchParams.has('status') || t.status === url.searchParams.get('status')) &&
+            (!url.searchParams.has('projectId') ||
+              t.projectId === url.searchParams.get('projectId'))
         )
       }
     ],
-    // Agent 用 opc browser screenshot 存的截图，只开放 /tmp/opc-shot-<数字>.png 这一种
+    // Agent 用 hiwd browser screenshot 存的截图，只开放 /tmp/opc-shot-<数字>.png 这一种
     [
       'GET',
       /^\/api\/shots\/(opc-shot-\d+\.png)$/,
@@ -132,7 +198,7 @@ export function businessRoutes(readJson) {
         type: 'image/png'
       })
     ],
-    // opc new / opc tell 派单后来登记：谁派的、派给哪个终端、说了什么
+    // hiwd new / hiwd tell 派单后来登记：谁派的、派给哪个终端、说了什么
     [
       'POST',
       /^\/api\/dispatches$/,
@@ -155,15 +221,15 @@ export function businessRoutes(readJson) {
     ],
     [
       'GET',
-      /^\/api\/projects\/([^/]+)\/logo$/,
+      /^\/api\/businesses\/([^/]+)\/logo$/,
       async (_req, [id], url) => {
         const business = getBusiness(id)
         const { logo } = await detectProjectIdentity(business.workspacePath)
         if (!logo) {
-          throw apiError(404, 'not_found', '项目没有可识别的 logo')
+          throw apiError(404, 'not_found', '业务没有可识别的 logo')
         }
         const raw = await readFile(logo.path).catch(() => {
-          throw apiError(404, 'not_found', '项目 logo 已不存在')
+          throw apiError(404, 'not_found', '业务 logo 已不存在')
         })
         return {
           raw,
@@ -178,10 +244,10 @@ export function businessRoutes(readJson) {
         }
       }
     ],
-    // 项目就是业务：登记目录成引擎项目并补业务记录；目录已是项目时返回已有业务
+    // 登记文件夹是业务：登记目录成引擎项目并补业务记录；目录已是项目时返回已有业务
     [
       'POST',
-      /^\/api\/projects$/,
+      /^\/api\/businesses$/,
       async (req) => {
         const body = await readJson(req)
         if (typeof body.path !== 'string' || !body.path.trim()) {
@@ -197,7 +263,7 @@ export function businessRoutes(readJson) {
     ],
     [
       'PATCH',
-      /^\/api\/projects\/([^/]+)$/,
+      /^\/api\/businesses\/([^/]+)$/,
       async (req, [id]) => {
         const body = await readJson(req)
         getBusiness(id)
@@ -247,97 +313,11 @@ export function businessRoutes(readJson) {
     // 从引擎移除项目（repo.rm 只取消登记，不删磁盘文件）；业务记录保留，标 removedAt
     [
       'DELETE',
-      /^\/api\/projects\/([^/]+)$/,
+      /^\/api\/businesses\/([^/]+)$/,
       async (_req, [id]) => {
         const b = await removeProject(id)
         invalidate()
         return { business: await stubSummary(b) }
-      }
-    ],
-    // 旧接口兼容：同一套登记逻辑
-    [
-      'POST',
-      /^\/api\/businesses$/,
-      async (req) => {
-        const body = await readJson(req)
-        if (typeof body.name !== 'string' || !body.name.trim()) {
-          throw badRequest('name 不能为空')
-        }
-        if (![1, 2, 3].includes(body.priority)) {
-          throw badRequest('priority 必须为 1、2 或 3')
-        }
-        if (!Object.hasOwn(FULL_ACCESS, body.leaderAgent)) {
-          throw badRequest('leaderAgent 必须为 claude、codex 或 kimi')
-        }
-        if (typeof body.authority !== 'string') {
-          throw badRequest('authority 必须是字符串')
-        }
-        if (body.icon !== undefined && typeof body.icon !== 'string') {
-          throw badRequest('icon 必须是字符串')
-        }
-        if (body.leaderModel !== undefined && typeof body.leaderModel !== 'string') {
-          throw badRequest('leaderModel 必须是字符串')
-        }
-        const b = await registerProject({
-          path: body.workspacePath,
-          name: body.name,
-          icon: body.icon,
-          priority: body.priority,
-          leaderAgent: body.leaderAgent,
-          leaderModel: body.leaderModel,
-          authority: body.authority
-        })
-        invalidate()
-        return { business: await stubSummary(b) }
-      }
-    ],
-    [
-      'POST',
-      /^\/api\/businesses\/([^/]+)\/leader$/,
-      async (_req, [id]) => {
-        if (launching.has(id)) {
-          return launching.get(id)
-        }
-        const operation = (async () => {
-          // Discover existing foreground leaders before creating another seat.
-          await snapshot()
-          const b = getBusiness(id)
-          const listed = await rpc('terminal.list')
-          if (b.leaderTerminal && listed.terminals.some((t) => t.handle === b.leaderTerminal)) {
-            return { handle: b.leaderTerminal }
-          }
-          if (!Object.hasOwn(FULL_ACCESS, b.leaderAgent)) {
-            throw badRequest('不支持的负责人 Agent')
-          }
-          await ensureRepo(b.workspacePath)
-          const command = agentCommand(b.leaderAgent, { role: 'leader', model: b.leaderModel })
-          const result = await rpc('terminal.create', {
-            worktree: `path:${canonicalPath(b.workspacePath)}`,
-            title: `${b.name} · ${b.leaderAgent}`,
-            command,
-            presentation: 'background'
-          })
-          updateBusiness(id, {
-            leaderTerminal: result.terminal.handle,
-            leaderStartedAt: new Date().toISOString()
-          })
-          invalidate()
-          return { handle: result.terminal.handle }
-        })()
-        launching.set(id, operation)
-        try {
-          return await operation
-        } finally {
-          launching.delete(id)
-        }
-      }
-    ],
-    [
-      'GET',
-      /^\/api\/businesses\/([^/]+)\/leader\/screen$/,
-      async (_req, [id]) => {
-        detail(await snapshot(), id)
-        return terminalScreen(getBusiness(id).leaderTerminal)
       }
     ],
     [

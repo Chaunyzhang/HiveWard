@@ -1,3 +1,4 @@
+import { loadLanCertificate } from './lan-certificate.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
@@ -114,6 +115,8 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
       const bDir = join(root, 'b')
       await mkdir(aDir, { recursive: true })
       await mkdir(bDir, { recursive: true })
+      const aIdentity = loadLanCertificate(aDir)
+      const bIdentity = loadLanCertificate(bDir)
       const aToB = 'a'.repeat(64)
       const bToA = 'b'.repeat(64)
       await writeFile(join(aDir, 'machine.json'), JSON.stringify({ id: 'A', name: 'A' }))
@@ -126,6 +129,7 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
             id: 'B',
             name: 'B',
             address: `127.0.0.1:${bLanPort}`,
+            tlsPort: bLanPort + 1, fingerprint: bIdentity.fingerprint,
             inboundToken: bToA,
             outboundToken: aToB
           }
@@ -138,6 +142,7 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
             id: 'A',
             name: 'A',
             address: `127.0.0.1:${aLanPort}`,
+            tlsPort: aLanPort + 1, fingerprint: aIdentity.fingerprint,
             inboundToken: aToB,
             outboundToken: bToA
           }
@@ -198,7 +203,7 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
         child.stdout.on('data', (data) => (output += data.toString()))
         child.stderr.on('data', (data) => (output += data.toString()))
         for (let n = 0; n < 100; n++) {
-          if (output.includes('orca-bridge on')) {
+          if (output.includes('bridge on')) {
             return
           }
           if (child.exitCode !== null) {
@@ -226,11 +231,11 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
         (await second.json()).items.map((event) => event.id),
         ['event-1']
       )
-      const logo = await fetch(`${base}/api/projects/p1/logo?v=123`)
+      const logo = await fetch(`${base}/api/businesses/p1/logo?v=123`)
       assert.equal(logo.status, 200)
       assert.equal(logo.headers.get('content-type'), 'image/png')
       assert.equal(Buffer.from(await logo.arrayBuffer()).toString('hex'), png.toString('hex'))
-      console.log('PASS LAN /api/m/B/api/timeline pagination and /api/projects/p1/logo bytes')
+      console.log('PASS LAN /api/m/B/api/timeline pagination and /api/businesses/p1/logo bytes')
     } finally {
       await Promise.all(
         children.map(async (child) => {

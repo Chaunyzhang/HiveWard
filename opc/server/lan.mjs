@@ -3,11 +3,13 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, chmodSync } from 'n
 import { join } from 'node:path'
 import { hostname } from 'node:os'
 import { execFileSync } from 'node:child_process'
-import { request } from 'node:http'
+import { loadLanCertificate } from './lan-certificate.mjs'
+import { pinnedRequest, pinnedAgent, tlsAddress, tlsJson, socketFingerprint, validFingerprint, tlsError } from './lan-tls.mjs'
 import { dataDir } from './data-dir.mjs'
 import { createOrganization } from './lan-organization.mjs'
-import { discoverUdp, discoverBonjour } from './lan-discovery.mjs'
+import { discoverUdp, cleanupLegacyDiscovery } from './lan-discovery.mjs'
 import { createDiscoveryPresence } from './discovery-presence.mjs'
+import { memberRequest as requestMember } from './lan-member-request.mjs'
 export { resolveV4 } from './lan-discovery.mjs'
 
 // Packaged apps keep package.json at the app root; source checkouts keep it in desktop/.
@@ -97,6 +99,9 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
     save(machineFile, value)
     return value
   })
+  machine.platform = process.platform
+  const identity = loadLanCertificate(dir)
+  let tlsPort = 0
   let peers = read(peersFile, () => [])
   save(peersFile, peers)
   const discovered = new Map(),
@@ -108,6 +113,7 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
   const organization = createOrganization({
     machine,
     lanPort,
+    identity: () => ({ fingerprint: identity.fingerprint, tlsPort }),
     read,
     save,
     file: join(dir, 'organization.json'),
@@ -130,38 +136,33 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
     return {
       id: p.id,
       name: p.name,
+      platform: discovered.get(p.id)?.platform,
       self: false,
       paired: true,
       discovered: discovered.has(p.id),
       invite: null,
       address: p.address,
       status: o?.status ?? 'offline',
+      secure: !!o?.secure,
+      ...(o?.error ? { error: o.error } : {}),
       ...(o?.lastSeenAt ? { lastSeenAt: o.lastSeenAt } : {}),
       ...(o?.version ? { version: o.version } : {}),
       exitRegion: o?.exitRegion ?? null,
       ...(o?.status === 'online' && o.summary ? { summary: o.summary } : {})
     }
   }
-  async function remote(address, path, { token, body, timeout = 1500 } = {}) {
-    const r = await fetch(`http://${address}${path}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: {
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        'content-type': 'application/json'
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(timeout),
-      redirect: 'error'
-    })
-    const data = await r.json()
-    if (!r.ok) {
-      throw error(
-        r.status,
-        data.error?.code ?? 'remote_error',
-        data.error?.message ?? `HTTP ${r.status}`
-      )
+  async function remote(address, path, options = {}) {
+    const peer = options.fingerprint ? { ...options, address } : peers.find((p) => p.address === address)
+    if (peer || options.token || path !== '/lan/hello') {
+      return tlsJson(identity, peer ?? { address }, path, options)
     }
-    return data
+    const response = await fetch(`http://${address}/lan/hello`, {
+      signal: AbortSignal.timeout(options.timeout ?? 1500), redirect: 'error'
+    })
+    if (!response.ok) {
+      throw error(response.status, 'discovery_failed', '发现握手失败')
+    }
+    return response.json()
   }
   async function refresh(p) {
     if (pending.has(p.id)) {
@@ -171,22 +172,26 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
       const old = observations.get(p.id)
       let reached = false
       try {
-        const hello = await remote(p.address, '/lan/hello')
+        const hello = await remote(p.address, '/lan/hello', p)
         if (hello.id !== p.id) {
           throw new Error('机器身份不符')
         }
         if (stopped || !peers.includes(p)) {
           return
         }
-        await organization.reconcileLegacy(p)
         reached = true
         observations.set(p.id, {
           ...old,
           status: 'online',
+          secure: true,
+          error: undefined,
           lastSeenAt: iso(),
           version: hello.version
         })
-        const region = await remote(p.address, '/api/exit-region', { token: p.outboundToken, timeout: 15000 }).catch(() => null)
+        const region = await remote(p.address, '/api/exit-region', { token: p.outboundToken, timeout: 15000 }).catch((cause) => {
+          if (cause.code?.startsWith('tls_')) { throw cause }
+          return null
+        })
         if (stopped || !peers.includes(p)) {
           return
         }
@@ -200,6 +205,8 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
         }
         observations.set(p.id, {
           status: 'online',
+          secure: true,
+          error: undefined,
           lastSeenAt: iso(),
           version: hello.version,
           exitRegion: region,
@@ -210,11 +217,13 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
             decisionsPending: overview.decisionsPending
           }
         })
-      } catch {
+      } catch (e) {
         if (!stopped && peers.includes(p)) {
           observations.set(p.id, {
             ...observations.get(p.id),
-            status: reached ? 'online' : 'offline',
+            status: reached && !e.code?.startsWith('tls_') ? 'online' : 'offline',
+            secure: false,
+            error: { code: e.code ?? 'machine_offline', message: e.message },
             summary: undefined
           })
         }
@@ -234,12 +243,18 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
 
   function authenticate(req) {
     const token = req.headers.authorization?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]
-    return peers.find((p) => sameToken(token, p.inboundToken))
+    return peers.find((p) => req.socket.encrypted && validFingerprint(p.fingerprint) && socketFingerprint(req.socket) === p.fingerprint && sameToken(token, p.inboundToken))
   }
   async function lanRequest(req, res, url) {
     if (req.method === 'GET' && url.pathname === '/lan/hello') {
-      send(res, 200, { ...machine, version: VERSION })
+      send(res, 200, { ...machine, version: VERSION, tlsPort, fingerprint: identity.fingerprint })
       return true
+    }
+    if (!req.socket.encrypted) {
+      throw error(403, 'tls_required', '局域网请求必须使用加密端口')
+    }
+    if (!socketFingerprint(req.socket)) {
+      throw error(401, 'tls_client_required', '需要客户端证书')
     }
     if (
       req.method === 'POST' &&
@@ -258,7 +273,7 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
     }
     if (req.method === 'POST' && url.pathname === '/lan/probe') {
       const body = await jsonBody(req)
-      const known = peers.find((p) => p.id === body.id)
+      const known = peers.find((p) => p.id === body.id && p.fingerprint === socketFingerprint(req.socket))
       if (!known || !validToken(body.nonce)) {
         throw error(401, 'unauthorized', '未知成员')
       }
@@ -269,6 +284,10 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
     }
     const peer = authenticate(req)
     if (!peer) {
+      const token = req.headers.authorization?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]
+      if (peers.some((p) => sameToken(token, p.inboundToken))) {
+        throw tlsError('tls_fingerprint_mismatch', '客户端证书与已确认指纹不符，请重新加入组织')
+      }
       throw error(401, 'unauthorized', '需要已配对电脑的令牌')
     }
     if (!url.pathname.startsWith('/api/') || (/^\/api\/(app|m|machines)(\/|$)/.test(url.pathname) || (url.pathname.startsWith('/api/exit-region/') && req.method !== 'GET'))) {
@@ -309,6 +328,7 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
         {
           ...machine,
           self: true,
+          secure: tlsPort > 0,
           exitRegion: localExitRegion,
           paired: !!snapshot.organization,
           discovered: false,
@@ -328,6 +348,7 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
           }))
       ].map((m) => ({
         exitRegion: null,
+        secure: false,
         ...m,
         invite:
           snapshot.invitations.find((i) => i.machine.id === m.id && i.status === 'pending')
@@ -388,11 +409,12 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
     return true
   }
   function forward(req, res, p, path) {
-    let upstream, deadline
-    const offline = () => {
-      observations.set(p.id, { ...observations.get(p.id), status: 'offline', summary: undefined })
+    let upstream
+    const offline = (cause) => {
+      const failure = { code: cause?.code ?? 'machine_offline', message: cause?.message ?? '连不上对方电脑' }
+      observations.set(p.id, { ...observations.get(p.id), status: 'offline', secure: false, error: failure, summary: undefined })
       if (!res.headersSent) {
-        send(res, 503, { error: { code: 'machine_offline', message: '连不上对方电脑' } })
+        send(res, 503, { error: failure })
       } else {
         res.destroy()
       }
@@ -404,10 +426,13 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
         headers[key] = req.headers[key]
       }
     }
-    upstream = request(
-      `http://${p.address}${path}`,
+    upstream = pinnedRequest(
+      identity, p, path,
       { method: req.method, headers },
       (response) => {
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          observations.set(p.id, { ...observations.get(p.id), status: 'online', secure: true, error: undefined, lastSeenAt: iso() })
+        }
         if (response.statusCode === 401) {
           response.resume()
           send(res, 401, {
@@ -426,15 +451,15 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
       }
     )
     // 超时不等于掉线（可能只是这个接口慢，比如截图）：回 504，不把对方标成离线
-    deadline = setTimeout(() => {
+    upstream.setTimeout(30000, () => {
       if (!res.headersSent) {
         send(res, 504, { error: { code: 'machine_timeout', message: '对方电脑响应超时' } })
       } else {
         res.destroy()
       }
       upstream?.destroy()
-    }, 15000)
-    upstream.on('error', () => {
+    })
+    upstream.on('error', (cause) => {
       if (res.writableEnded || res.destroyed) {
         return
       }
@@ -442,11 +467,10 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
         res.destroy()
       } // 传到一半断了
       else {
-        offline()
+        offline(cause)
       }
     })
     res.on('close', () => {
-      clearTimeout(deadline)
       upstream.destroy()
     })
     req.on('aborted', () => upstream.destroy())
@@ -467,7 +491,7 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
     }
     checkingAddresses.add(peer.id)
     const nonce = createHmac('sha256', peer.outboundToken).update(randomUUID()).digest('hex')
-    void remote(d.address, '/lan/probe', { body: { id: machine.id, nonce } })
+    void remote(d.address, '/lan/probe', { ...peer, body: { id: machine.id, nonce } })
       .then((result) => {
         const expected = createHmac('sha256', peer.outboundToken).update(nonce).digest('hex')
         if (!stopped && peers.includes(peer) && sameToken(result.proof, expected)) {
@@ -481,7 +505,13 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
   }
   const removed = (id) => discovered.delete(id)
   const presence = createDiscoveryPresence({
-    probe: (address) => remote(addressOf(address), '/lan/hello', { timeout: 1000 }),
+    probe: async (address) => {
+      const response = await fetch(`http://${addressOf(address)}/lan/hello`, { signal: AbortSignal.timeout(1000), redirect: 'error' })
+      if (!response.ok) {
+        throw new Error('发现握手失败')
+      }
+      return response.json()
+    },
     found,
     removed
   })
@@ -490,17 +520,64 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
       void presence.found(value)
     }
   }
-  const stopUdp = lanPort ? discoverUdp(machine, lanPort, candidate, presence.removed) : () => {}
-  const stopDiscovery =
-    lanPort && process.platform === 'darwin'
-      ? discoverBonjour(machine, lanPort, VERSION, candidate, presence.removed, {
-          directory: join(dir, 'bonjour-processes')
-        })
-      : () => {}
+  const stopUdp = lanPort ? discoverUdp(machine, lanPort, candidate, presence.removed, { version: VERSION, discoveryPort: Number(process.env.OPC_DISCOVERY_PORT ?? 18889) }) : () => {}
+  const legacyCleanup = lanPort
+    ? cleanupLegacyDiscovery(machine, lanPort, join(dir, 'bonjour-processes')).catch(() => {})
+    : Promise.resolve()
+  const stopDiscovery = () => legacyCleanup
   return {
+    tlsOptions: { key: identity.key, cert: identity.cert, requestCert: true, rejectUnauthorized: false, minVersion: 'TLSv1.2' },
+    setTlsPort(value) { tlsPort = value },
+    streamConnection(peer) {
+      return { address: tlsAddress(peer.address, peer.tlsPort), agent: pinnedAgent(identity, peer.fingerprint) }
+    },
     lanRequest,
     localRequest,
     authenticate,
+    localMachine() {
+      return { id: machine.id, name: machine.name }
+    },
+    onlineMembers() {
+      const current = organization.snapshot().organization
+      if (!current) {
+        return []
+      }
+      return peers
+        .filter((peer) => current.members.includes(peer.id))
+        .map(publicMachine)
+        .filter((peer) => peer.status === 'online' && peer.secure)
+    },
+    async memberRequest(id, path, options) {
+      const current = organization.snapshot().organization
+      const peer = peers.find((item) => item.id === id && current?.members.includes(id))
+      if (!peer) {
+        throw error(404, 'machine_not_paired', '电脑尚未加入组织')
+      }
+      try {
+        const response = await requestMember(identity, peer, path, options)
+        if (response.status >= 200 && response.status < 300) {
+          observations.set(peer.id, {
+            ...observations.get(peer.id),
+            status: 'online',
+            secure: true,
+            error: undefined,
+            lastSeenAt: iso()
+          })
+        }
+        return response
+      } catch (cause) {
+        if (cause.code !== 'clipboard_aborted') {
+          observations.set(peer.id, {
+            ...observations.get(peer.id),
+            status: 'offline',
+            secure: false,
+            error: { code: cause.code ?? 'machine_offline', message: cause.message },
+            summary: undefined
+          })
+        }
+        throw cause
+      }
+    },
     onMembershipChange(listener) {
       membershipListeners.add(listener)
       return () => membershipListeners.delete(listener)

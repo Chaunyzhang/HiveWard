@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useLocation } from '@tanstack/react-router'
 import type { BusinessSummary } from '@shared/api'
 import {
+  FolderOpen,
   Globe,
   History,
   Inbox,
@@ -18,12 +19,12 @@ import { projectForPath } from '@/lib/project-for-path'
 import { cn } from '@/lib/utils'
 import { ProjectLogo } from '@/components/opc/project-logo'
 import { StatusDot } from '@/components/opc/status-dot'
+import { AddBusinessDialog } from '@/features/businesses/add-business-dialog'
 import { useDecisionsDrawer } from '@/features/decisions/drawer-context'
-import { AddProjectDialog } from '@/features/projects/add-project-dialog'
 
 /**
- * 侧栏（常驻 232px）：驾驶舱、待办和几个全局页面在上面，下面是项目列表——
- * 项目就是业务，点进去是项目页（顶部给总 Agent 派活）。「项目」旁边的 + 加项目。
+ * 侧栏（常驻 232px）：驾驶舱、待办和几个全局页面在上面，下面是业务列表——
+ * 点进去是业务页（项目、架构、终端）。「业务」旁边的 + 加业务。
  */
 export function Rail() {
   const pathname = useLocation({ select: (l) => l.pathname })
@@ -71,6 +72,12 @@ export function Rail() {
         active={pathname.startsWith('/machines')}
       />
       <Item
+        to='/files'
+        icon={<FolderOpen />}
+        label='文件'
+        active={pathname.startsWith('/files')}
+      />
+      <Item
         to='/live'
         icon={<SquareTerminal />}
         label='现场'
@@ -84,11 +91,11 @@ export function Rail() {
       />
 
       <div className='mx-3 mt-5 mb-1 flex h-6 items-center ps-2.5'>
-        <span className='text-[11px] text-muted-foreground'>项目</span>
+        <span className='text-[11px] text-muted-foreground'>业务</span>
         <button
           type='button'
-          title='加项目'
-          aria-label='加项目'
+          title='加业务'
+          aria-label='加业务'
           onClick={() => setAdding(true)}
           className='ms-auto grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground'
         >
@@ -110,7 +117,7 @@ export function Rail() {
             onClick={() => setAdding(true)}
             className='mx-2 mt-1 w-[calc(100%-1rem)] rounded-md border border-dashed px-3 py-2 text-start text-xs text-muted-foreground hover:bg-accent hover:text-foreground'
           >
-            加第一个项目：选一个目录
+            加第一块业务：选一个目录
           </button>
         )}
       </div>
@@ -122,7 +129,7 @@ export function Rail() {
         label='设置'
         active={pathname.startsWith('/settings')}
       />
-      <AddProjectDialog open={adding} onOpenChange={setAdding} />
+      <AddBusinessDialog open={adding} onOpenChange={setAdding} />
     </nav>
   )
 }

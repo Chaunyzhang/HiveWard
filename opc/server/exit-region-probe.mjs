@@ -1,3 +1,4 @@
+import { windowsProxyRoute } from './windows-proxy-route.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { networkInterfaces, homedir } from 'node:os'
 import { basename, win32, join } from 'node:path'
@@ -103,6 +104,12 @@ export async function probeExitRegion(context, run = runProcess) {
     context.env.all_proxy ||
     context.env.ALL_PROXY
   )
+  if (process.platform === 'win32') {
+    const reason = await windowsProxyRoute(context.env, run)
+    if (reason) {
+      return { country: null, method: 'windows-route-check', source: null, reason }
+    }
+  }
   const program =
     process.platform === 'win32'
       ? join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'curl.exe')

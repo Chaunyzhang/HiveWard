@@ -17,7 +17,7 @@ export function DecisionsDrawer() {
         <SheetHeader className='px-5 pt-5 pb-0'>
           <SheetTitle className='text-sm font-medium'>待办</SheetTitle>
           <SheetDescription className='text-xs'>
-            负责人提交、需要你决定的事，按紧急度排序。
+            Leader Agent 提交、需要你决定的事，按紧急度排序。
           </SheetDescription>
         </SheetHeader>
         <div className='flex-1 overflow-y-auto px-5 pt-4 pb-8'>

@@ -1,4 +1,5 @@
-// 项目就是业务：业务列表由引擎 repo.list 推导，businesses.json 只存附加信息（按 workspacePath 对应）。
+import { businessProjects, migrateProjects } from './business-projects.mjs'
+// 登记文件夹是业务：业务列表由引擎 repo.list 推导，businesses.json 只存附加信息（按 workspacePath 对应）。
 import { existsSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -22,7 +23,7 @@ function recordProjectEvent(row, name, action) {
     ts: row.updatedAt,
     businessId: row.id,
     kind: 'system',
-    title: `${action === 'added' ? '项目加入' : '项目移除'}：${name}`,
+    title: `${action === 'added' ? '业务加入' : '业务移除'}：${name}`,
     path: row.workspacePath
   })
 }
@@ -125,6 +126,16 @@ export async function syncedBusinesses() {
       repo.displayName = identity.name
     }
   }
+  const projectPaths = new Set(
+    businessProjects()
+      .filter((p) => p.dir)
+      .map((p) => canonicalPath(p.path))
+  )
+  repos = repos.filter(
+    (r) =>
+      !projectPaths.has(canonicalPath(r.path)) ||
+      before.some((b) => canonicalPath(b.workspacePath) === canonicalPath(r.path))
+  )
   const result = reconcileBusinesses(before, repos, (p) => existsSync(p), canonicalPath)
   if (result.changed) {
     saveBusinesses(result.rows)
@@ -140,7 +151,7 @@ export async function syncedBusinesses() {
   return { rows: result.rows, identities }
 }
 
-/** 登记项目（POST /api/projects 和旧的 POST /api/businesses 共用）：目录必须存在；已登记过返回已有业务 */
+/** 登记业务（POST /api/businesses）：目录必须存在；已登记过返回已有业务 */
 export async function registerProject({
   path,
   name,
@@ -197,6 +208,7 @@ export async function registerProject({
     updatedAt: new Date().toISOString()
   }
   addBusiness(row)
+  migrateProjects(row, [], [])
   recordProjectEvent(row, effectiveName, 'added')
   return row
 }

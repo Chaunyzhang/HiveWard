@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { BusinessSummary } from '@shared/api'
 import { Ellipsis, Pause, Pencil, Play, Trash2 } from 'lucide-react'
-import { useRemoveProject, useUpdateProject } from '@/lib/opc-api'
+import { useRemoveBusiness, useUpdateBusiness } from '@/lib/opc-api'
 import { cn } from '@/lib/utils'
 import {
   AlertDialog,
@@ -34,7 +34,7 @@ import { ProjectLogo } from '@/components/opc/project-logo'
 
 /**
  * 项目页顶部只放项目本身：logo、名字、目录、管理菜单，下面是标签。
- * 派活不在这里：点架构图里的总 Agent，在它的对话里说。
+ * 派活不在这里：点架构图里的 Leader Agent，在它的对话里说。
  */
 export type ProjectTab = 'overview' | 'terminal'
 
@@ -105,8 +105,8 @@ export function ProjectHeader({
 }
 
 function ProjectMenu({ project }: { project: BusinessSummary }) {
-  const update = useUpdateProject()
-  const remove = useRemoveProject()
+  const update = useUpdateBusiness()
+  const remove = useRemoveBusiness()
   const navigate = useNavigate()
   const [confirming, setConfirming] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -116,7 +116,7 @@ function ProjectMenu({ project }: { project: BusinessSummary }) {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger
-          aria-label='项目设置'
+          aria-label='业务设置'
           className='grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground'
         >
           <Ellipsis className='size-4' />
@@ -143,7 +143,7 @@ function ProjectMenu({ project }: { project: BusinessSummary }) {
             onClick={() => setConfirming(true)}
           >
             <Trash2 />
-            移除项目
+            移除业务
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -164,7 +164,7 @@ function ProjectMenu({ project }: { project: BusinessSummary }) {
           <AlertDialogHeader>
             <AlertDialogTitle>移除「{project.name}」？</AlertDialogTitle>
             <AlertDialogDescription>
-              只是不再把它当项目管，磁盘上的目录和文件都不动，做过的任务记录也留着。以后想管再加回来。
+              只是不再把它当业务管，磁盘上的目录和文件都不动，做过的任务记录也留着。以后想管再加回来。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -212,7 +212,7 @@ function RenameDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>改项目名</DialogTitle>
+            <DialogTitle>改业务名</DialogTitle>
           </DialogHeader>
           <Input
             autoFocus

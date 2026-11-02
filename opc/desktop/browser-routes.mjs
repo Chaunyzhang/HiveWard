@@ -1,4 +1,4 @@
-// 内嵌浏览器的 HTTP 接口：给 opc 命令（也就是派出去的 Agent）和网页用。
+// 内嵌浏览器的 HTTP 接口：给 hiwd 命令（也就是派出去的 Agent）和网页用。
 // 操作网页（读结构、点击、填表、上传…）的接口由 automation.mjs 提供，挂在 /api/browser/tabs/:id/<动作>。
 import { automationRoutes } from './automation.mjs'
 

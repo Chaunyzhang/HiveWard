@@ -140,6 +140,7 @@ const emojiShortcodeDatasetResource = {
   to: 'node_modules/emojibase-data/en/shortcodes/emojibase.json'
 }
 const commonExtraResources = [
+  { from: 'opc/bin', to: 'opc/bin' },
   { from: 'opc/package.json', to: 'opc/package.json' },
   { from: 'opc/docs/agent-browser.md', to: 'opc/docs/agent-browser.md' },
   { from: 'opc/server', to: 'opc/server', filter: ['**/*', '!tests/**', '!**/*.test.mjs'] },
@@ -434,14 +435,14 @@ module.exports = {
     for (const entry of [
       'desktop/engine.mjs',
       'desktop/preload.cjs',
-      'server/opc.mjs',
+      'server/hiwd.mjs',
       'web/index.html'
     ]) {
       if (!existsSync(join(resourcesDir, 'opc', entry))) {
         throw new Error(`Missing cockpit resource: ${entry}`)
       }
     }
-    chmodSync(join(resourcesDir, 'opc/server/opc.mjs'), 0o755)
+    chmodSync(join(resourcesDir, 'opc/server/hiwd.mjs'), 0o755)
     stampPackagedCliVersion(resourcesDir, context.packager.appInfo.version)
     prunePackagedRuntimeNodeModules(resourcesDir, context.electronPlatformName, context.arch)
     assertNoWindowsExecutablesInRuntimeNodeModules(resourcesDir, context.electronPlatformName)
@@ -533,7 +534,10 @@ module.exports = {
     }
   },
   win: {
-    executableName: 'Orca',
+    executableName: 'HiveWard',
+    icon: 'resources/build/opc.ico',
+    target: [{ target: 'nsis', arch: ['x64'] }, { target: 'zip', arch: ['x64'] }],
+    artifactName: 'HiveWard-${version}-windows-${arch}.${ext}',
     // SignPath signs Windows installers after packaging, so set release publisherName explicitly.
     // Unsigned dev channels omit it or updater signature checks reject dev updates and return to stable.
     // Sign hook signs nothing: it relays transient NSIS uninstaller files to CI SignPath; unset relay env leaves local/dev builds inert.
@@ -541,7 +545,7 @@ module.exports = {
       sign: signWindowsUninstallerViaSignPath,
       ...(isWinDevChannel ? {} : { publisherName: 'SignPath Foundation' })
     },
-    ...(isWinDevChannel ? { verifyUpdateCodeSignature: false } : {}),
+    verifyUpdateCodeSignature: false,
     extraResources: [
       ...commonExtraResources,
       ...windowsRuntimeResources,
@@ -576,7 +580,7 @@ module.exports = {
     ]
   },
   nsis: {
-    artifactName: 'orca-windows-setup.${ext}',
+    artifactName: 'HiveWard-${version}-windows-${arch}-setup.${ext}',
     shortcutName: '${productName}',
     uninstallDisplayName: '${productName}',
     createDesktopShortcut: 'always',

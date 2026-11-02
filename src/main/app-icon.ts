@@ -5,7 +5,8 @@ import {
 } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { app, BrowserWindow, nativeImage } from 'electron'
-import classicIcon from '../../resources/build/opc.icns?asset'
+import classicMacIcon from '../../resources/build/opc.icns?asset'
+import classicPortableIcon from '../../resources/build/opc.png?asset'
 import watercolorIcon from '../../resources/app-icons/orca-watercolor.png?asset'
 import watercolorMacDockIcon from '../../resources/app-icons/orca-watercolor.png?asset&asarUnpack'
 import blueIcon from '../../resources/app-icons/orca-blue.png?asset'
@@ -13,7 +14,7 @@ import blueMacDockIcon from '../../resources/app-icons/orca-blue.png?asset&asarU
 import { normalizeAppIconId, type AppIconId } from '../shared/app-icon'
 
 const APP_ICON_PATHS = {
-  classic: classicIcon,
+  classic: process.platform === 'darwin' ? classicMacIcon : classicPortableIcon,
   watercolor: watercolorIcon,
   blue: blueIcon
 } satisfies Record<AppIconId, string>

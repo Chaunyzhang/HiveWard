@@ -1,6 +1,9 @@
+import { readWindowsProcessTable } from '../windows/windows-process-table'
 import { captureExitRegionEnvironment } from './exit-region-environment'
 import { notifyExitRegionWarning } from './exit-region-notification'
 import { notifyMachineInvitation } from './machine-invitation-notification'
+import { createOpcClipboardAdapter } from './clipboard-adapter'
+import { notifyClipboardNotice } from './clipboard-notification'
 import { showMainWindowFromTray } from '../startup/main-window-actions'
 import { WebSocketServer, WebSocket } from 'ws'
 import { openOpcTerminalStream } from './terminal-stream'
@@ -25,9 +28,12 @@ export async function startOpcBridge(window: BrowserWindow): Promise<void> {
   const root = app.isPackaged ? join(process.resourcesPath, 'opc') : join(app.getAppPath(), 'opc')
   const module: {
     startCockpit: (options: {
+      windowsProcesses: typeof readWindowsProcessTable
       onMachineInvite: typeof notifyMachineInvitation
       captureExitEnvironment: typeof captureExitRegionEnvironment
       onExitRegionWarning: typeof notifyExitRegionWarning
+      clipboardAdapter: ReturnType<typeof createOpcClipboardAdapter>
+      onClipboardNotice: typeof notifyClipboardNotice
       terminalStreaming: {
         open: typeof openOpcTerminalStream
         WebSocketServer: typeof WebSocketServer
@@ -45,9 +51,12 @@ export async function startOpcBridge(window: BrowserWindow): Promise<void> {
   } = await import(/* @vite-ignore */ pathToFileURL(join(root, 'desktop/engine.mjs')).href)
   service = await module.startCockpit({
     window,
+    windowsProcesses: readWindowsProcessTable,
     onMachineInvite: notifyMachineInvitation,
     captureExitEnvironment: captureExitRegionEnvironment,
     onExitRegionWarning: notifyExitRegionWarning,
+    clipboardAdapter: createOpcClipboardAdapter(),
+    onClipboardNotice: notifyClipboardNotice,
     terminalStreaming: { open: openOpcTerminalStream, WebSocketServer, WebSocket },
     getMainWindow: () => mainProcessState.mainWindow,
     isBlockedUrl: isBlockedVendorUrl,

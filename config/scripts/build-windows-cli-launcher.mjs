@@ -12,7 +12,7 @@ function readArg(name) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const repoRoot = resolve(import.meta.dirname, '../..')
   const crateRoot = join(repoRoot, 'native', 'windows-cli-launcher')
-  const iconPath = join(repoRoot, 'resources', 'build', 'icon.ico')
+  const iconPath = join(repoRoot, 'resources', 'build', 'opc.ico')
   const output = readArg('--output') ?? join(crateRoot, '.build', 'orca.exe')
   for (const binName of ['orca', 'orca-administrator-restart']) {
     compileWindowsRustExecutable({

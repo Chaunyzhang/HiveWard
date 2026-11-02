@@ -1,4 +1,10 @@
-import type { Liveness, NodeState, TimelineKind, Urgency } from '@shared/api'
+import type {
+  AgentKind,
+  Liveness,
+  NodeState,
+  TimelineKind,
+  Urgency,
+} from '@shared/api'
 
 export function timeAgo(iso: string, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000))
@@ -14,6 +20,26 @@ export function timeAgo(iso: string, now = Date.now()): string {
     return `${h} 小时前`
   }
   return `${Math.round(h / 24)} 天前`
+}
+
+/** 两个时间点之间有多久：45 秒 / 12 分钟 / 1 小时 5 分 / 2 天 3 小时 */
+export function duration(from: string, to?: string, now = Date.now()): string {
+  const end = to ? new Date(to).getTime() : now
+  const s = Math.max(0, Math.round((end - new Date(from).getTime()) / 1000))
+  if (s < 60) {
+    return `${s} 秒`
+  }
+  const m = Math.floor(s / 60)
+  if (m < 60) {
+    return `${m} 分钟`
+  }
+  const h = Math.floor(m / 60)
+  if (h < 24) {
+    return m % 60 ? `${h} 小时 ${m % 60} 分` : `${h} 小时`
+  }
+  return h % 24
+    ? `${Math.floor(h / 24)} 天 ${h % 24} 小时`
+    : `${Math.floor(h / 24)} 天`
 }
 
 export const livenessStyle: Record<Liveness, { dot: string; label: string }> = {
@@ -121,7 +147,7 @@ export const urgencyStyle: Record<Urgency, { dot: string; label: string }> = {
 }
 
 export const timelineKindLabel: Record<TimelineKind, string> = {
-  leader: '负责人',
+  leader: 'Leader Agent',
   objective: '目标',
   task: '任务',
   worker: '下属',
@@ -144,4 +170,12 @@ const dayFmt = new Intl.DateTimeFormat('zh-CN', {
 /** 图表时间轴标签：同一天只显示时分，跨天带日期。 */
 export function axisLabel(iso: string, withDay: boolean) {
   return (withDay ? dayFmt : timeFmt).format(new Date(iso))
+}
+
+/** 能当 Leader Agent 的几家，按钮上写产品名 */
+export const LEADERS: AgentKind[] = ['claude', 'codex', 'kimi']
+export const LEADER_LABEL: Record<string, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  kimi: 'Kimi',
 }

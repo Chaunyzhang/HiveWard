@@ -226,7 +226,7 @@ export async function businessIdentity(business) {
     nameSource,
     ...(detected.logo
       ? {
-          logo: `/api/projects/${encodeURIComponent(business.id)}/logo?v=${Math.trunc(detected.logo.mtimeMs)}`
+          logo: `/api/businesses/${encodeURIComponent(business.id)}/logo?v=${Math.trunc(detected.logo.mtimeMs)}`
         }
       : {})
   }

@@ -1,5 +1,6 @@
+import { businessProjects, projectOf, getProject } from './business-projects.mjs'
 // 派单记录：谁（桌面端会话 / Grok / 命令行）在哪个终端派了什么活。
-// 每一次 opc new / opc tell 是一条；状态和汇报从该终端 Agent 的对话记录里推出来，算出来就落盘，
+// 每一次 hiwd new / hiwd tell 是一条；状态和汇报从该终端 Agent 的对话记录里推出来，算出来就落盘，
 // 终端关了也还能看到最后的结果。
 import { dataDir } from './data-dir.mjs'
 import { join } from 'node:path'
@@ -13,7 +14,7 @@ import { issueConfirmation } from './confirmations.mjs'
 
 const dir = dataDir()
 const file = join(dir, 'dispatches.json')
-// owner：老板在架构图的老板卡上派的活（交给这块业务的总 Agent）
+// owner：老板在架构图的老板卡上派的活（交给这块业务的 Leader Agent）
 const KINDS = new Set(['claude-desktop', 'claude-code', 'grok', 'cli', 'owner'])
 const KEEP = 200
 
@@ -36,6 +37,9 @@ function save(rows) {
 }
 
 export function recordDispatch(body) {
+  if (body.projectId !== undefined) {
+    getProject(body.projectId)
+  }
   const by = body.by ?? {}
   if (typeof body.handle !== 'string' || !body.handle) {
     throw badRequest('缺少 handle')
@@ -49,18 +53,34 @@ export function recordDispatch(body) {
   const row = {
     id: `dsp_${randomUUID().slice(0, 8)}`,
     handle: body.handle,
+    projectId: projectOf({ ...body, path: body.project }, businessProjects(), dispatches())?.id,
     project: typeof body.project === 'string' ? body.project : '',
     agent: typeof body.agent === 'string' ? body.agent : null,
     title: typeof body.title === 'string' ? body.title : '',
     prompt: body.prompt.trim(),
     by: { kind: by.kind, id: by.id, label: String(by.label ?? by.kind), cwd: by.cwd },
-    // leader：这句话是派给这一行的总 Agent 的（老板卡 / opc assign），开出来的 Agent 就是总 Agent
+    // leader：这句话是派给这一行的 Leader Agent 的（老板卡 / hiwd assign），开出来的 Agent 就是 Leader Agent
     ...(body.role === 'leader' ? { role: 'leader' } : {}),
     at: new Date().toISOString(),
+    ...(body.delivery === 'queued' ? { delivery: 'queued' } : {}),
     status: 'pending'
   }
   save([...dispatches(), row])
   return row
+}
+
+export function settleDispatchDelivery(id, error) {
+  const rows = dispatches()
+  const row = rows.find((d) => d.id === id)
+  if (!row) {
+    return
+  }
+  Object.assign(row, {
+    delivery: error ? 'failed' : 'delivered',
+    updatedAt: new Date().toISOString(),
+    ...(error ? { status: 'failed', blockedReason: error } : {})
+  })
+  save(rows)
 }
 
 const norm = (s) => s.replace(/\s+/g, ' ').trim()
@@ -122,12 +142,13 @@ export function dispatchDecision(d, businessId) {
     .filter(Boolean)
     .slice(0, 6)
   const hint = lines.find((l) => /建议/.test(l))
-  // Agent 附的截图（opc browser screenshot 存在 /tmp/opc-shot-*.png）直接给老板看
+  // Agent 附的截图（hiwd browser screenshot 存在 /tmp/opc-shot-*.png）直接给老板看
   const shot = /\/tmp\/(opc-shot-\d+\.png)/.exec(text)?.[1]
   const plain = (l) => l.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
   return {
     id: d.id,
     businessId: businessId ?? '',
+    projectId: d.projectId,
     source: 'question',
     question: d.blockedReason ?? '需要你确认',
     body:
@@ -157,7 +178,7 @@ export async function answerDispatch(id, text, send) {
   const code = issueConfirmation(d.handle)
   await send(
     d.handle,
-    `老板答复：${text}\n\n（确认码 ${code}，30 分钟内有效、只能用一次。只有老板同意执行时才用：在最后那一下加 --confirm ${code}，例如 opc browser click <ref> --confirm ${code}）`
+    `老板答复：${text}\n\n（确认码 ${code}，30 分钟内有效、只能用一次。只有老板同意执行时才用：在最后那一下加 --confirm ${code}，例如 hiwd browser click <ref> --confirm ${code}）`
   )
   Object.assign(d, {
     status: 'completed',
@@ -169,6 +190,7 @@ export async function answerDispatch(id, text, send) {
   return recordDispatch({
     handle: d.handle,
     project: d.project,
+    projectId: d.projectId,
     agent: d.agent,
     prompt: text,
     by: { kind: 'cli', id: 'opc-owner', label: '老板' }
@@ -220,6 +242,9 @@ export async function observeDispatches(listed) {
       const t = listed.find((x) => x.handle === d.handle)
       for (const x of list) {
         x.alive = !!t
+      }
+      if (d.delivery === 'queued' || d.delivery === 'failed') {
+        return
       }
       if (d.status === 'completed' || (d.status === 'blocked' && d.report)) {
         return
@@ -292,6 +317,7 @@ export function dispatchTask(d, businessId, followUps = []) {
   return {
     id: d.id,
     businessId: businessId ?? '',
+    projectId: d.projectId,
     objectiveId: '',
     runId: '',
     title: clip(norm(d.prompt.split('\n')[0]), 80),
@@ -303,7 +329,7 @@ export function dispatchTask(d, businessId, followUps = []) {
     blockedReason: d.blockedReason,
     report: d.report,
     updatedAt: d.updatedAt ?? d.at,
-    project: d.project ? d.project.split('/').pop() : undefined,
+    project: d.project ? d.project.split(/[/\\]/).pop() : undefined,
     dispatchedBy: { kind: d.by.kind, id: d.by.id, label: d.by.label },
     terminal: d.alive ? d.handle : undefined,
     followUps: followUps.length ? followUps.map((f) => clip(norm(f.prompt), 200)) : undefined

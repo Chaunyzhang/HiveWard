@@ -57,12 +57,17 @@ export function Timeline() {
     (b) => b.status !== 'archived'
   )
   const [businessId, setBusinessId] = useState<string>('')
+  const [projectId, setProjectId] = useState<string>('')
+  const lines = byIdOf(projects).get(businessId)?.projects ?? []
   const events = useInfiniteQuery({
-    queryKey: ['timeline', machine, businessId],
+    queryKey: ['timeline', machine, businessId, projectId],
     queryFn: async ({ pageParam }) => {
       const qs = new URLSearchParams({ limit: '50' })
       if (businessId) {
         qs.set('businessId', businessId)
+      }
+      if (projectId) {
+        qs.set('projectId', projectId)
       }
       if (pageParam) {
         qs.set('cursor', pageParam)
@@ -81,7 +86,7 @@ export function Timeline() {
     refetchInterval: 5_000,
   })
   const items = events.data?.pages.flatMap((p) => p.items) ?? []
-  const byId = new Map(projects.map((b) => [b.id, b]))
+  const byId = byIdOf(projects)
 
   // 按天分组（items 已经是倒序）
   const days: { label: string; items: TimelineEvent[] }[] = []
@@ -101,16 +106,33 @@ export function Timeline() {
         <h1 className='text-xl font-medium'>时间线</h1>
         <select
           value={businessId}
-          onChange={(e) => setBusinessId(e.target.value)}
+          onChange={(e) => {
+            setBusinessId(e.target.value)
+            setProjectId('')
+          }}
           className='ms-auto h-8 max-w-56 rounded-md border bg-transparent px-2 text-[13px]'
         >
-          <option value=''>全部项目</option>
+          <option value=''>全部业务</option>
           {projects.map((b) => (
             <option key={b.id} value={b.id}>
               {b.name}
             </option>
           ))}
         </select>
+        {lines.length > 0 && (
+          <select
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            className='h-8 max-w-44 rounded-md border bg-transparent px-2 text-[13px]'
+          >
+            <option value=''>全部项目</option>
+            {lines.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {events.isError ? (
@@ -162,6 +184,8 @@ export function Timeline() {
   )
 }
 
+const byIdOf = (list: BusinessSummary[]) => new Map(list.map((b) => [b.id, b]))
+
 function EventRow({
   event: e,
   project,
@@ -171,6 +195,9 @@ function EventRow({
   project?: BusinessSummary
   showProject: boolean
 }) {
+  const line = e.projectId
+    ? project?.projects?.find((p) => p.id === e.projectId)
+    : undefined
   const body = (
     <>
       <span className='w-11 shrink-0 pt-px font-mono text-[11px] text-muted-foreground'>
@@ -198,6 +225,7 @@ function EventRow({
           {project && <ProjectLogo project={project} size={14} />}
           <span className='truncate'>
             {project?.name ?? e.path?.split('/').at(-1)}
+            {line && ` · ${line.name}`}
           </span>
         </span>
       )}

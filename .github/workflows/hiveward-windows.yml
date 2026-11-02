@@ -101,7 +101,7 @@ jobs:
           ls -la dist
           ls dist/HiveWard-*-windows-x64-setup.exe dist/HiveWard-*-windows-x64.zip
           test -f dist/win-unpacked/HiveWard.exe
-          test -f dist/win-unpacked/resources/opc/bin/opc.cmd
+          test -f dist/win-unpacked/resources/opc/bin/hiwd.cmd
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

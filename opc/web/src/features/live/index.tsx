@@ -4,6 +4,7 @@ import { Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { exitBlockReason } from '@/lib/exit-region'
 import { useExitRegion } from '@/lib/machine'
+import { useOverview } from '@/lib/opc-api'
 import { terminalStatus } from '@/lib/opc-format'
 import {
   useOrcaCreate,
@@ -145,11 +146,17 @@ function NewAgent({ onCreated }: { onCreated: (handle: string) => void }) {
   const create = useOrcaCreate()
   const region = useExitRegion()
   const [project, setProject] = useState('')
+  const [projectId, setProjectId] = useState('')
   const chosen = project || projects.data?.[0]?.path || ''
+  // 选中的目录是登记过的业务时，还能选开在它的哪个项目里
+  const { data: overview } = useOverview()
+  const business = overview?.businesses.find((b) => b.workspacePath === chosen)
+  const lines = (business?.projects ?? []).filter((p) => p.status === 'active')
+  const line = lines.find((p) => p.id === projectId)
 
   const start = (agent: OrcaCreateTerminalRequest['agent']) =>
     create.mutate(
-      { project: chosen, agent },
+      { project: chosen, agent, projectId: line?.id },
       {
         onSuccess: (r) => {
           onCreated(r.handle)
@@ -171,10 +178,13 @@ function NewAgent({ onCreated }: { onCreated: (handle: string) => void }) {
         </button>
       </PopoverTrigger>
       <PopoverContent align='start' className='w-64 p-3'>
-        <p className='mb-2 text-xs text-muted-foreground'>在哪个项目里</p>
+        <p className='mb-2 text-xs text-muted-foreground'>在哪块业务里</p>
         <select
           value={chosen}
-          onChange={(e) => setProject(e.target.value)}
+          onChange={(e) => {
+            setProject(e.target.value)
+            setProjectId('')
+          }}
           className='h-8 w-full rounded-md border bg-transparent px-2 text-[13px]'
         >
           {(projects.data ?? []).map((p) => (
@@ -183,6 +193,23 @@ function NewAgent({ onCreated }: { onCreated: (handle: string) => void }) {
             </option>
           ))}
         </select>
+        {lines.length > 0 && (
+          <>
+            <p className='mt-3 mb-2 text-xs text-muted-foreground'>哪个项目</p>
+            <select
+              value={line?.id ?? ''}
+              onChange={(e) => setProjectId(e.target.value)}
+              className='h-8 w-full rounded-md border bg-transparent px-2 text-[13px]'
+            >
+              <option value=''>不归项目</option>
+              {lines.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <p className='mt-3 mb-2 text-xs text-muted-foreground'>启动</p>
         <div className='grid grid-cols-3 gap-1.5'>
           {AGENTS.map((a) => (

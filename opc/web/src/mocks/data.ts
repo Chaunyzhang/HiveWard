@@ -18,7 +18,10 @@ import type {
 const ago = (minutes: number) =>
   new Date(Date.now() - minutes * 60_000).toISOString()
 
-type BusinessSeed = Omit<BusinessSummary, 'counts' | 'lastEvent' | 'updatedAt'>
+type BusinessSeed = Omit<
+  BusinessSummary,
+  'counts' | 'lastEvent' | 'updatedAt' | 'projects'
+>
 
 const businessSeeds: BusinessSeed[] = [
   {
@@ -463,6 +466,7 @@ function summarize(seed: BusinessSeed): BusinessSummary {
   const lastEvent = events.find((e) => e.businessId === seed.id)
   return {
     ...seed,
+    projects: [],
     counts: {
       objectivesRunning: objectives.filter(
         (o) => o.businessId === seed.id && o.status === 'running'

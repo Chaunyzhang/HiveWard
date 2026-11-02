@@ -1,3 +1,5 @@
+import { configureWindowsProcesses } from '../server/transcripts.mjs'
+import { configureTerminalCli, packagedCliDirectory } from '../server/terminal-cli.mjs'
 import { app, dialog, ipcMain, webContents, Menu } from 'electron'
 import { prepareDataDirectory } from '../server/engine-data.mjs'
 import { captureWindow } from './capture-window.mjs'
@@ -5,6 +7,7 @@ import { BrowserTabs } from './browser.mjs'
 
 export async function startCockpit({
   window,
+  windowsProcesses,
   root,
   metadataPath,
   dataPath,
@@ -15,8 +18,14 @@ export async function startCockpit({
   terminalStreaming,
   onMachineInvite,
   captureExitEnvironment,
-  onExitRegionWarning
+  onExitRegionWarning,
+  clipboardAdapter,
+  onClipboardNotice
 }) {
+  if (windowsProcesses) {
+    configureWindowsProcesses(windowsProcesses)
+  }
+  configureTerminalCli(packagedCliDirectory(root))
   await prepareDataDirectory(dataPath)
   const { browserRoutes } = await import('./browser-routes.mjs')
   const { configureRuntimeMetadata, closeRuntimeConnection } =
@@ -187,7 +196,18 @@ export async function startCockpit({
       ]
     )
   }
-  const server = await startBridge({ port, lanPort, staticDir, extraRoutes, terminalStreaming, onMachineInvite, captureExitEnvironment, onExitRegionWarning })
+  const server = await startBridge({
+    port,
+    lanPort,
+    staticDir,
+    extraRoutes,
+    terminalStreaming,
+    onMachineInvite,
+    captureExitEnvironment,
+    onExitRegionWarning,
+    clipboardAdapter,
+    onClipboardNotice
+  })
   origin = `http://127.0.0.1:${server.address().port}`
   // CLI launched inside engine terminals must reach this same instance.
   process.env.OPC_BRIDGE = origin

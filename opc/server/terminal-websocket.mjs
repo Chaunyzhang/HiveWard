@@ -97,7 +97,9 @@ export function installTerminalWebSockets({ server, lanServer, lan, fromThisMach
         })
         try {
           if (peer) {
-            upstream = new streaming.WebSocket(`ws://${peer.address}${url.pathname}${url.search}`, {
+            const connection = lan.streamConnection(peer)
+            upstream = new streaming.WebSocket(`wss://${connection.address}${url.pathname}${url.search}`, {
+              agent: connection.agent,
               headers: { authorization: `Bearer ${peer.outboundToken}` },
               maxPayload: 12 * 1024 * 1024,
               handshakeTimeout: 10000,

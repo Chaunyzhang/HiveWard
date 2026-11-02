@@ -176,7 +176,7 @@ export function ProjectTerminals({
       ) : (
         <div className='grid flex-1 place-items-center text-center text-sm text-muted-foreground'>
           <div>
-            <p>这个项目里还没有终端。</p>
+            <p>这块业务里还没有终端。</p>
             <p className='mt-1 text-xs'>
               点左上角的 + 新开一个 Agent 或普通终端。
             </p>

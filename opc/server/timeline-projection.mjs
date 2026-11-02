@@ -130,6 +130,7 @@ function dispatchEvents({ dispatch, businessId, decision }) {
     businessId,
     agent: dispatch.liveAgent ?? dispatch.agent ?? undefined,
     terminal: dispatch.handle,
+    projectId: dispatch.projectId,
     path: dispatch.project || dispatch.by.cwd || undefined
   }
   const events = present({

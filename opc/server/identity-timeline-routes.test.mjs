@@ -212,16 +212,16 @@ test(
       )
       await writeFile(join(projectDir, 'resources', 'icon.png'), logoBytes)
 
-      const created = await api('/api/projects', { body: { path: projectDir } })
+      const created = await api('/api/businesses', { body: { path: projectDir } })
       assert.equal(created.status, 200, JSON.stringify(created.data))
       const business = created.data.business
       assert.equal(business.name, 'Fixture Product')
       assert.equal(business.nameSource, 'auto')
-      assert.match(business.logo, new RegExp(`^/api/projects/${business.id}/logo\\?v=\\d+$`))
+      assert.match(business.logo, new RegExp(`^/api/businesses/${business.id}/logo\\?v=\\d+$`))
       assert.equal(business.icon, undefined)
       console.log('ACCEPT project create', JSON.stringify(business))
       assert.equal(business.lastEvent.kind, 'system')
-      assert.match(business.lastEvent.title, /项目加入：Fixture Product/)
+      assert.match(business.lastEvent.title, /业务加入：Fixture Product/)
 
       const storedAfterCreate = JSON.parse(await readFile(join(dataDir, 'businesses.json'), 'utf8'))
       const storedBusiness = storedAfterCreate.find((row) => row.id === business.id)
@@ -229,7 +229,7 @@ test(
       assert.equal(storedBusiness.nameSource, 'auto')
       assert.equal(Object.hasOwn(storedBusiness, 'icon'), false)
 
-      const patched = await api(`/api/projects/${business.id}`, {
+      const patched = await api(`/api/businesses/${business.id}`, {
         method: 'PATCH',
         body: { name: 'Owner Product Name' }
       })
@@ -243,7 +243,7 @@ test(
 
       const emptyDir = join(root, 'empty-project')
       await mkdir(emptyDir)
-      const emptyCreated = await api('/api/projects', { body: { path: emptyDir } })
+      const emptyCreated = await api('/api/businesses', { body: { path: emptyDir } })
       assert.equal(emptyCreated.status, 200, JSON.stringify(emptyCreated.data))
       const emptyBusiness = emptyCreated.data.business
       assert.equal(emptyBusiness.logo, undefined)
@@ -290,7 +290,7 @@ test(
         'public, max-age=31536000, immutable'
       )
       assert.deepEqual(versionedLogo.bytes, logoBytes)
-      const unversionedLogo = await api(`/api/projects/${business.id}/logo`)
+      const unversionedLogo = await api(`/api/businesses/${business.id}/logo`)
       assert.equal(unversionedLogo.status, 200)
       assert.equal(unversionedLogo.headers.get('cache-control'), 'no-store')
       assert.deepEqual(unversionedLogo.bytes, logoBytes)
@@ -303,8 +303,8 @@ test(
           bytes: versionedLogo.bytes.toString('hex')
         })
       )
-      assert.equal((await api(`/api/projects/${emptyBusiness.id}/logo`)).status, 404)
-      assert.equal((await api('/api/projects/unknown-project/logo')).status, 404)
+      assert.equal((await api(`/api/businesses/${emptyBusiness.id}/logo`)).status, 404)
+      assert.equal((await api('/api/businesses/unknown-project/logo')).status, 404)
 
       await writeFile(
         join(emptyDir, 'package.json'),
@@ -635,10 +635,10 @@ test(
         'ACCEPT timeline restart',
         JSON.stringify({ persisted: true, events: afterRestart.items.length })
       )
-      const removed = await api(`/api/projects/${emptyBusiness.id}`, { method: 'DELETE' })
+      const removed = await api(`/api/businesses/${emptyBusiness.id}`, { method: 'DELETE' })
       assert.equal(removed.status, 200, JSON.stringify(removed.data))
       const removalEvents = await timeline(`?businessId=${emptyBusiness.id}&limit=100`)
-      assert.ok(removalEvents.items.some((row) => row.title.startsWith('项目移除：')))
+      assert.ok(removalEvents.items.some((row) => row.title.startsWith('业务移除：')))
     } finally {
       await closeHttp(bridge)
       bridge = undefined

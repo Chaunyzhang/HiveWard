@@ -27,6 +27,7 @@ export function createDiscoveryPresence({
         ...record.value,
         name: hello.name,
         version: hello.version,
+        platform: hello.platform ?? record.value.platform,
         lastSeenAt: new Date(now()).toISOString()
       })
     } catch {

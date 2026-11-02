@@ -7,7 +7,8 @@
 //
 // 终端 → 记录文件：Claude 的进程会话登记优先，其次 lsof；定位结果最多缓存 4 秒。
 // 无精确线索时，先排除其他活进程的记录，再按启动时间猜测。
-import { execFile } from 'node:child_process'
+import { runProcess } from '@orca/process-host'
+import { pathKey } from './workspace-path.mjs'
 import { createHash } from 'node:crypto'
 import {
   openSync,
@@ -21,9 +22,22 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 
-const run = promisify(execFile)
+const run = (program, args, options = {}) => {
+  if (process.platform === 'win32') {
+    return Promise.reject(new Error('Unix process probe unavailable'))
+  }
+  return runProcess({
+    program,
+    args,
+    timeoutMs: 4000,
+    maxOutputBytes: options.maxBuffer ?? 1048576
+  })
+}
+let windowsProcesses = async () => []
+export function configureWindowsProcesses(read) {
+  windowsProcesses = read
+}
 const HOME = homedir()
 const MAX_ITEMS = 300
 const MAX_OUTPUT = 4000
@@ -33,6 +47,14 @@ const MAX_OUTPUT = 4000
 /** 进程命令行里认出是哪家 Agent */
 export async function agentOfPid(pid) {
   try {
+    if (process.platform === 'win32') {
+      const row = (await windowsProcesses()).find((p) => p.pid === pid)
+      return (
+        /\b(codex|claude|kimi)(?:\.exe|\.cmd)?\b/i
+          .exec(row?.command || row?.name || '')?.[1]
+          .toLowerCase() ?? null
+      )
+    }
     const { stdout } = await run('ps', ['-o', 'command=', '-p', String(pid)])
     const m = /\b(codex|claude|kimi)\b/i.exec(stdout)
     return m ? m[1].toLowerCase() : null
@@ -85,6 +107,13 @@ export async function agentPidIn(agent, cwd) {
 
 async function descendants(pid) {
   const all = [pid]
+  if (process.platform === 'win32') {
+    const rows = await windowsProcesses()
+    for (let i = 0; i < all.length && all.length < 64; i++) {
+      all.push(...rows.filter((r) => r.ppid === all[i] && !all.includes(r.pid)).map((r) => r.pid))
+    }
+    return all.slice(0, 64)
+  }
   for (let i = 0; i < all.length && all.length < 64; i++) {
     try {
       const { stdout } = await run('pgrep', ['-P', String(all[i])])
@@ -150,6 +179,10 @@ function claudeSession(pid) {
 
 async function processIdentity(pid) {
   try {
+    if (process.platform === 'win32') {
+      const row = (await windowsProcesses()).find((p) => p.pid === pid)
+      return row?.creationTimeMs ? `${row.pid}:${row.creationTimeMs}:${row.command}` : null
+    }
     const { stdout } = await run('ps', ['-o', 'lstart=,command=', '-p', String(pid)])
     return stdout.trim() || null
   } catch {
@@ -315,10 +348,18 @@ function guessTranscript(agent, cwd, since, excluded, startedAt, peers, pids) {
   )
   return newestIn(
     dir,
-    (p) => p.endsWith('.jsonl') && firstLine(p).includes(`"cwd":"${cwd}"`),
+    (p) => p.endsWith('.jsonl') && transcriptCwdMatches(firstLine(p), cwd),
     since,
     excluded
   )
+}
+
+export function transcriptCwdMatches(line, cwd) {
+  try {
+    return pathKey(JSON.parse(line)?.payload?.cwd) === pathKey(cwd)
+  } catch {
+    return false
+  }
 }
 
 function firstLine(path) {
@@ -326,7 +367,7 @@ function firstLine(path) {
   try {
     const buf = Buffer.alloc(4096)
     const n = readSync(fd, buf, 0, buf.length, 0)
-    return buf.subarray(0, n).toString('utf8').split('\n')[0].replace(/\s/g, '')
+    return buf.subarray(0, n).toString('utf8').split('\n')[0]
   } finally {
     closeSync(fd)
   }

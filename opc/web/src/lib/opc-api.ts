@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   mockBusinessDetail,
   mockDecisions,
-  mockLeaderScreen,
   mockOverview,
   mockResolveDecision,
   mockTasks,
@@ -12,14 +11,19 @@ import {
 import type {
   BusinessDetailResponse,
   BusinessSummary,
-  CreateProjectRequest,
+  CreateBusinessProjectRequest,
+  CreateBusinessProjectResponse,
   Decision,
+  LaunchProjectLeaderRequest,
   LeaderScreenResponse,
   OverviewResponse,
   ResolveDecisionRequest,
   Task,
   TopologyResponse,
-  UpdateProjectRequest,
+  Project,
+  RegisterBusinessRequest,
+  UpdateBusinessProjectRequest,
+  UpdateBusinessRequest,
 } from '@shared/api'
 import { scoped, useMachineId } from './machine'
 
@@ -139,36 +143,19 @@ export function useTopology(businessId?: string) {
   return useQuery(topologyQuery(useMachineId(), businessId))
 }
 
-/** 负责人或下属的终端当前画面（只在详情打开时轮询）。 */
-export function useAgentScreen(
-  target:
-    | { kind: 'leader'; businessId: string }
-    | { kind: 'worker'; dispatchId: string }
-    | null
-) {
+/** 编排下属的终端当前画面（只在详情打开时轮询）。 */
+export function useWorkerScreen(dispatchId: string | null) {
   const m = useMachineId()
   return useQuery({
-    queryKey: ['screen', target, m],
-    enabled: !!target,
-    queryFn: () => {
-      const t = target!
-      if (t.kind === 'leader') {
-        const id = t.businessId
-        return request<LeaderScreenResponse>(
-          `/api/businesses/${encodeURIComponent(id)}/leader/screen`,
-          () => mockLeaderScreen(id),
-          undefined,
-          m
-        )
-      }
-      const id = t.dispatchId
-      return request<LeaderScreenResponse>(
-        `/api/workers/${encodeURIComponent(id)}/screen`,
-        () => mockWorkerScreen(id),
+    queryKey: ['screen', dispatchId, m],
+    enabled: !!dispatchId,
+    queryFn: () =>
+      request<LeaderScreenResponse>(
+        `/api/workers/${encodeURIComponent(dispatchId!)}/screen`,
+        () => mockWorkerScreen(dispatchId!),
         undefined,
         m
-      )
-    },
+      ),
     refetchInterval: 3_000,
   })
 }
@@ -188,37 +175,21 @@ export function useResolveDecision() {
   })
 }
 
-/** 给业务派负责人：在业务目录开一个完全访问模式的负责人终端 */
-export function useLaunchLeader() {
-  const queryClient = useQueryClient()
-  const m = useMachineId()
-  return useMutation({
-    mutationFn: (businessId: string) =>
-      request<unknown>(
-        `/api/businesses/${encodeURIComponent(businessId)}/leader`,
-        () => {
-          throw new Error('模拟数据下不能派负责人')
-        },
-        { method: 'POST' },
-        m
-      ),
-    onSuccess: () => queryClient.invalidateQueries(),
-  })
-}
-
 const noMock = (what: string) => () => {
   throw new Error(`模拟数据下不能${what}`)
 }
 
-/** 加项目：目录登记成引擎里的项目，同时就是一块业务；目录已经是项目时返回那块业务 */
-export function useAddProject() {
+const businessPath = (id: string) => `/api/businesses/${encodeURIComponent(id)}`
+
+/** 加业务：目录登记成引擎里的项目，同时就是一块业务；目录已经登记过时返回那块业务 */
+export function useRegisterBusiness() {
   const queryClient = useQueryClient()
   const m = useMachineId()
   return useMutation({
-    mutationFn: (body: CreateProjectRequest) =>
+    mutationFn: (body: RegisterBusinessRequest) =>
       request<{ business: BusinessSummary }>(
-        '/api/projects',
-        noMock('加项目'),
+        '/api/businesses',
+        noMock('加业务'),
         { method: 'POST', body: JSON.stringify(body) },
         m
       ),
@@ -226,14 +197,65 @@ export function useAddProject() {
   })
 }
 
-/** 改项目：改名会同时改引擎里项目的名字 */
+/** 改业务：改名会同时改引擎里项目的名字 */
+export function useUpdateBusiness() {
+  const queryClient = useQueryClient()
+  const m = useMachineId()
+  return useMutation({
+    mutationFn: ({ id, ...body }: UpdateBusinessRequest & { id: string }) =>
+      request<{ business: BusinessSummary }>(
+        businessPath(id),
+        noMock('改业务'),
+        { method: 'PATCH', body: JSON.stringify(body) },
+        m
+      ),
+    onSuccess: () => queryClient.invalidateQueries(),
+  })
+}
+
+/** 移除业务：只是不再登记，磁盘上的目录和文件不动，任务记录保留 */
+export function useRemoveBusiness() {
+  const queryClient = useQueryClient()
+  const m = useMachineId()
+  return useMutation({
+    mutationFn: (id: string) =>
+      request<unknown>(
+        businessPath(id),
+        noMock('移除业务'),
+        { method: 'DELETE' },
+        m
+      ),
+    onSuccess: () => queryClient.invalidateQueries(),
+  })
+}
+
+/** 在业务里新建项目；带 agent 就顺手开它的 Leader Agent */
+export function useCreateProject(businessId: string) {
+  const queryClient = useQueryClient()
+  const m = useMachineId()
+  return useMutation({
+    mutationFn: (body: CreateBusinessProjectRequest) =>
+      request<CreateBusinessProjectResponse>(
+        `${businessPath(businessId)}/projects`,
+        noMock('建项目'),
+        { method: 'POST', body: JSON.stringify(body) },
+        m
+      ),
+    onSuccess: () => queryClient.invalidateQueries(),
+  })
+}
+
+/** 改项目名、归档 / 恢复 */
 export function useUpdateProject() {
   const queryClient = useQueryClient()
   const m = useMachineId()
   return useMutation({
-    mutationFn: ({ id, ...body }: UpdateProjectRequest & { id: string }) =>
-      request<{ business: BusinessSummary }>(
-        `/api/projects/${encodeURIComponent(id)}`,
+    mutationFn: ({
+      project: p,
+      ...body
+    }: UpdateBusinessProjectRequest & { project: Project }) =>
+      request<{ project: Project }>(
+        `${businessPath(p.businessId)}/projects/${encodeURIComponent(p.id)}`,
         noMock('改项目'),
         { method: 'PATCH', body: JSON.stringify(body) },
         m
@@ -242,16 +264,19 @@ export function useUpdateProject() {
   })
 }
 
-/** 移除项目：只是不再登记，磁盘上的目录和文件不动，任务记录保留 */
-export function useRemoveProject() {
+/** 给项目开 Leader Agent（已有活着的就把话发给它；replace 另开一个顶替） */
+export function useLaunchProjectLeader() {
   const queryClient = useQueryClient()
   const m = useMachineId()
   return useMutation({
-    mutationFn: (id: string) =>
-      request<unknown>(
-        `/api/projects/${encodeURIComponent(id)}`,
-        noMock('移除项目'),
-        { method: 'DELETE' },
+    mutationFn: ({
+      project: p,
+      ...body
+    }: LaunchProjectLeaderRequest & { project: Project }) =>
+      request<{ project: Project; terminal: string }>(
+        `${businessPath(p.businessId)}/projects/${encodeURIComponent(p.id)}/leader`,
+        noMock('开 Leader Agent'),
+        { method: 'POST', body: JSON.stringify(body) },
         m
       ),
     onSuccess: () => queryClient.invalidateQueries(),

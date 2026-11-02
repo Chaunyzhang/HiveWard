@@ -1,6 +1,6 @@
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import type { ObjectiveStatus } from '@shared/api'
-import { ChevronsUpDown, Laptop, Search as SearchIcon, Zap } from 'lucide-react'
+import { ChevronsUpDown, Laptop, Search as SearchIcon } from 'lucide-react'
 import {
   useCurrentMachine,
   useMachineGuard,
@@ -18,6 +18,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { HiveLogo } from '@/components/opc/hive-logo'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { StatusPill } from './status-pill'
 
@@ -29,10 +30,10 @@ export function TopBar() {
     <header className='app-top-bar flex h-12 shrink-0 items-center gap-3 border-b px-3'>
       <Link
         to='/'
-        className='flex size-8 items-center justify-center text-brand'
+        className='flex size-8 items-center justify-center'
         aria-label='HiveWard 总览'
       >
-        <Zap className='size-5 fill-current' />
+        <HiveLogo className='size-6' />
       </Link>
       <Slash />
       <Link to='/' className='text-sm font-medium hover:text-foreground'>
@@ -145,16 +146,16 @@ function BusinessCrumbs() {
               <span className='text-foreground'>{current.name}</span>
             </>
           ) : (
-            <span>全部项目</span>
+            <span>全部业务</span>
           )}
           <ChevronsUpDown className='size-3.5 opacity-60' />
         </DropdownMenuTrigger>
         <DropdownMenuContent align='start' className='w-56'>
           <DropdownMenuItem onClick={() => navigate({ to: '/' })}>
-            全部项目
+            全部业务
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuLabel className='mono-label'>项目</DropdownMenuLabel>
+          <DropdownMenuLabel className='mono-label'>业务</DropdownMenuLabel>
           {businesses.map((b) => (
             <DropdownMenuItem
               key={b.id}

@@ -1,5 +1,11 @@
+import { invitationCode, nonceCommitment, publicInvitation as publicInvite } from './lan-invitation-verification.mjs'
 import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { userInfo } from 'node:os'
+import {
+  socketFingerprint,
+  validFingerprint,
+  validTlsPort
+} from './lan-tls.mjs'
 
 const secret = () => randomBytes(32).toString('hex')
 const fail = (status, code, message) => Object.assign(new Error(message), { status, code })
@@ -10,11 +16,14 @@ const validPeer = (p) =>
   clean(p.name) &&
   clean(p.address) &&
   /^[a-f0-9]{64}$/.test(p.inboundToken) &&
-  /^[a-f0-9]{64}$/.test(p.outboundToken)
+  /^[a-f0-9]{64}$/.test(p.outboundToken) &&
+  validFingerprint(p.fingerprint) &&
+  validTlsPort(p.tlsPort)
 
 export function createOrganization({
   machine,
   lanPort,
+  identity,
   read,
   save,
   file,
@@ -34,9 +43,13 @@ export function createOrganization({
   let busy = false
   let retrying = false
   const persist = () => save(file, state)
-  if (!state.organization && peers().length) {
-    const ids = [machine.id, ...peers().map((p) => p.id)].sort()
-    state.organization = { id: `legacy-${ids[0]}`, name: 'HiveWard 组织', legacy: true }
+  if (!state.tlsVersion) {
+    if (peers().some((p) => !validPeer(p))) {
+      state.organization = null
+      state.deliveries = []
+      state.receipts = []
+    }
+    state.tlsVersion = 1
     persist()
   }
   const publicOrg = () =>
@@ -47,14 +60,6 @@ export function createOrganization({
           members: [machine.id, ...peers().map((p) => p.id)]
         }
       : null
-  const publicInvite = (i) => ({
-    id: i.id,
-    direction: i.direction,
-    status: i.status,
-    machine: i.machine,
-    organization: i.organization,
-    expiresAt: new Date(i.expires).toISOString()
-  })
   const expire = () => {
     for (const [id, i] of invitations) {
       if (i.status === 'pending' && now() >= i.expires) {
@@ -85,6 +90,8 @@ export function createOrganization({
       for (const d of state.deliveries) {
         try {
           await remote(d.address, d.path ?? '/lan/organization/remove', {
+            fingerprint: d.fingerprint,
+            tlsPort: d.tlsPort,
             token: d.token,
             body: d.body
           })
@@ -125,7 +132,15 @@ export function createOrganization({
     const body = { id, organizationId: state.organization?.id }
     state.revoked.push({ key: `${body.organizationId}/${id}`, at: now() })
     state.deliveries.push(
-      ...list.map((p) => ({ address: p.address, token: p.outboundToken, body }))
+      ...list
+        .filter(validPeer)
+        .map((p) => ({
+          address: p.address,
+          fingerprint: p.fingerprint,
+          tlsPort: p.tlsPort,
+          token: p.outboundToken,
+          body
+        }))
     )
     replace(id === machine.id ? [] : list.filter((p) => p.id !== id))
     if (id === machine.id) {
@@ -139,30 +154,12 @@ export function createOrganization({
     close() {
       clearInterval(timer)
     },
-    async reconcileLegacy(p) {
-      if (!state.organization?.legacy) {
-        return
-      }
-      const result = await remote(p.address, '/lan/organization/legacy', {
-        token: p.outboundToken,
-        body: { id: state.organization.id }
-      }).catch((e) => {
-        if (e.status === 409) {
-          return { id: state.organization.id }
-        }
-        throw e
-      })
-      if (result.id < state.organization.id) {
-        state.organization.id = result.id
-        persist()
-      }
-    },
     snapshot() {
       expire()
       return {
         organization: publicOrg(),
         organizationNotices: state.notices,
-        invitations: [...invitations.values()].map(publicInvite),
+        invitations: [...invitations.values()].filter((i) => i.verifyCode).map(publicInvite),
         pendingRemovals: state.deliveries.filter((d) => !d.path).length,
         pendingMembers: state.deliveries.filter((d) => d.path === '/lan/organization/member')
           .length,
@@ -178,6 +175,9 @@ export function createOrganization({
         }
         expire()
         const hello = await remote(address, '/lan/hello')
+        if (!validFingerprint(hello.fingerprint) || !validTlsPort(hello.tlsPort)) {
+          throw fail(409, 'tls_rejoin_required', '对方需要升级 TLS 后重新加入')
+        }
         if (
           !clean(hello.id) ||
           !clean(hello.name) ||
@@ -186,7 +186,7 @@ export function createOrganization({
         ) {
           throw fail(400, 'invalid_peer', '机器身份不符')
         }
-        if (peers().some((p) => p.id === hello.id)) {
+        if (peers().some((p) => p.id === hello.id && validPeer(p))) {
           throw fail(409, 'already_member', '已是组织成员')
         }
         if (
@@ -202,20 +202,44 @@ export function createOrganization({
           id: randomUUID(),
           direction: 'sent',
           status: 'pending',
-          machine: { id: hello.id, name: hello.name, address },
+          machine: {
+            id: hello.id,
+            name: hello.name,
+            address,
+            fingerprint: hello.fingerprint,
+            tlsPort: hello.tlsPort
+          },
+          nonce: secret(),
           organization: publicOrg(),
           expires: now() + ttl,
           capability: secret(),
           token: secret()
         }
-        await remote(address, '/lan/invitations', {
+        const response = await remote(address, '/lan/invitations', {
+          fingerprint: hello.fingerprint,
+          tlsPort: hello.tlsPort,
           body: {
             id: i.id,
-            machine: { ...machine, user: userInfo().username, port: lanPort },
+            machine: { ...machine, ...identity(), user: userInfo().username, port: lanPort },
+            commitment: nonceCommitment(i.nonce),
             organization: i.organization,
             expires: i.expires,
             capability: i.capability
           }
+        })
+        if (!validFingerprint(response.nonce)) {
+          throw fail(400, 'invalid_nonce', '邀请随机数无效')
+        }
+        i.verifyCode = invitationCode(
+          identity().fingerprint,
+          hello.fingerprint,
+          i.id,
+          i.nonce,
+          response.nonce
+        )
+        await remote(address, `/lan/invitations/${i.id}/verify`, {
+          ...i.machine,
+          body: { capability: i.capability, nonce: i.nonce }
         })
         invitations.set(i.id, i)
         return publicInvite(i)
@@ -228,11 +252,12 @@ export function createOrganization({
         if (!i) {
           throw fail(404, 'invite_not_found', '邀请不存在')
         }
-        if (i.status !== 'pending') {
+        if (i.status !== 'pending' || !i.verifyCode) {
           throw fail(409, `invite_${i.status}`, `邀请状态：${i.status}`)
         }
         if (action === 'cancel' && i.direction === 'sent') {
           await remote(i.machine.address, `/lan/invitations/${id}/cancel`, {
+            ...i.machine,
             body: { capability: i.capability }
           })
           i.status = 'cancelled'
@@ -242,6 +267,7 @@ export function createOrganization({
           }
           const token = secret()
           const result = await remote(i.machine.address, `/lan/invitations/${id}/decision`, {
+            ...i.machine,
             body: { capability: i.capability, accept: action === 'accept', token },
             timeout: 15000
           })
@@ -249,7 +275,11 @@ export function createOrganization({
             if (!Array.isArray(result.peers) || !result.peers.every(validPeer)) {
               throw fail(502, 'invalid_peer', '成员凭据无效')
             }
-            result.peers.find((p) => p.id === i.machine.id).address = i.machine.address
+            const inviter = result.peers.find((p) => p.id === i.machine.id)
+            if (!inviter || inviter.fingerprint !== i.machine.fingerprint) {
+              throw fail(403, 'tls_fingerprint_mismatch', '邀请方身份变化')
+            }
+            inviter.address = i.machine.address
             replace(result.peers)
             state.organization = { id: i.organization.id, name: i.organization.name }
             persist()
@@ -270,13 +300,17 @@ export function createOrganization({
         state.organization.name = name.trim()
         state.deliveries = state.deliveries.filter((d) => d.path !== '/lan/organization/rename')
         state.deliveries.push(
-          ...peers().map((p) => ({
-            recipient: p.id,
-            address: p.address,
-            token: p.outboundToken,
-            path: '/lan/organization/rename',
-            body: { name: name.trim(), organizationId: state.organization.id }
-          }))
+          ...peers()
+            .filter(validPeer)
+            .map((p) => ({
+              recipient: p.id,
+              address: p.address,
+              fingerprint: p.fingerprint,
+              tlsPort: p.tlsPort,
+              token: p.outboundToken,
+              path: '/lan/organization/rename',
+              body: { name: name.trim(), organizationId: state.organization.id }
+            }))
         )
         persist()
         await deliver()
@@ -297,6 +331,9 @@ export function createOrganization({
           throw fail(409, 'already_in_organization', '对方已加入组织')
         }
         if (
+          !validFingerprint(socketFingerprint(req.socket)) ||
+          !validFingerprint(body.commitment) ||
+          !validTlsPort(body.machine?.tlsPort) ||
           !clean(body.id) ||
           !clean(body.machine?.id) ||
           !clean(body.machine?.name) ||
@@ -324,22 +361,52 @@ export function createOrganization({
             id: body.machine.id,
             name: body.machine.name,
             user: body.machine.user,
+            fingerprint: socketFingerprint(req.socket),
+            tlsPort: body.machine.tlsPort,
             address: `${ip.includes(':') ? `[${ip}]` : ip}:${body.machine.port}`
           },
           organization: { id: body.organization.id, name: body.organization.name },
           capability: body.capability,
+          commitment: body.commitment,
+          nonce: secret(),
           expires: Math.min(body.expires, now() + ttl)
         }
         invitations.set(i.id, i)
-        onInvite(publicInvite(i))
-        return publicInvite(i)
+        return { nonce: i.nonce }
       }
-      const match = /^\/lan\/invitations\/([^/]+)\/(decision|cancel)$/.exec(path)
+      const match = /^\/lan\/invitations\/([^/]+)\/(decision|cancel|verify)$/.exec(path)
       if (match) {
         return exclusive(async () => {
           const i = invitations.get(match[1])
-          if (!i || body.capability !== i.capability) {
+          if (
+            !i ||
+            body.capability !== i.capability ||
+            socketFingerprint(req.socket) !== i.machine.fingerprint
+          ) {
             throw fail(401, 'unauthorized', '邀请凭据无效')
+          }
+          if (match[2] === 'verify' && i.direction === 'incoming') {
+            if (
+              i.status !== 'pending' ||
+              !validFingerprint(body.nonce) ||
+              nonceCommitment(body.nonce) !== i.commitment
+            ) {
+              throw fail(403, 'invalid_commitment', '确认码握手无效')
+            }
+            if (!i.verifyCode) {
+              i.verifyCode = invitationCode(
+                i.machine.fingerprint,
+                identity().fingerprint,
+                i.id,
+                body.nonce,
+                i.nonce
+              )
+              onInvite(publicInvite(i))
+            }
+            return { ok: true }
+          }
+          if (!i.verifyCode) {
+            throw fail(403, 'verification_required', '请先完成确认码核对')
           }
           if (
             i.status === 'accepted' &&
@@ -389,17 +456,20 @@ export function createOrganization({
           const result = [
             {
               ...machine,
+              ...identity(),
               address: '',
               inboundToken: body.token,
               outboundToken: i.token,
               pairedAt: added.pairedAt
             }
           ]
-          for (const p of peers()) {
+          for (const p of peers().filter(validPeer)) {
             const pair = { ...added, inboundToken: secret(), outboundToken: secret() }
             const delivery = {
               recipient: p.id,
               address: p.address,
+              fingerprint: p.fingerprint,
+              tlsPort: p.tlsPort,
               token: p.outboundToken,
               path: '/lan/organization/member',
               body: { organizationId: state.organization.id, peer: pair }
@@ -407,7 +477,11 @@ export function createOrganization({
             state.deliveries.push(delivery)
             persist()
             try {
-              await remote(p.address, delivery.path, { token: delivery.token, body: delivery.body })
+              await remote(p.address, delivery.path, {
+                ...p,
+                token: delivery.token,
+                body: delivery.body
+              })
               state.deliveries = state.deliveries.filter((d) => d !== delivery)
               persist()
             } catch {}
@@ -415,12 +489,14 @@ export function createOrganization({
               id: p.id,
               name: p.name,
               address: p.address,
+              fingerprint: p.fingerprint,
+              tlsPort: p.tlsPort,
               inboundToken: pair.outboundToken,
               outboundToken: pair.inboundToken,
               pairedAt: added.pairedAt
             })
           }
-          replace([...peers(), added])
+          replace([...peers().filter((p) => p.id !== added.id), added])
           i.status = 'accepted'
           // The recipient derives the inviter address from the observed invitation connection.
           result[0].address = 'observed:1'
@@ -432,7 +508,9 @@ export function createOrganization({
         return undefined
       }
       const receipt = createHash('sha256')
-        .update(`${req.headers?.authorization ?? ''}/${body.organizationId}/${body.id}`)
+        .update(
+          `${socketFingerprint(req.socket)}/${req.headers?.authorization ?? ''}/${body.organizationId}/${body.id}`
+        )
         .digest('hex')
       if (path === '/lan/organization/remove' && state.receipts.includes(receipt)) {
         return { ok: true }
@@ -441,16 +519,6 @@ export function createOrganization({
         throw fail(401, 'unauthorized', '需要组织成员令牌')
       }
       return exclusive(async () => {
-        if (
-          path.endsWith('/legacy') &&
-          state.organization?.legacy &&
-          clean(body.id) &&
-          body.id.startsWith('legacy-')
-        ) {
-          state.organization.id = [state.organization.id, body.id].sort()[0]
-          persist()
-          return { id: state.organization.id }
-        }
         if (body.organizationId !== state.organization?.id) {
           throw fail(409, 'organization_changed', '组织身份不符')
         }

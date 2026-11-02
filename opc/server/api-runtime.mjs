@@ -109,3 +109,5 @@ export function json(value, fallback) {
     throw apiError(502, 'orca_invalid_data', 'Orca 返回的 JSON 字段无法解析')
   }
 }
+
+export const outsideRequest = (operation) => context.run(undefined, operation)

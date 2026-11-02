@@ -263,7 +263,7 @@ test(
         if (child.exitCode !== null) {
           throw new Error(output)
         }
-        if (output.includes('orca-bridge on')) {
+        if (output.includes('bridge on')) {
           return dir
         }
         await pause(50)
@@ -278,21 +278,27 @@ test(
       assert.equal(blocked.status, 403)
       assert.equal(blocked.data.error.code, 'exit_region_blocked')
       assert.deepEqual(creates, [])
+      const createdProject = await api(18917, '/api/businesses/project/projects', { name: '主线' })
+      assert.equal(createdProject.status, 200)
       for (const args of [
         ['new', root, 'codex'],
         ['assign', 'Test project', 'test task']
       ]) {
         const r = await runProcess({
           program: process.execPath,
-          args: ['opc/server/opc.mjs', ...args],
+          args: ['opc/server/hiwd.mjs', ...args],
           env: { ...process.env, OPC_BRIDGE: 'http://127.0.0.1:18917' },
           timeoutMs: 15000
         })
-        log(`opc ${args[0]} denied`, { code: r.code, stderr: r.stderr })
+        log(`hiwd ${args[0]} denied`, { code: r.code, stderr: r.stderr })
         assert.equal(r.code, 1)
         assert.match(r.stderr, /exit_region_blocked/)
       }
-      const leader = await api(18917, '/api/businesses/project/leader', {})
+      const leader = await api(
+        18917,
+        `/api/businesses/project/projects/${createdProject.data.project.id}/leader`,
+        { agent: 'claude' }
+      )
       log('POST target /api/businesses/project/leader', leader)
       assert.equal(leader.status, 403)
       assert.deepEqual(creates, [])
@@ -310,11 +316,11 @@ test(
       assert.deepEqual(creates, [])
       const cliRemote = await runProcess({
         program: process.execPath,
-        args: ['opc/server/opc.mjs', '--on', 'CN-machine', 'new', root, 'claude'],
+        args: ['opc/server/hiwd.mjs', '--on', 'CN-machine', 'new', root, 'claude'],
         env: { ...process.env, OPC_BRIDGE: 'http://127.0.0.1:18907' },
         timeoutMs: 15000
       })
-      log('opc --on CN-machine new ... claude', { code: cliRemote.code, stderr: cliRemote.stderr })
+      log('hiwd --on CN-machine new ... claude', { code: cliRemote.code, stderr: cliRemote.stderr })
       assert.equal(cliRemote.code, 1)
       assert.match(cliRemote.stderr, /exit_region_blocked/)
       assert.equal(

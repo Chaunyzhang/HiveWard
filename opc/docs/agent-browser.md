@@ -6,16 +6,16 @@
 ## 命令
 
 ```bash
-opc browser open <网址> --profile <业务id>   # 开页面；登录按业务隔离，必须带对业务
-opc browser snapshot                         # 读页面结构，可操作的元素带 [ref=e1]
-opc browser click e3                         # 点
-opc browser fill e5 "内容"                    # 清空后填
-opc browser select e7 "选项" | check e8 | press Enter | type "文字"
-opc browser upload e9 /绝对路径/文件.pdf
-opc browser get text e4 | get url | eval "document.title"
-opc browser wait                             # 等页面加载完、网络空闲
-opc browser screenshot                       # 存一张图，打印路径
-opc browser tabs | goto <网址> | back | close
+hiwd browser open <网址> --profile <业务id>   # 开页面；登录按业务隔离，必须带对业务
+hiwd browser snapshot                         # 读页面结构，可操作的元素带 [ref=e1]
+hiwd browser click e3                         # 点
+hiwd browser fill e5 "内容"                    # 清空后填
+hiwd browser select e7 "选项" | check e8 | press Enter | type "文字"
+hiwd browser upload e9 /绝对路径/文件.pdf
+hiwd browser get text e4 | get url | eval "document.title"
+hiwd browser wait                             # 等页面加载完、网络空闲
+hiwd browser screenshot                       # 存一张图，打印路径
+hiwd browser tabs | goto <网址> | back | close
 ```
 
 默认操作你自己最近开的那个页面；`--tab <id>` 指定别的。每次页面跳转后 ref 会失效，重新 `snapshot`。
@@ -40,10 +40,10 @@ opc browser tabs | goto <网址> | back | close
    ```
 
    然后停下等。老板的答复会直接发回给你，里面带一个**确认码**；老板同意执行时，在最后那一下加上它：
-   `opc browser click e23 --confirm 7F3A2C`。确认码一次性、30 分钟有效。
+   `hiwd browser click e23 --confirm 7F3A2C`。确认码一次性、30 分钟有效。
 
    这条工具层面也会拦：点「发布 / 提交 / 保存 / 删除 / 支付 / 发送…」这类按钮、在表单里按回车、用 eval 脚本点击或发请求，
    没有确认码会直接返回 `needs_confirmation`，不会执行。不要想办法绕过。
 4. **登录不归你**：碰到登录页、验证码、两步验证，不要自己输密码，按第 3 条写【需要确认】请老板登录，登录完你接着做。
-5. **别乱开**：同一个网站的同一个账号，同一时间只开一个页面；用完 `opc browser close`。
+5. **别乱开**：同一个网站的同一个账号，同一时间只开一个页面；用完 `hiwd browser close`。
 6. **慢一点**：后台和广告平台对自动化敏感，操作之间留点间隔，不要批量狂点。

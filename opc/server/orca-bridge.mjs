@@ -1,11 +1,22 @@
-import { createExitRegionGuard, configureExitRegionGuard, exitRegionGuard } from './agent-exit-region.mjs'
+import { createServer as createHttpsServer } from 'node:https'
+import { launchProjectLeader } from './project-leaders.mjs'
+import { createFileService } from './files.mjs'
+import { createClipboardService } from './clipboard.mjs'
+import { invalidate } from './orchestration.mjs'
+import { getProject, projectPath, bindProjectTerminal } from './business-projects.mjs'
+import { getBusiness } from './business.mjs'
+import {
+  createExitRegionGuard,
+  configureExitRegionGuard,
+  exitRegionGuard
+} from './agent-exit-region.mjs'
 import { installTerminalWebSockets } from './terminal-websocket.mjs'
 // OPC ↔ Orca 桥：本机端口 + 需要配对令牌的局域网端口。
 // 这是后端的第一块（终端现场）；业务 / 任务 / 待办等接口由后端正式实现时并入。
 // 启动：node server/orca-bridge.mjs   （默认 127.0.0.1:8787，网页 dev 服务器把 /api 代理到这里）
 import { businessRoutes } from './business-routes.mjs'
-import { agentCommand } from './business-terminals.mjs'
-import { ensureRepo } from './api-runtime.mjs'
+import { agentCommand, terminalChat } from './business-terminals.mjs'
+import { ensureRepo, iso } from './api-runtime.mjs'
 import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createLan } from './lan.mjs'
@@ -13,7 +24,7 @@ import { readFile } from 'node:fs/promises'
 import { extname, join, normalize } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { call, OrcaUnavailable } from './orca-client.mjs'
-import { agentOfPid, agentPidIn, locate, readChat } from './transcripts.mjs'
+import { agentOfPid } from './transcripts.mjs'
 
 const PORT = Number(process.env.OPC_PORT ?? 8787)
 const AGENTS = new Set(['claude', 'codex', 'kimi'])
@@ -36,6 +47,9 @@ const routes = [
       // 引擎自己认出的 Agent（agentIdentity）优先，认不出再看前台进程
       const agents = await Promise.all(
         r.terminals.map((t) => knownAgent(t.agentIdentity) ?? foregroundAgent(t.handle))
+      )
+      const started = await Promise.all(
+        r.terminals.map((t, i) => (agents[i] ? agentStartedAt(t.handle) : forgetStart(t.handle)))
       )
       // 跑着 Agent 的终端再问一句它在干活还是在等
       const statuses = await Promise.all(
@@ -60,6 +74,7 @@ const routes = [
           connected: t.connected,
           writable: t.writable,
           lastOutputAt: t.lastOutputAt ?? undefined,
+          startedAt: started[i],
           preview:
             stripAnsi(t.preview ?? '')
               .trim()
@@ -78,7 +93,7 @@ const routes = [
       return {
         projects: r.repos.map((p) => ({
           path: p.path,
-          name: p.displayName ?? p.path.split('/').at(-1)
+          name: p.displayName ?? p.path.split(/[/\\]/).at(-1)
         }))
       }
     }
@@ -113,30 +128,7 @@ const routes = [
   [
     'GET',
     /^\/api\/orca\/terminals\/([^/]+)\/chat$/,
-    async (_req, [handle]) => {
-      const [proc, list] = await Promise.all([
-        call('terminal.inspectProcess', { terminal: handle }),
-        call('terminal.list', {})
-      ])
-      const fence = proc.process?.foregroundProcessEvidence?.fence
-      const term = list.terminals.find((t) => t.handle === handle)
-      const cwd = term?.worktreePath
-      // 没有前台进程 pid 时（比如 Kimi），按目录找这家 Agent 的进程
-      const known = knownAgent(term?.agentIdentity)
-      const pid = fence?.process?.pid ?? (known && cwd ? await agentPidIn(known, cwd) : null)
-      if (!pid || !cwd) {
-        return { agent: null, source: null, items: [] }
-      }
-      const { agent, path } = await locate({
-        pid,
-        cwd,
-        startedAt: Date.parse(fence?.process?.startTime) || undefined
-      })
-      if (!agent || !path) {
-        return { agent, source: null, items: [] }
-      }
-      return { agent, source: path, items: readChat(agent, path) }
-    }
+    async (_req, [handle]) => terminalChat(handle)
   ],
   // 往终端里打字；interrupt=true 相当于按 Ctrl-C
   [
@@ -164,8 +156,30 @@ const routes = [
     /^\/api\/orca\/terminals$/,
     async (req) => {
       const body = await readJson(req)
+      const project = body.projectId ? getProject(body.projectId) : null
+      if (project && project.status !== 'active') {
+        throw badRequest('项目已归档')
+      }
+      const business = project ? getBusiness(project.businessId) : null
+      if (project && body.role === 'leader') {
+        try {
+          const launched = await launchProjectLeader(project.businessId, project.id, {
+            agent: body.agent,
+            model: body.model
+          })
+          return { handle: launched.terminal }
+        } finally {
+          invalidate()
+        }
+      }
+      if (project) {
+        body.project = projectPath(business, project.dir)
+      }
       if (!body.project) {
         throw badRequest('缺少 project')
+      }
+      if (body.model !== undefined && (typeof body.model !== 'string' || !body.model.trim())) {
+        throw badRequest('model 必须是非空字符串')
       }
       if (body.agent && !AGENTS.has(body.agent)) {
         throw badRequest(`不支持的 agent：${body.agent}`)
@@ -180,9 +194,15 @@ const routes = [
       const r = await call('terminal.create', {
         worktree: `path:${repo.path}`,
         title: body.title || body.agent || 'Terminal',
-        command: body.agent ? agentCommand(body.agent, { role: body.role }) : undefined,
+        command: body.agent
+          ? agentCommand(body.agent, { role: body.role, model: body.model, project, business })
+          : undefined,
         presentation: 'background'
       })
+      if (project) {
+        bindProjectTerminal(r.terminal.handle, project.id)
+      }
+      invalidate()
       return { handle: r.terminal.handle }
     }
   ],
@@ -211,6 +231,24 @@ const knownAgent = (name) => /^(codex|claude|kimi)$/i.exec(name ?? '')?.[1].toLo
 
 /** 终端前台跑的是哪家 Agent（codex / claude / kimi）；普通 shell 返回 null。按 pid 缓存。 */
 const agentByPid = new Map()
+// 前台 Agent 进程的启动时间：同一终端里 Agent 没退出就不会变，查到一次就缓存；Agent 退了清掉
+const startedByHandle = new Map()
+async function agentStartedAt(handle) {
+  if (!startedByHandle.has(handle)) {
+    const proc = await call('terminal.inspectProcess', { terminal: handle }).catch(() => null)
+    const at = iso(proc?.process?.foregroundProcessEvidence?.fence?.process?.startTime)
+    if (!at) {
+      return undefined
+    }
+    startedByHandle.set(handle, at)
+  }
+  return startedByHandle.get(handle)
+}
+function forgetStart(handle) {
+  startedByHandle.delete(handle)
+  return undefined
+}
+
 async function foregroundAgent(handle) {
   try {
     const proc = await call('terminal.inspectProcess', { terminal: handle })
@@ -261,7 +299,7 @@ const MIME = {
 // - Host 必须是 127.0.0.1 / localhost（挡 DNS 重绑定：恶意域名解析到 127.0.0.1 再来请求）；
 // - 带 Origin 的（网页发的）只认 OPC 自己的页面（App 窗口、开发服务器）。
 //   否则随便一个网页都能在后台 POST 过来，开完全访问的 Agent、或者让本机和陌生电脑配对。
-// opc 命令和 Agent 用的 node fetch 不带 Origin，照常放行。
+// hiwd 命令和 Agent 用的 node fetch 不带 Origin，照常放行。
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 const DEV_ORIGINS = ['http://localhost:5180', 'http://127.0.0.1:5180']
 function fromThisMachine(req, port) {
@@ -285,17 +323,26 @@ function fromThisMachine(req, port) {
 export async function startBridge({
   port = PORT,
   lanPort = Number(process.env.OPC_LAN_PORT ?? 8788),
+  lanTlsPort = Number(process.env.OPC_LAN_TLS_PORT ?? (lanPort === false ? 0 : lanPort + 1)),
   staticDir,
   extraRoutes = [],
   terminalStreaming,
   onMachineInvite,
   onExitRegionWarning,
   captureExitEnvironment,
-  regionGuard
+  regionGuard,
+  clipboardAdapter,
+  onClipboardNotice
 } = {}) {
-  const guard = regionGuard ?? createExitRegionGuard({ capture: captureExitEnvironment, onWarning: onExitRegionWarning })
+  const guard =
+    regionGuard ??
+    createExitRegionGuard({ capture: captureExitEnvironment, onWarning: onExitRegionWarning })
   configureExitRegionGuard(guard)
-  const lan = createLan({ lanPort, onInvite: onMachineInvite, exitRegion: async () => ({ ...(await guard.status()), warnings: guard.warnings() }) })
+  const lan = createLan({
+    lanPort,
+    onInvite: onMachineInvite,
+    exitRegion: async () => ({ ...(await guard.status()), warnings: guard.warnings() })
+  })
   let observing = false
   const observe = async () => {
     if (observing) {
@@ -304,13 +351,31 @@ export async function startBridge({
     observing = true
     try {
       const listed = await call('terminal.list')
-      const terminals = await Promise.all(listed.terminals.map(async t => ({ ...t, agent: knownAgent(t.agentIdentity) ?? await foregroundAgent(t.handle) })))
+      const terminals = await Promise.all(
+        listed.terminals.map(async (t) => ({
+          ...t,
+          agent: knownAgent(t.agentIdentity) ?? (await foregroundAgent(t.handle))
+        }))
+      )
       await guard.observe(terminals)
-    } catch {} finally { observing = false }
+    } catch {
+      // The runtime can be unavailable during startup.
+    } finally {
+      observing = false
+    }
   }
   const warningTimer = setInterval(() => void observe(), 15000)
   warningTimer.unref()
 
+  const files = createFileService()
+  const clipboard = createClipboardService({
+    adapter: clipboardAdapter,
+    machine: lan.localMachine(),
+    members: lan.onlineMembers,
+    request: lan.memberRequest,
+    notify: onClipboardNotice
+  })
+  clipboard.start()
   const all = [...routes, ...extraRoutes]
   const handle = async (req, res, isLan = false) => {
     const reply = (status, body) => {
@@ -319,8 +384,10 @@ export async function startBridge({
     }
     try {
       const url = new URL(req.url, 'http://x')
+      files.checkForward(req, url)
+      clipboard.checkForward(req, url)
       if (!isLan && !fromThisMachine(req, port)) {
-        throw Object.assign(new Error('只接受本机 HiveWard 页面和 opc 命令的请求'), {
+        throw Object.assign(new Error('只接受本机 HiveWard 页面和 hiwd 命令的请求'), {
           status: 403,
           code: 'forbidden'
         })
@@ -328,6 +395,13 @@ export async function startBridge({
       if (
         isLan ? await lan.lanRequest(req, res, url) : await lan.localRequest(req, res, url, handle)
       ) {
+        return
+      }
+      const peer = isLan && req.socket.encrypted ? lan.authenticate(req) : null
+      if (await files.handle(req, res, url, { remote: isLan, peer })) {
+        return
+      }
+      if (await clipboard.handle(req, res, url, { remote: isLan, peer })) {
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/exit-region') {
@@ -338,7 +412,9 @@ export async function startBridge({
           return reply(200, { allowedCountries: guard.policy() })
         }
         if (req.method === 'POST') {
-          return reply(200, { allowedCountries: guard.setPolicy((await readJson(req)).allowedCountries) })
+          return reply(200, {
+            allowedCountries: guard.setPolicy((await readJson(req)).allowedCountries)
+          })
         }
       }
       if (!isLan && req.method === 'POST' && url.pathname === '/api/exit-region/refresh') {
@@ -367,7 +443,13 @@ export async function startBridge({
       const status = e.status ?? (e instanceof OrcaUnavailable ? 503 : 502)
       const code = e.code ?? (e instanceof OrcaUnavailable ? 'orca_unavailable' : 'orca_error')
       if (!res.headersSent) {
-        reply(status, { error: { code, message: e.message, ...(code === 'exit_region_blocked' ? { details: e.details } : {}) } })
+        reply(status, {
+          error: {
+            code,
+            message: e.message,
+            ...(code === 'exit_region_blocked' ? { details: e.details } : {})
+          }
+        })
       } else {
         res.destroy()
       }
@@ -375,9 +457,16 @@ export async function startBridge({
   }
   const server = createServer((req, res) => handle(req, res))
   const lanServer = lanPort === false ? null : createServer((req, res) => handle(req, res, true))
+  const tlsServer =
+    lanPort === false
+      ? null
+      : createHttpsServer(lan.tlsOptions, (req, res) => handle(req, res, true))
+  lanServer?.on('upgrade', (_req, socket) =>
+    socket.end('HTTP/1.1 403 TLS Required\r\nConnection: close\r\n\r\n')
+  )
   const closeStreams = installTerminalWebSockets({
     server,
-    lanServer,
+    lanServer: tlsServer,
     lan,
     fromThisMachine,
     streaming: terminalStreaming
@@ -392,6 +481,8 @@ export async function startBridge({
     })
   const closeLocal = server.close.bind(server)
   server.close = (callback) => {
+    files.close()
+    const clipboardClosed = clipboard.close()
     clearInterval(warningTimer)
     closeStreams()
     const discoveryClosed = lan.close()
@@ -403,17 +494,31 @@ export async function startBridge({
       }
     })
     lanServer?.closeAllConnections()
+    const tlsClosed = new Promise((resolve) => {
+      if (tlsServer) {
+        tlsServer.close(resolve)
+      } else {
+        resolve()
+      }
+    })
+    tlsServer?.closeAllConnections()
     return closeLocal((error) => {
-      void Promise.all([discoveryClosed, lanClosed]).then(() => callback?.(error))
+      void Promise.all([discoveryClosed, lanClosed, tlsClosed, clipboardClosed]).then(() =>
+        callback?.(error)
+      )
     })
   }
   try {
+    if (tlsServer) {
+      await listen(tlsServer, lanTlsPort, '0.0.0.0')
+      lan.setTlsPort(tlsServer.address().port)
+    }
     await listen(server, port, '127.0.0.1')
     if (lanServer) {
       await listen(lanServer, lanPort, '0.0.0.0')
     }
     console.log(
-      `opc orca-bridge on http://127.0.0.1:${server.address().port}${lanServer ? `; LAN :${lanPort}` : ''}`
+      `HiveWard bridge on http://127.0.0.1:${server.address().port}${lanServer ? `; LAN :${lanPort}` : ''}`
     )
     return server
   } catch (e) {

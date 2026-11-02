@@ -1,3 +1,10 @@
+import {
+  businessProjects,
+  migrateProjects,
+  projectSummaries,
+  projectOf,
+  within
+} from './business-projects.mjs'
 import { updateBusiness, canonicalPath, apiError } from './business.mjs'
 import { rpc, optionalRpc, iso, json } from './api-runtime.mjs'
 import { observeTerminal } from './business-terminals.mjs'
@@ -69,7 +76,9 @@ async function collect() {
   const handles = new Set(registrations.map((b) => b.leaderTerminal).filter(Boolean))
   const terminals = await Promise.all(
     listed.terminals
-      .filter((t) => paths.has(t.worktreePath) || handles.has(t.handle))
+      .filter(
+        (t) => [...paths].some((path) => within(t.worktreePath, path)) || handles.has(t.handle)
+      )
       .map(observeTerminal)
   )
   const details = []
@@ -104,11 +113,16 @@ async function collect() {
         })
       }
     }
+    migrateProjects(business, terminals, assignments)
+    const projectLeaders = businessProjects(business.id)
+      .map((p) => p.leader?.terminal)
+      .filter(Boolean)
     const leaderTerminal = terminals.find((t) => t.handle === business.leaderTerminal)
     const businessRuns = runs.filter(
       (r) =>
         (business.runIds ?? []).includes(r.id) ||
-        (business.leaderTerminal && r.coordinator_handle === business.leaderTerminal)
+        (business.leaderTerminal && r.coordinator_handle === business.leaderTerminal) ||
+        projectLeaders.includes(r.coordinator_handle)
     )
     const tasks = [],
       workers = [],
@@ -149,6 +163,7 @@ async function collect() {
               (shown.terminal ? 'active' : 'release_unknown'),
             startedAt,
             terminal: shown.terminal?.handle ?? undefined,
+            path: listed.terminals.find((t) => t.handle === shown.terminal?.handle)?.worktreePath,
             phase: heartbeat ? json(heartbeat.payload, {}).phase : undefined,
             lastHeartbeatAt: heartbeat ? iso(heartbeat.created_at) : undefined
           }
@@ -185,6 +200,9 @@ async function collect() {
         return {
           id: t.id,
           businessId: business.id,
+          projectId: businessProjects(business.id).find(
+            (p) => p.leader?.terminal === run.coordinator_handle
+          )?.id,
           objectiveId: run.id,
           runId: run.id,
           title,
@@ -224,6 +242,9 @@ async function collect() {
         ...pendingGates.map((g) => ({
           id: g.id,
           businessId: business.id,
+          projectId: businessProjects(business.id).find(
+            (p) => p.leader?.terminal === run.coordinator_handle
+          )?.id,
           objectiveId: run.id,
           source: 'gate',
           question: g.question,
@@ -282,12 +303,7 @@ async function collect() {
 
     const assigned = new Set(workers.map((w) => w.terminal))
     for (const t of terminals) {
-      if (
-        canonicalPath(t.worktreePath) !== canonicalPath(business.workspacePath) ||
-        !t.agent ||
-        t.handle === business.leaderTerminal ||
-        assigned.has(t.handle)
-      ) {
+      if (!within(t.worktreePath, business.workspacePath) || !t.agent || assigned.has(t.handle)) {
         continue
       }
       workers.push({
@@ -298,6 +314,7 @@ async function collect() {
         terminalState: 'active',
         startedAt: t.startedAt,
         terminal: t.handle,
+        path: t.worktreePath,
         title: t.title || undefined
       })
     }
@@ -321,7 +338,9 @@ async function collect() {
       objectivesRunning: objectives.filter((o) => o.status === 'running').length,
       tasksOpen: tasks.filter((t) => !['completed', 'failed'].includes(t.status)).length,
       tasksDone: tasks.filter((t) => t.status === 'completed').length,
-      workersLive: workers.filter((w) => w.liveness === 'live').length,
+      workersLive: workers.filter(
+        (w) => w.liveness === 'live' && !projectLeaders.includes(w.terminal)
+      ).length,
       decisionsPending: decisions.filter((d) => d.state === 'pending').length
     }
     const identity = identities.get(business.id) ?? (await businessIdentity(business))
@@ -339,6 +358,7 @@ async function collect() {
         kind: business.kind,
         missing: business.missing,
         leader,
+        projects: [],
         counts,
         updatedAt: business.updatedAt
       },
@@ -350,12 +370,13 @@ async function collect() {
       recentEvents: []
     })
   }
-  // 派单（opc new / tell）也是任务：属于哪块业务（Grok 带的业务 id / Agent 所在目录 / 派单方所在目录）就归哪块，其余单独列
+  // 派单（hiwd new / tell）也是任务：属于哪块业务（Grok 带的业务 id / Agent 所在目录 / 派单方所在目录）就归哪块，其余单独列
   const sent = await observeDispatches(listed.terminals)
   const orphanTasks = [],
     orphanDecisions = []
   const roots = rootByHandle(sent)
   for (const d of sent) {
+    d.projectId = projectOf({ ...d, path: d.project }, businessProjects(), sent)?.id
     const owner = businessOf(roots.get(d.handle) ?? d, details)
     const businessId = owner?.business.id
     // 追加的话（同一终端上没汇报完又补的）不单独算任务，进展已回填到原任务
@@ -391,14 +412,37 @@ async function collect() {
       }
     }
   }
-  recordTerminalSnapshot(listed.terminals, registrations)
+  const timelineTerminals = listed.terminals.map((t) => ({
+    ...t,
+    projectId: projectOf({ handle: t.handle, path: t.worktreePath }, businessProjects(), sent)?.id
+  }))
+  recordTerminalSnapshot(timelineTerminals, registrations)
   await captureAgentNotifications({
     rpc: optionalRpc,
-    terminals: listed.terminals,
+    terminals: timelineTerminals,
     worktrees: worktrees?.worktrees ?? [],
     businesses: registrations
   })
-  appendTimelineEvents(timelineEventsFromSources(timeline))
+  for (const detail of details) {
+    detail.business.projects = projectSummaries(detail.business.id, terminals, sent, detail.workers)
+    for (const task of detail.tasks) {
+      const worker = detail.workers.find((w) => w.taskId === task.id)
+      task.projectId ??= projectOf(
+        { handle: worker?.terminal, path: worker?.path },
+        detail.business.projects,
+        sent
+      )?.id
+    }
+  }
+  appendTimelineEvents(
+    timelineEventsFromSources(timeline).map((event) => ({
+      ...event,
+      projectId:
+        event.projectId ??
+        details.flatMap((d) => d.tasks).find((t) => t.id === event.taskId)?.projectId ??
+        projectOf({ handle: event.terminal, path: event.path }, businessProjects(), sent)?.id
+    }))
+  )
   for (const detail of details) {
     detail.recentEvents = recentTimelineEvents(detail.business.id, 20)
     detail.business.lastEvent = latestTimelineEvent(detail.business.id)
@@ -417,15 +461,21 @@ async function collect() {
   }
 }
 
-const within = (path, root) => !!path && !!root && (path === root || path.startsWith(`${root}/`))
 const AGENT_NAMES = {
   claude: 'Claude Code',
   codex: 'Codex',
   kimi: 'Kimi Code',
-  opencode: 'opencode'
+  opencode: 'opencode',
+  'claude-desktop': 'Claude 桌面端'
 }
 const agentName = (a) => AGENT_NAMES[a] ?? a
-const sessionAgent = (by) => (by.kind.startsWith('claude') ? 'claude' : undefined)
+// 派活的会话是哪家：Claude 桌面端和终端里的 Claude Code 用不同的 logo
+const sessionAgent = (by) =>
+  by.kind === 'claude-desktop'
+    ? 'claude-desktop'
+    : by.kind.startsWith('claude')
+      ? 'claude'
+      : undefined
 // 派单状态 → 架构图节点上的状态
 const dispatchState = {
   completed: 'done',
@@ -451,6 +501,12 @@ function businessOf(d, details) {
   const live = details.filter((x) => ['active', 'paused'].includes(x.business.status))
   const id = d.by.kind === 'grok' && /^grok:(.+)$/.exec(d.by.id)?.[1]
   return (
+    (d.projectId &&
+      live.find(
+        (x) =>
+          x.business.projects?.some((p) => p.id === d.projectId) ||
+          businessProjects(x.business.id).some((p) => p.id === d.projectId)
+      )) ||
     (id && live.find((x) => x.business.id === id)) ||
     live.find((x) => within(d.project, x.business.workspacePath)) ||
     live.find((x) => within(d.by.cwd, x.business.workspacePath))
@@ -467,12 +523,14 @@ function dispatchedWorker(d, parentId, businessId) {
     agent: d.liveAgent ?? d.agent ?? undefined,
     liveness: 'live',
     terminal: d.handle,
-    activity: d.prompt.split('\n')[0].slice(0, 80),
-    state: dispatchState[d.status]
+    activity: d.title || d.prompt.split('\n')[0].slice(0, 80),
+    state: dispatchState[d.status],
+    startedAt: d.at,
+    finishedAt: d.status === 'completed' ? d.report?.reportedAt : undefined
   }
 }
 
-/** 老板卡 / opc assign 派给总 Agent 时开的、还活着的那个 Agent（这一行的总 Agent），按目录找最近的一个 */
+/** 老板卡 / hiwd assign 派给 Leader Agent 时开的、还活着的那个 Agent（这一行的 Leader Agent），按目录找最近的一个 */
 function ownerSeat(sent, latest, root) {
   const d = sent.findLast(
     (x) =>
@@ -483,7 +541,7 @@ function ownerSeat(sent, latest, root) {
   return d && latest.get(d.handle)
 }
 
-// 总 Agent 回完老板的话就是空闲，不算「已完成」
+// Leader Agent 回完老板的话就是空闲，不算「已完成」
 const seatState = (d) =>
   ({ dispatched: 'working', pending: 'pending', blocked: 'blocked' })[d.status] ?? 'idle'
 // Orca 编排里的下属：按它手上任务的状态
@@ -501,8 +559,8 @@ const tally = (rows) =>
   `派单 ${rows.filter((d) => d.status === 'completed').length}/${rows.length} 已汇报`
 
 /**
- * 架构图（像并联电路）：每块业务一行——项目 →（这块业务的 Grok Bot ∥ 直连）→ 总 Agent → 下属。
- * 总 Agent 是登记的负责人；没有时，用在这块业务目录里派过活的会话（比如开在 ~/玉石 的 Claude Code）。
+ * 架构图（像并联电路）：每块业务一行——项目 →（这块业务的 Grok Bot ∥ 直连）→ Leader Agent → 下属。
+ * Leader Agent 是登记的负责人；没有时，用在这块业务目录里派过活的会话（比如开在 ~/玉石 的 Claude Code）。
  * withProjects：公司级再加上不属于任何业务的项目（比如 ~/opc），每个项目一行，只有直连。
  */
 export function topology(details, sent = [], withProjects = true) {
@@ -519,28 +577,14 @@ export function topology(details, sent = [], withProjects = true) {
   const placed = new Set()
 
   for (const { business: b, workers, tasks } of live) {
-    const projectId = `project:${b.id}`
+    const rootId = `business:${b.id}`
+    const c = b.counts
+    const projects = b.projects ?? []
     const mine = firsts.filter((d) => businessOf(d, details)?.business.id === b.id)
     const grok = mine.filter((d) => d.by.kind === 'grok')
-    // 没登记负责人时：老板在老板卡上开的那个 Agent 是总 Agent；再没有，就用在这块业务目录里派活的会话
-    // 登记的负责人退出了，也由老板卡开的 Agent 接任
-    const seated = b.leader && b.leader.liveness !== 'exited' ? b.leader : null
-    const seat = !seated && ownerSeat(sent, latest, b.workspacePath)
-    const leader = seat ? null : b.leader
-    const session =
-      !leader &&
-      !seat &&
-      mine.findLast(
-        (d) =>
-          !['grok', 'owner'].includes(d.by.kind) &&
-          d.by.id !== 'opc-owner' &&
-          within(d.by.cwd, b.workspacePath)
-      )
-    const id = `leader:${b.id}`,
-      c = b.counts
     nodes.push({
-      id: projectId,
-      kind: 'project',
+      id: rootId,
+      kind: 'business',
       label: b.name,
       project: b.workspacePath,
       businessId: b.id,
@@ -548,7 +592,8 @@ export function topology(details, sent = [], withProjects = true) {
         `任务 ${c.tasksDone}/${c.tasksDone + c.tasksOpen}`,
         ...(c.decisionsPending ? [`待决定 ${c.decisionsPending}`] : [])
       ],
-      attention: c.decisionsPending > 0 || b.leader?.liveness === 'unverifiable'
+      attention:
+        c.decisionsPending > 0 || projects.some((p) => p.leader?.liveness === 'unverifiable')
     })
     nodes.push({
       id: `grok:${b.id}`,
@@ -559,58 +604,63 @@ export function topology(details, sent = [], withProjects = true) {
       activity: grok.length ? tally(grok) : '还没派过活',
       lastSeenAt: grok.at(-1)?.updatedAt ?? grok.at(-1)?.at
     })
-    nodes.push({
-      id,
-      kind: 'leader',
-      parentId: projectId,
-      via: `grok:${b.id}`,
-      businessId: b.id,
-      project: b.workspacePath,
-      label: '总 Agent',
-      sublabel: leader
-        ? `${agentName(leader.agent)}${leader.model ? ` · ${leader.model}` : ''}`
-        : seat
-          ? agentName(seat.liveAgent ?? seat.agent)
-          : session
-            ? session.by.label
-            : '无总 Agent',
-      agent:
-        leader?.agent ??
-        (seat ? (seat.liveAgent ?? seat.agent) : session ? sessionAgent(session.by) : undefined),
-      liveness: leader?.liveness ?? (seat ? 'live' : undefined),
-      state: leader
-        ? leader.liveness === 'exited'
-          ? 'exited'
-          : undefined
-        : seat
-          ? seatState(seat)
-          : undefined,
-      terminal: seated ? seated.id : seat ? seat.handle : undefined,
-      dispatcher: session ? session.by.id : undefined,
-      activity:
-        b.status === 'paused'
-          ? '已暂停'
-          : (leader?.comment ?? (seat ? seat.prompt.split('\n')[0].slice(0, 80) : undefined)),
-      attention: c.decisionsPending > 0 || b.leader?.liveness === 'unverifiable'
-    })
-    // 派出去的 Agent（负责人自己的终端不算下属）
+    for (const p of projects.filter((p) => p.status === 'active')) {
+      const l = p.leader
+      nodes.push({
+        id: `leader:${p.id}`,
+        kind: 'leader',
+        parentId: rootId,
+        via: `grok:${b.id}`,
+        businessId: b.id,
+        projectId: p.id,
+        project: p.path,
+        label: p.name,
+        sublabel: l ? agentName(l.agent) : '还没开 Leader Agent',
+        agent: l?.agent,
+        liveness: l?.liveness,
+        terminal: l?.terminal,
+        state: l?.state,
+        activity: l?.activity,
+        startedAt: l?.startedAt
+      })
+    }
+    const parentFor = (p) => {
+      if (p?.status === 'archived') {
+        return null
+      }
+      if (p) {
+        return `leader:${p.id}`
+      }
+      const id = `leader:${b.id}:unassigned`
+      if (!nodes.some((n) => n.id === id)) {
+        nodes.push({ id, kind: 'leader', parentId: rootId, businessId: b.id, label: '未归项目' })
+      }
+      return id
+    }
+    const leaders = new Set(projects.map((p) => p.leader?.terminal).filter(Boolean))
     for (const d of latest.values()) {
-      if (
-        d.handle === b.leader?.id ||
-        d.handle === seat?.handle ||
-        businessOf(roots.get(d.handle), details)?.business.id !== b.id
-      ) {
+      if (leaders.has(d.handle) || businessOf(roots.get(d.handle), details)?.business.id !== b.id) {
         continue
       }
+      const p = projectOf({ ...d, path: d.project }, projects, sent)
+      const parent = parentFor(p)
       placed.add(d.handle)
-      nodes.push(dispatchedWorker(d, id, b.id))
+      if (parent) {
+        nodes.push({ ...dispatchedWorker(d, parent, b.id), projectId: p?.id })
+      }
     }
-    for (const w of workers.filter((w) => !placed.has(w.terminal) && w.terminal !== seat?.handle)) {
+    for (const w of workers.filter((w) => !placed.has(w.terminal) && !leaders.has(w.terminal))) {
+      const p = projectOf({ handle: w.terminal, path: w.path }, projects, sent)
+      const parent = parentFor(p)
+      if (!parent) {
+        continue
+      }
       nodes.push({
         id: `worker:${b.id}:${w.dispatchId}`,
         kind: 'worker',
-        parentId: id,
+        parentId: parent,
         businessId: b.id,
+        projectId: p?.id,
         label: w.agent,
         agent: w.agent,
         liveness: w.liveness,
@@ -621,13 +671,14 @@ export function topology(details, sent = [], withProjects = true) {
           w.liveness === 'exited'
             ? 'exited'
             : workerState(tasks.find((t) => t.id === w.taskId)?.status),
-        activity: w.phase ?? tasks.find((t) => t.id === w.taskId)?.title ?? w.title
+        activity: w.phase ?? tasks.find((t) => t.id === w.taskId)?.title ?? w.title,
+        startedAt: w.startedAt || undefined
       })
     }
   }
 
   if (withProjects) {
-    // 不属于任何业务的项目（比如在没登记的目录里 opc new 的）：按派单方所在目录分行，根是 project 节点（unregistered）
+    // 不属于任何业务的项目（比如在没登记的目录里 hiwd new 的）：按派单方所在目录分行，根是 project 节点（unregistered）
     const projects = new Map()
     for (const d of firsts) {
       if (businessOf(d, details)) {
@@ -644,10 +695,10 @@ export function topology(details, sent = [], withProjects = true) {
         .map((d) => latest.get(d.handle))
         .filter((d) => d && d.handle !== seat?.handle)
       const working = agents.filter((d) => d.status === 'dispatched').length
-      const projectId = `project:${path}`
+      const projectId = `business:${path}`
       nodes.push({
         id: projectId,
-        kind: 'project',
+        kind: 'business',
         project: path,
         label: path.split('/').pop() || path,
         unregistered: true,
@@ -658,7 +709,7 @@ export function topology(details, sent = [], withProjects = true) {
         kind: 'leader',
         parentId: projectId,
         project: path,
-        label: '总 Agent',
+        label: 'Leader Agent',
         ...(seat
           ? {
               sublabel: agentName(seat.liveAgent ?? seat.agent),

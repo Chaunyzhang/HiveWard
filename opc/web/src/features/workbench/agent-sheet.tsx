@@ -1,8 +1,14 @@
 import { Link } from '@tanstack/react-router'
-import type { BusinessSummary, Task, TopologyNode } from '@shared/api'
+import type { BusinessSummary, Project, Task, TopologyNode } from '@shared/api'
 import { toast } from 'sonner'
-import { useAgentScreen, useLaunchLeader } from '@/lib/opc-api'
-import { agentStatus, agentStatusStyle, timeAgo } from '@/lib/opc-format'
+import { useLaunchProjectLeader, useWorkerScreen } from '@/lib/opc-api'
+import {
+  agentStatus,
+  agentStatusStyle,
+  LEADER_LABEL,
+  LEADERS,
+  timeAgo,
+} from '@/lib/opc-format'
 import { useOrcaTerminals } from '@/lib/orca-live'
 import { cn } from '@/lib/utils'
 import {
@@ -62,6 +68,13 @@ export function AgentSheet({
               />
             ) : node.terminal ? (
               <LiveAgent key={node.id} node={node} />
+            ) : node.kind === 'leader' ? (
+              <NoLeader
+                project={business?.projects?.find(
+                  (p) => p.id === node.projectId
+                )}
+                exited={node.liveness === 'exited'}
+              />
             ) : (
               <ScreenAgent
                 key={node.id}
@@ -109,26 +122,13 @@ function ScreenAgent({
   node: TopologyNode
   context: React.ReactNode
 }) {
-  const screen = useAgentScreen(
-    n.kind === 'leader' && n.businessId
-      ? { kind: 'leader', businessId: n.businessId }
-      : n.kind === 'worker' && n.dispatchId
-        ? { kind: 'worker', dispatchId: n.dispatchId }
-        : null
-  )
+  const screen = useWorkerScreen(n.dispatchId ?? null)
   const stale = n.liveness === 'unverifiable'
   const status = agentStatus({ state: n.state, liveness: n.liveness }) ?? 'idle'
-  // 业务还没有负责人：没有画面可看，直接给派负责人的入口
-  if (
-    n.kind === 'leader' &&
-    (!n.liveness || n.liveness === 'exited') &&
-    n.businessId
-  )
-    return <NoLeader businessId={n.businessId} name={n.label} />
   return (
     <ConsoleView
       agent={n.agent}
-      title={n.kind === 'leader' ? `${n.label} · 负责人` : n.label}
+      title={n.label}
       subtitle={n.sublabel}
       tone={status}
       status={
@@ -223,24 +223,45 @@ function Dispatcher({
   )
 }
 
-function NoLeader({ businessId, name }: { businessId: string; name: string }) {
-  const launch = useLaunchLeader()
+/** 项目还没开 Leader Agent（或 Leader Agent 退出了）：选一家开一个；「未归项目」没有 Leader Agent 可开 */
+function NoLeader({ project, exited }: { project?: Project; exited: boolean }) {
+  const launch = useLaunchProjectLeader()
+  if (!project) {
+    return (
+      <p className='p-6 text-[13px] text-muted-foreground'>
+        这些 Agent 开在业务目录里，但不属于任何项目。
+      </p>
+    )
+  }
   return (
     <div className='flex h-full flex-col items-center justify-center gap-3 text-[13px] text-muted-foreground'>
-      <p>「{name}」现在没有在岗的负责人。</p>
-      <button
-        type='button'
-        disabled={launch.isPending}
-        onClick={() =>
-          launch.mutate(businessId, {
-            onSuccess: () => toast.success('负责人已开，稍等它出现在架构图里'),
-            onError: (e) => toast.error(`没派成：${e.message}`),
-          })
-        }
-        className='h-8 rounded-md bg-foreground px-4 text-xs text-background disabled:opacity-40'
-      >
-        {launch.isPending ? '正在开…' : '派负责人'}
-      </button>
+      <p>
+        「{project.name}」
+        {exited ? '的 Leader Agent 已经退出了。' : '还没开 Leader Agent。'}
+      </p>
+      <div className='flex gap-2'>
+        {LEADERS.map((a) => (
+          <button
+            key={a}
+            type='button'
+            disabled={launch.isPending}
+            onClick={() =>
+              launch.mutate(
+                { project, agent: a, replace: exited },
+                {
+                  onSuccess: () =>
+                    toast.success('Leader Agent 已开，稍等它出现在架构图里'),
+                  onError: (e) => toast.error(`没开成：${e.message}`),
+                }
+              )
+            }
+            className='flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs text-foreground hover:bg-accent disabled:opacity-40'
+          >
+            <AgentLogo agent={a} className='size-3.5' />
+            {LEADER_LABEL[a]}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

@@ -9,23 +9,41 @@ import { createSocket } from 'node:dgram'
 import { networkInterfaces } from 'node:os'
 
 // Discovery never grants trust; tokens are exchanged only after local consent.
-export function discoverUdp(machine, port, found, removed) {
+export function discoverUdp(
+  machine,
+  port,
+  found,
+  removed,
+  {
+    version = machine.version ?? 'unknown',
+    discoveryPort = 18889,
+    interval = 3000,
+    ttl = 15000
+  } = {}
+) {
   const socket = createSocket({ type: 'udp4', reuseAddr: true })
   const group = '239.255.87.88'
-  const discoveryPort = 18889
   const seen = new Map()
+  let closed = false
   let ready = false
   const announce = () => {
     if (!ready) {
       return
     }
     const packet = Buffer.from(
-      JSON.stringify({ protocol: 'hiveward-discovery-1', id: machine.id, name: machine.name, port })
+      JSON.stringify({
+        protocol: 'hiveward-discovery-1',
+        id: machine.id,
+        name: machine.name,
+        port,
+        version,
+        platform: machine.platform ?? process.platform
+      })
     )
     socket.send(packet, discoveryPort, group, () => {})
     socket.send(packet, discoveryPort, '255.255.255.255', () => {})
     for (const [id, time] of seen) {
-      if (Date.now() - time > 15000) {
+      if (Date.now() - time > ttl) {
         seen.delete(id)
         removed(id)
       }
@@ -48,7 +66,9 @@ export function discoverUdp(machine, port, found, removed) {
         d.name.length > 200 ||
         !Number.isInteger(d.port) ||
         d.port < 1 ||
-        d.port > 65535
+        d.port > 65535 ||
+        (d.version !== undefined && (typeof d.version !== 'string' || d.version.length > 100)) ||
+        (d.platform !== undefined && !['darwin', 'win32', 'linux'].includes(d.platform))
       ) {
         return
       }
@@ -59,12 +79,17 @@ export function discoverUdp(machine, port, found, removed) {
       found({
         id: d.id,
         name: d.name,
+        version: d.version,
+        platform: d.platform,
         address: `${info.address}:${d.port}`,
         lastSeenAt: new Date().toISOString()
       })
     } catch {}
   })
   socket.bind(discoveryPort, () => {
+    if (closed) {
+      return
+    }
     socket.setBroadcast(true)
     socket.setMulticastTTL(1)
     for (const entries of Object.values(networkInterfaces())) {
@@ -79,13 +104,19 @@ export function discoverUdp(machine, port, found, removed) {
     ready = true
     announce()
   })
-  const timer = setInterval(announce, 3000)
+  const timer = setInterval(announce, interval)
   timer.unref()
   socket.unref()
   return () => {
+    if (closed) {
+      return
+    }
+    closed = true
     ready = false
     clearInterval(timer)
-    socket.close()
+    try {
+      socket.close()
+    } catch {}
   }
 }
 
@@ -309,4 +340,11 @@ export function discoverBonjour(
     process.removeListener('exit', close)
     return close()
   }
+}
+
+export function cleanupLegacyDiscovery(machine, port, directory) {
+  if (process.platform !== 'darwin') {
+    return Promise.resolve()
+  }
+  return cleanupBonjourOrphans(directory).then(() => cleanupLegacyRegistration(machine, port))
 }

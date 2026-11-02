@@ -1,5 +1,6 @@
+import { containsPath } from './workspace-path.mjs'
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { join } from 'node:path'
 import { dataDir } from './data-dir.mjs'
 
 const KEEP = 5000
@@ -66,13 +67,19 @@ function descendingTimeline() {
   return cachedDescending
 }
 
-function encodeCursor(event, businessId) {
+function encodeCursor(event, businessId, projectId) {
   return Buffer.from(
-    JSON.stringify({ v: 1, ts: event.ts, id: event.id, businessId: businessId ?? null })
+    JSON.stringify({
+      v: 1,
+      ts: event.ts,
+      id: event.id,
+      businessId: businessId ?? null,
+      projectId: projectId ?? null
+    })
   ).toString('base64url')
 }
 
-function decodeCursor(cursor, businessId) {
+function decodeCursor(cursor, businessId, projectId) {
   try {
     if (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
       throw new Error('invalid')
@@ -88,7 +95,8 @@ function decodeCursor(cursor, businessId) {
       Number.isNaN(Date.parse(value.ts)) ||
       typeof value.id !== 'string' ||
       !value.id ||
-      value.businessId !== (businessId ?? null)
+      value.businessId !== (businessId ?? null) ||
+      (value.projectId ?? null) !== (projectId ?? null)
     ) {
       throw new Error('invalid')
     }
@@ -145,23 +153,25 @@ export function appendTimelineEvents(eventOrArray) {
   return added
 }
 
-export function listTimeline({ businessId, cursor, limit } = {}) {
+export function listTimeline({ businessId, projectId, cursor, limit } = {}) {
   const size = pageLimit(limit)
   const business = businessId === '' ? undefined : businessId
   const filtered = descendingTimeline().filter(
-    (event) => business === undefined || event.businessId === business
+    (event) =>
+      (business === undefined || event.businessId === business) &&
+      (!projectId || event.projectId === projectId)
   )
   const after =
     cursor === undefined || cursor === null || cursor === ''
       ? undefined
-      : decodeCursor(cursor, business)
+      : decodeCursor(cursor, business, projectId)
   const remaining = after
     ? filtered.filter((event) => compareDescending(event, after) > 0)
     : filtered
   const items = remaining.slice(0, size)
   return {
     items,
-    nextCursor: remaining.length > size ? encodeCursor(items.at(-1), business) : null
+    nextCursor: remaining.length > size ? encodeCursor(items.at(-1), business, projectId) : null
   }
 }
 
@@ -185,11 +195,7 @@ function businessForPath(path, businesses) {
     if (!root) {
       return false
     }
-    const child = relative(root, path)
-    return (
-      child === '' ||
-      (!!child && child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child))
-    )
+    return containsPath(root, path)
   })
   return candidates.sort(
     (a, b) => (b.workspacePath ?? b.path ?? '').length - (a.workspacePath ?? a.path ?? '').length
@@ -205,6 +211,7 @@ function terminalSnapshot(terminal, businesses) {
   const businessId = terminal.businessId ?? businessForPath(path, businesses)?.id
   return {
     identity,
+    projectId: terminal.projectId,
     handle: terminal.handle,
     title: terminal.title,
     agent: terminal.agent ?? terminal.agentIdentity,
@@ -219,6 +226,7 @@ function terminalEvent(action, terminal, ts) {
     id: `terminal:${action}:${terminal.identity}:${ts}`,
     ts,
     ...(terminal.businessId ? { businessId: terminal.businessId } : {}),
+    projectId: terminal.projectId,
     kind: 'system',
     title: `${action === 'opened' ? '新开' : '关闭'}终端：${label}`,
     ...(terminal.agent ? { agent: terminal.agent } : {}),
@@ -269,6 +277,7 @@ function notificationEvent(notification, epoch, context) {
     id: `notification:${notification.notificationEpoch ?? epoch ?? 'unknown'}:${seq}`,
     ts: iso(notification.emittedAt ?? notification.createdAt ?? Date.now()),
     ...(businessId ? { businessId } : {}),
+    projectId: terminal?.projectId,
     kind: 'worker',
     title: `${notification.agentState === 'done' ? 'Agent 一轮干完' : 'Agent 等待确认'}：${notification.title ?? notification.body ?? ''}`,
     ...(typeof notification.body === 'string' ? { detail: notification.body } : {}),
