@@ -447,7 +447,8 @@ export async function startBridge({
           error: {
             code,
             message: e.message,
-            ...(code === 'exit_region_blocked' ? { details: e.details } : {})
+            ...(code === 'exit_region_blocked' ? { details: e.details } : {}),
+            ...(e.sessionId ? { sessionId: e.sessionId } : {})
           }
         })
       } else {

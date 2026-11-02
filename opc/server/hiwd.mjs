@@ -3,7 +3,8 @@
 // 输出都是纯文本，方便 Bot 读。
 //
 //   hiwd agents                               列出所有终端和里面跑的 Agent
-//   hiwd projects                             列出业务及其项目
+//   hiwd projects [--business 业务]           列出业务及其项目、Leader
+//   hiwd seat ceo|leader … / seat leave       当前 Agent 会话 / 终端坐座位或离座
 //   hiwd read <agent> [-n 20]                 看它最近的对话（找不到对话记录就看终端画面）
 //   hiwd tell <agent> <话…>                   对它说话（派活、追问、纠偏）
 //   hiwd new <目录> <claude|codex|kimi> [话…]  新开一个 Agent（完全访问模式），可带第一句话
@@ -24,6 +25,7 @@ import {
   sendFirst as sendFirstPrompt
 } from './agent-first-prompt.mjs'
 import { runFiles } from './files-cli.mjs'
+import { within } from './business-projects.mjs'
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
@@ -36,11 +38,11 @@ const enc = encodeURIComponent
 let machinePrefix = ''
 const endpoint = (path) => BASE + (machinePrefix ? machinePrefix + path.slice(4) : path)
 
-async function api(path, body, headers = {}) {
+async function api(path, body, headers = {}, method) {
   let res
   try {
     res = await fetch(endpoint(path), {
-      method: body ? 'POST' : 'GET',
+      method: method ?? (body ? 'POST' : 'GET'),
       headers: { 'content-type': 'application/json', ...headers },
       body: body ? JSON.stringify(body) : undefined
     })
@@ -92,7 +94,48 @@ function dispatcher() {
       cwd: process.cwd()
     }
   }
+  if (env.CODEX_THREAD_ID) {
+    return { kind: 'cli', id: env.CODEX_THREAD_ID, label: 'Codex', cwd: process.cwd() }
+  }
   return { kind: 'cli', id: 'cli', label: '命令行', cwd: process.cwd() }
+}
+
+function callerHeaders(id) {
+  const caller = id ? { id } : dispatcher()
+  return {
+    'x-opc-caller': 'agent',
+    'x-opc-dispatcher-id': encodeURIComponent(caller.id)
+  }
+}
+
+function seatSession() {
+  if (process.env.ORCA_TERMINAL_HANDLE) {
+    return null
+  }
+  if (process.env.CLAUDE_CODE_SESSION_ID) {
+    return {
+      sessionId: process.env.CLAUDE_CODE_SESSION_ID,
+      agent: process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop' ? 'claude-desktop' : 'claude',
+      cwd: process.cwd()
+    }
+  }
+  if (process.env.CODEX_THREAD_ID) {
+    return { sessionId: process.env.CODEX_THREAD_ID, agent: 'codex', cwd: process.cwd() }
+  }
+  return null
+}
+
+function takeOption(args, name) {
+  const i = args.indexOf(name)
+  if (i === -1) {
+    return undefined
+  }
+  const value = args[i + 1]
+  if (!value || value.startsWith('--')) {
+    fail(`${name} 缺少值`)
+  }
+  args.splice(i, 2)
+  return value
 }
 
 // 往上找父进程，有一层是 Grok Bot.app 里的进程就算 Grok Bot 派的
@@ -235,6 +278,43 @@ async function matchProject(query) {
   }
   return { business, project }
 }
+
+async function seatBusiness(query) {
+  if (query) {
+    return matchBusiness(query)
+  }
+  const { businesses } = await api('/api/overview')
+  const hits = businesses
+    .filter((b) => within(process.cwd(), b.workspacePath))
+    .sort((a, b) => b.workspacePath.length - a.workspacePath.length)
+  if (hits.length !== 1) {
+    fail(
+      hits.length
+        ? `当前目录对上了 ${hits.length} 块业务，请用 --business 指定`
+        : '认不出当前目录属于哪块业务，请用 --business <业务名或 id> 指定'
+    )
+  }
+  const b = hits[0]
+  return { businessId: b.id, label: b.name, project: b.workspacePath }
+}
+
+async function seatProject(business, query, includeArchived = false) {
+  if (!query) {
+    fail('要用 --project <项目名或 id> 指定项目')
+  }
+  const { projects } = await api(`/api/businesses/${enc(business.businessId)}/projects`)
+  const rows = includeArchived ? projects : projects.filter((p) => p.status === 'active')
+  const hits = rows.filter((p) => p.id === query || p.name === query)
+  if (hits.length !== 1) {
+    fail(`没找到项目「${query}」，可选：${rows.map((p) => `${p.name} (${p.id})`).join('、')}`)
+  }
+  return hits[0]
+}
+
+const occupiedBy = (seat, id) =>
+  (seat?.occupant?.kind === 'session'
+    ? seat.occupant.sessionId
+    : (seat?.occupant?.terminal ?? seat?.terminal)) === id
 
 // 汇报的第一句
 const firstSentence = (s) =>
@@ -517,14 +597,101 @@ switch (cmd) {
     console.log(list.length ? list.map(line).join('\n') : '（没有终端）')
     break
   }
+  case 'seat': {
+    const action = args.shift()
+    const terminal = process.env.ORCA_TERMINAL_HANDLE
+    const session = seatSession()
+    if (!terminal && !session) {
+      fail('只能在 Claude Code / Codex 会话里坐座位')
+    }
+    const replace = args.includes('--replace')
+    if (replace) {
+      args.splice(args.indexOf('--replace'), 1)
+    }
+    const businessQuery = takeOption(args, '--business')
+    if (action === 'leave') {
+      const id = terminal ?? session.sessionId
+      const { businesses } = await api('/api/overview')
+      const seats = businesses.flatMap((b) => [
+        ...(occupiedBy(b.ceo, id) ? [{ business: b, seat: 'ceo' }] : []),
+        ...(b.projects ?? []).flatMap((p) =>
+          occupiedBy(p.leader, id) ? [{ business: b, project: p, seat: 'leader' }] : []
+        )
+      ])
+      if (seats.length !== 1) {
+        fail(
+          seats.length ? '当前身份坐在多个座位上，请先离座再重试' : '当前会话 / 终端没有坐在座位上'
+        )
+      }
+      const current = seats[0]
+      await api(
+        '/api/seats/leave',
+        {
+          seat: current.seat,
+          businessId: current.business.id,
+          projectId: current.project?.id,
+          sessionId: session?.sessionId
+        },
+        callerHeaders(terminal)
+      )
+      console.log(
+        `已离座：${current.business.name}${current.project ? `/${current.project.name}` : ''} 的 ${current.seat === 'ceo' ? 'CEO' : 'Leader'} 位`
+      )
+      break
+    }
+    if (!['ceo', 'leader'].includes(action)) {
+      fail(
+        '用法：hiwd seat ceo|leader [--business 业务] [--project 项目] [--replace]；hiwd seat leave'
+      )
+    }
+    const business = await seatBusiness(businessQuery)
+    const projectQuery = takeOption(args, '--project')
+    const project = action === 'leader' ? await seatProject(business, projectQuery) : null
+    let result
+    if (terminal) {
+      const current = (await terminals()).find((t) => t.handle === terminal)
+      if (!current?.agent || !['claude', 'codex', 'kimi'].includes(current.agent)) {
+        fail('当前 HiveWard 终端里没有可认出的 Claude Code / Codex / Kimi Agent')
+      }
+      result = await api(
+        project
+          ? `/api/businesses/${enc(business.businessId)}/projects/${enc(project.id)}/leader`
+          : `/api/businesses/${enc(business.businessId)}/ceo`,
+        { agent: current.agent, replace },
+        { ...callerHeaders(terminal), 'x-opc-seat-claim': 'terminal' }
+      )
+    } else {
+      result = await api('/api/seats/claim', {
+        seat: action,
+        businessId: business.businessId,
+        projectId: project?.id,
+        session,
+        replace
+      })
+    }
+    console.log(result.brief)
+    break
+  }
   case 'projects': {
     // 列业务（含业务 id）及其项目
-    const { businesses } = await api('/api/overview')
+    const businessQuery = takeOption(args, '--business')
+    let { businesses } = await api('/api/overview')
+    if (businessQuery) {
+      const selected = await matchBusiness(businessQuery)
+      businesses = businesses.filter((b) => b.id === selected.businessId)
+    }
     console.log(
       businesses
         .map(
           (b) =>
-            `${b.name}  ${b.id}  ${b.workspacePath}\n${(b.projects ?? []).map((p) => `  → ${p.name}  ${p.id}  [${p.status}]  ${p.path}`).join('\n')}`
+            `${b.name}  ${b.id}  ${b.workspacePath}\n${(b.projects ?? [])
+              .map((p) => {
+                const leader = p.leader
+                  ? `${p.leader.agent} ${p.leader.occupant?.sessionId ?? p.leader.terminal} [${p.leader.liveness}]`
+                  : 'Leader 位空着'
+                return `  → ${p.name}  ${p.id}  [${p.status}]  ${p.path}\n     Leader：${leader}`
+              })
+              .join('\n')}`
         )
         .join('\n')
     )
@@ -798,24 +965,55 @@ switch (cmd) {
     break
   }
   case 'project': {
-    if (args.shift() !== 'new') {
-      fail('用法：hiwd project new <业务> <项目名> [--dir 子目录] [--agent claude|codex|kimi] [话]')
+    const action = args.shift()
+    const dir = takeOption(args, '--dir')
+    const businessQuery = takeOption(args, '--business')
+    if (action === 'add' || action === 'new') {
+      const agent = takeOption(args, action === 'add' ? '--leader' : '--agent')
+      const promptOption = takeOption(args, '--prompt')
+      const [businessArg, nameArg, ...words] = args
+      const name = action === 'add' ? businessArg : nameArg
+      if (!name || (action === 'add' && nameArg)) {
+        fail(
+          '用法：hiwd project add <名字> [--dir 子目录] [--leader claude|codex|kimi] [--prompt "话"]'
+        )
+      }
+      const business = await seatBusiness(action === 'add' ? businessQuery : businessArg)
+      const result = await api(
+        `/api/businesses/${enc(business.businessId)}/projects`,
+        {
+          name,
+          dir,
+          agent,
+          prompt: promptOption ?? (action === 'new' ? words.join(' ') || undefined : undefined)
+        },
+        callerHeaders()
+      )
+      if (action === 'new') {
+        console.log(JSON.stringify(result, null, 2))
+      } else {
+        console.log(
+          `已新建项目 ${result.project.name} (${result.project.id})${result.project.leader ? `；Leader ${result.project.leader.terminal ?? result.project.leader.occupant?.sessionId}` : ''}${result.leaderError ? `；Leader 未启动：${result.leaderError.message}` : ''}`
+        )
+      }
+      break
     }
-    const option = (name) => {
-      const i = args.indexOf(name)
-      return i === -1 ? undefined : args.splice(i, 2)[1]
+    if (!['archive', 'rename'].includes(action)) {
+      fail('用法：hiwd project add|archive|rename …（旧命令：project new <业务> <项目名>）')
     }
-    const dir = option('--dir'),
-      agent = option('--agent')
-    const [business, name, ...words] = args
-    const row = await matchBusiness(business)
-    const result = await api(`/api/businesses/${enc(row.businessId)}/projects`, {
-      name,
-      dir,
-      agent,
-      prompt: words.join(' ') || undefined
-    })
-    console.log(JSON.stringify(result, null, 2))
+    const [query, newName] = args
+    if (!query || (action === 'rename' && !newName)) {
+      fail(`用法：hiwd project ${action} <项目名或 id>${action === 'rename' ? ' <新名字>' : ''}`)
+    }
+    const business = await seatBusiness(businessQuery)
+    const project = await seatProject(business, query, action === 'rename')
+    const result = await api(
+      `/api/businesses/${enc(business.businessId)}/projects/${enc(project.id)}`,
+      action === 'archive' ? { status: 'archived' } : { name: newName },
+      callerHeaders(),
+      'PATCH'
+    )
+    console.log(`${action === 'archive' ? '已归档' : '已改名'}：${result.project.name}`)
     break
   }
   case 'assign': {
@@ -839,7 +1037,9 @@ switch (cmd) {
         'hiwd files roots | ls <路径> | cat <路径> [--max <字节>] | get <远程路径> [本地路径] | put <本地文件> [远程目录]',
         '    例：hiwd files put ./报告.pdf --on Windows；不填远程目录时进入对方收件箱',
         '所有子命令支持 --on <机器名或 id>（唯一前缀，不区分大小写）',
-        'hiwd project new <业务> <项目名> [--dir 子目录] [--agent claude|codex|kimi] [话]',
+        'hiwd seat ceo|leader [--business 业务] [--project 项目] [--replace] | seat leave',
+        'hiwd project add <名字> [--dir 子目录] [--leader agent] [--prompt 话] | archive <项目> | rename <项目> <新名字>',
+        'hiwd project new <业务> <项目名> [--dir 子目录] [--agent claude|codex|kimi] [话]（旧命令）',
         'hiwd new <目录> <agent> [--project 项目ID或业务/项目] [话]',
         'hiwd agents | projects | read <agent> [-n 20] | tell <agent> <话>',
         '    | new <目录> <claude|codex|kimi> [话] | stop <agent>',

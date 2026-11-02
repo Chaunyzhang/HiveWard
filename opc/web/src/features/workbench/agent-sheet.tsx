@@ -22,6 +22,7 @@ import { AgentLogo, AgentName } from '@/components/opc/agent-logo'
 import { ProjectLogo } from '@/components/opc/project-logo'
 import { AgentConsole, ConsoleView } from '@/features/live/agent-console'
 import { Markdown } from '@/features/live/chat-view'
+import { NoCeo } from './no-ceo'
 import { statusIcon } from './task-status'
 
 /**
@@ -55,7 +56,7 @@ export function AgentSheet({
               <SheetTitle>{node.label}</SheetTitle>
               <SheetDescription>{node.activity}</SheetDescription>
             </SheetHeader>
-            {node.kind === 'grok' || node.dispatcher ? (
+            {node.kind === 'grok' || node.dispatcher || node.sessionId ? (
               <Dispatcher
                 node={node}
                 business={business}
@@ -63,11 +64,13 @@ export function AgentSheet({
                   node.kind === 'grok'
                     ? t.dispatchedBy?.kind === 'grok' &&
                       t.businessId === node.businessId
-                    : t.dispatchedBy?.id === node.dispatcher
+                    : t.dispatchedBy?.id === (node.sessionId ?? node.dispatcher)
                 )}
               />
             ) : node.terminal ? (
               <LiveAgent key={node.id} node={node} />
+            ) : node.kind === 'ceo' ? (
+              <NoCeo business={business} exited={node.liveness === 'exited'} />
             ) : node.kind === 'leader' ? (
               <NoLeader
                 project={business?.projects?.find(
@@ -175,7 +178,9 @@ function Dispatcher({
         <span className='text-xs text-muted-foreground'>
           {n.kind === 'grok'
             ? `老板在 Grok Bot 里下指令，它把活交给${business?.name ?? '这块业务'}的 Agent；这里看它派出去的活`
-            : `对话在${n.sublabel ?? n.label}进行，这里看它派出去的活`}
+            : n.sessionId
+              ? '坐在这个位置上的是一个桌面端会话：要跟它说话回 Claude 桌面端，这里看它派出去的活'
+              : `对话在${n.sublabel ?? n.label}进行，这里看它派出去的活`}
         </span>
       </header>
       <ul className='min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-6'>

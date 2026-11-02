@@ -146,6 +146,7 @@ async function fixture(t, platform = process.platform) {
       now += ms
     },
     rawLocate: source.namespace.locate,
+    findSession: (agent, id, path = cwd) => source.namespace.findSessionTranscript(agent, id, path),
     locate: (pid, start = startedAt) => source.namespace.locate({ pid, cwd, startedAt: start })
   }
 }
@@ -348,4 +349,28 @@ test('Windows native process rows locate Claude child sessions without Unix subp
   f.session(411, 'windows-session')
   assert.equal((await f.locate(410)).path, expected)
   assert.equal(f.calls.length, 0)
+})
+
+test('外部会话按 sessionId 找 Claude / Codex / Kimi 记录，cwd 对不上也能找到', async (t) => {
+  const f = await fixture(t)
+  const claude = f.transcript('claude-seat')
+  const codex = f.write(
+    '.codex/sessions/2026/11/02/rollout-2026-11-02T10-00-00-codex-seat.jsonl',
+    `${JSON.stringify({ type: 'session_meta', payload: { id: 'codex-seat', cwd: f.cwd } })}\n`
+  )
+  const kimi = f.write(
+    `.kimi/sessions/${crypto.createHash('md5').update(f.cwd).digest('hex')}/kimi-seat/wire.jsonl`
+  )
+  assert.equal(f.findSession('claude-desktop', 'claude-seat'), claude)
+  assert.equal(f.findSession('codex', 'codex-seat'), codex)
+  assert.equal(f.findSession('kimi', 'kimi-seat'), kimi)
+  // 坐座位时的目录可能不是会话自己的目录：按会话 id 兜底
+  assert.equal(f.findSession('claude', 'claude-seat', '/other'), claude)
+  assert.equal(f.findSession('codex', 'codex-seat', '/other'), codex)
+  assert.equal(f.findSession('kimi', 'kimi-seat', '/other'), kimi)
+  assert.equal(f.findSession('claude', 'missing-seat', '/other'), null)
+  assert.equal(f.findSession('claude', '../escape'), null)
+  console.log(
+    'ACCEPT session lookup: Claude/Codex/Kimi by id, wrong cwd falls back to id; missing/malformed id rejected'
+  )
 })

@@ -1,5 +1,7 @@
 import { agentOfPid, agentPidIn, locate, readChat } from './transcripts.mjs'
 import { rpc, optionalRpc, iso } from './api-runtime.mjs'
+import { businessProjects } from './business-projects.mjs'
+import { seatOccupantName } from './seat-occupants.mjs'
 
 export const FULL_ACCESS = {
   claude: 'claude --dangerously-skip-permissions',
@@ -15,6 +17,34 @@ export const LEADER_RULES = [
   '下属交活后先用 hiwd read 看汇报和实际改动，再 hiwd review <任务id> --accept 或 hiwd review <任务id> --rework "意见"；没看过的活不要直接通过。通过会按规则关终端并留下工作记录，打回会让同一个 Agent 接着改。',
   '对外的、不可撤回的事（发布、付款、发消息、删数据）必须先问老板。'
 ].join(' ')
+
+export function leaderBrief(business, project) {
+  return [
+    LEADER_RULES,
+    `你带的项目：${project.name}；项目目录：${project.path}；业务目录：${business.workspacePath}。下属开终端时加 --project ${project.id}。`
+  ].join('\n\n')
+}
+
+export function ceoBrief(business) {
+  const projects = businessProjects(business.id).filter((p) => p.status === 'active')
+  const list = projects.length
+    ? projects
+        .map(
+          (p) =>
+            `- ${p.name}（${p.id}）：Leader ${p.leader ? seatOccupantName(p.leader) : '空位'}；目录 ${p.path}`
+        )
+        .join('\n')
+    : '- （暂时没有项目）'
+  return [
+    `你现在坐在「${business.name}」的 CEO 位上。你负责这块业务的派单、项目增减和复核，不亲自写代码 / 干具体活。`,
+    `当前项目和 Leader（随时可用 hiwd projects --business ${business.id} 查最新）：\n${list}`,
+    '没有项目，或活不属于任何项目：用 hiwd new <目录> <claude|codex|kimi> <话> 直接派 Worker。属于某个项目：用 hiwd tell <Leader终端> <话> 交给那个项目的 Leader；Leader 位空着时先用 hiwd project add / 网页开一个终端坐上去。',
+    `项目由你增减：hiwd project add <名字> [--dir <子目录>] [--leader claude|codex|kimi] [--prompt "…"]；hiwd project rename <名字或id> <新名字>；hiwd project archive <名字或id>。新的长期方向就建项目，做完的线就归档；归档前必须确认项目没有在干的活或待复核的单。`,
+    '下属交活后按派单复核流程，用 hiwd read 看汇报和实际改动，再用 hiwd review <任务id> --accept 或 --rework "意见" 复核。',
+    '活干完、没有在等的下属后，执行 hiwd seat leave 离座。',
+    `业务目录：${business.workspacePath}`
+  ].join('\n\n')
+}
 
 export const agentModel = (agent, model) =>
   model ?? (agent === 'kimi' ? 'kimi-code/k3.1-pro' : undefined)
@@ -37,8 +67,9 @@ export function agentCommand(agent, { role, model, project, business, resume } =
   if (model) {
     command += ` --model ${quote(model)}`
   }
-  if (role === 'leader' && agent === 'claude') {
-    command += ` --append-system-prompt ${quote([LEADER_RULES, project && `你带的项目：${project.name}；项目目录：${project.path}；业务目录：${business.workspacePath}。下属开终端时加 --project ${project.id}。`].filter(Boolean).join(' '))}`
+  if (['leader', 'ceo'].includes(role) && agent === 'claude') {
+    const brief = role === 'ceo' ? ceoBrief(business) : leaderBrief(business, project)
+    command += ` --append-system-prompt ${quote(brief)}`
   }
   return command
 }

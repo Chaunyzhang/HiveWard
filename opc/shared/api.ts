@@ -88,6 +88,8 @@ export interface BusinessSummary {
   missing?: boolean
   /** 旧版「一块业务一个负责人」：网页已不用，只为局域网里的旧版本电脑保留，之后删 */
   leader: LeaderSeat | null
+  /** CEO 座位：座位常驻、人不常驻；空着时 null（旧版电脑不返回这个字段） */
+  ceo?: ProjectLeader | null
   /** 这块业务下的项目（含已归档），按创建时间排 */
   projects: Project[]
   counts: BusinessCounts
@@ -124,9 +126,24 @@ export type Project = {
   updatedAt: IsoTime
 }
 
+/** 座位上坐的是谁：HiveWard 开的终端，或者一个桌面端 / 外部会话（HiveWard 打不进去，只读它的对话记录） */
+export type SeatOccupant =
+  | { kind: 'terminal'; terminal: string }
+  | {
+      kind: 'session'
+      /** CLAUDE_CODE_SESSION_ID 等 */
+      sessionId: string
+      /** claude-desktop / claude（不在 HiveWard 终端里的 Claude Code）/ codex … */
+      agent: AgentKind
+      cwd: string
+    }
+
+/** 座位上的人（CEO 位、项目的 Leader 位共用） */
 export type ProjectLeader = {
-  /** Leader Agent 所在终端（handle）；终端没了仍保留最后一个，liveness 为 exited */
-  terminal: string
+  /** 坐在终端里时：终端 handle；终端没了仍保留最后一个，liveness 为 exited。会话坐的没有 */
+  terminal?: string
+  /** 谁坐着（旧数据只有 terminal，读进来当 { kind: 'terminal' }） */
+  occupant?: SeatOccupant
   agent: AgentKind
   model?: string
   liveness: Liveness
@@ -369,7 +386,7 @@ export interface Instruction {
 export interface TopologyNode {
   id: Id
   /** project 是旧版的业务根节点，新版改叫 business；网页两种都认，等局域网里没有旧版本后删 */
-  kind: 'business' | 'project' | 'owner' | 'grok' | 'leader' | 'worker'
+  kind: 'business' | 'project' | 'owner' | 'grok' | 'ceo' | 'leader' | 'worker'
   /** leader / worker：属于哪个项目 */
   projectId?: Id
   /** owner 是旧版老板节点的兼容占位：3a 后台起 topology 不再返回它，后续由前端清理后移除 */
@@ -404,6 +421,8 @@ export interface TopologyNode {
   finishedAt?: IsoTime
   /** 派单开出来的 Worker：复核状态（awaiting 时卡片显示「完成·待复核」）← 派单记录 review.state */
   review?: TaskReview['state']
+  /** 座位是会话坐的（kind 为 ceo / leader）：网页按它读对话记录；这种没有 terminal */
+  sessionId?: string
   /** 节点底部的一行指标，例如 ["任务 9/14", "待决定 1"] */
   stats?: string[]
   /** 需要老板注意（有待决定或负责人失联） */
@@ -602,6 +621,33 @@ export type LaunchProjectLeaderRequest = {
   model?: string
   prompt?: string
   replace?: boolean
+}
+
+/** POST /api/businesses/:id/ceo：开终端坐 CEO 位（同 Leader：已有人时不带 replace 只把 prompt 发给它） */
+export type LaunchCeoRequest = LaunchProjectLeaderRequest
+
+/** POST /api/seats/claim：会话自己坐上座位（hiwd seat 调用） */
+export type ClaimSeatRequest = {
+  seat: 'ceo' | 'leader'
+  businessId: Id
+  /** seat 为 leader 时必填 */
+  projectId?: Id
+  session: { sessionId: string; agent: AgentKind; cwd: string }
+  /** 座位上已有人时：true 顶替（原来的只解绑，不关），false 返回 409 */
+  replace?: boolean
+}
+export type ClaimSeatResponse = {
+  /** 岗位说明全文：hiwd seat 打印出来给会话自己读 */
+  brief: string
+  seat: ProjectLeader
+}
+/** POST /api/seats/leave：离座，座位变空（不关终端 / 会话） */
+export type LeaveSeatRequest = {
+  seat: 'ceo' | 'leader'
+  businessId: Id
+  projectId?: Id
+  /** 会话坐的：只有它本人能离座；终端坐的按调用者终端认 */
+  sessionId?: string
 }
 
 export interface CreateObjectiveRequest {
@@ -952,6 +998,9 @@ export const endpoints = {
   createBusinessProject: { method: 'POST', path: '/api/businesses/:id/projects' }, // CreateBusinessProjectRequest → CreateBusinessProjectResponse
   updateBusinessProject: { method: 'PATCH', path: '/api/businesses/:id/projects/:projectId' }, // UpdateBusinessProjectRequest → { project }
   launchProjectLeader: { method: 'POST', path: '/api/businesses/:id/projects/:projectId/leader' }, // LaunchProjectLeaderRequest → { project, terminal }
+  launchCeo: { method: 'POST', path: '/api/businesses/:id/ceo' }, // LaunchCeoRequest → { business, terminal }
+  claimSeat: { method: 'POST', path: '/api/seats/claim' }, // ClaimSeatRequest → ClaimSeatResponse（座位有人且不 replace → 409）
+  leaveSeat: { method: 'POST', path: '/api/seats/leave' }, // LeaveSeatRequest → { seat: null }
   createObjective: { method: 'POST', path: '/api/businesses/:id/objectives' },
   sendInstruction: { method: 'POST', path: '/api/businesses/:id/instructions' },
   decisions: { method: 'GET', path: '/api/decisions' }, // ?state=pending

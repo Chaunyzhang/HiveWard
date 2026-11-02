@@ -295,7 +295,13 @@ test(
       assert.equal(denied.project.leader, null)
       console.log(`ACCEPT exit blocked: ${JSON.stringify(denied)}`)
       blocked = false
-      assert.equal((await cli('project', 'new', '业务', 'CLI项目', '--dir', 'cli')).code, 0)
+      const cliDenied = await cli('project', 'new', '业务', 'CLI项目', '--dir', 'cli')
+      assert.equal(cliDenied.code, 1)
+      assert.match(cliDenied.stderr, /项目由 CEO 增减/)
+      assert.equal(
+        (await api('/api/businesses/business/projects', { name: 'CLI项目', dir: 'cli' })).status,
+        200
+      )
       assert.equal((await cli('assign', '业务/运营', 'CLI派单')).code, 0)
       assert.equal((await cli('assign', '业务', '模糊派单')).code, 1)
       assert.equal((await cli('projects')).code, 0)
@@ -417,11 +423,21 @@ test(
       )
       const renamed = await api(
         `/api/businesses/business/projects/${b.id}`,
-        { name: '开发', status: 'archived' },
+        { name: '开发' },
         'PATCH'
       )
-      assert.equal(renamed.project.status, 'archived')
-      assert.ok(terminals.some((t) => t.handle === b.leader.terminal))
+      assert.equal(renamed.project.name, '开发')
+      const archivable = await api('/api/businesses/business/projects', {
+        name: '空项目归档',
+        agent: 'claude'
+      })
+      const archived = await api(
+        `/api/businesses/business/projects/${archivable.project.id}`,
+        { status: 'archived' },
+        'PATCH'
+      )
+      assert.equal(archived.project.status, 'archived', JSON.stringify(archived))
+      assert.ok(terminals.some((t) => t.handle === archivable.project.leader.terminal))
       assert.equal((await api('/api/projects', { path: root })).status, 404)
       assert.equal((await api('/api/businesses/business/leader', {})).status, 404)
       assert.equal((await api('/api/businesses/business/leader/screen')).status, 404)

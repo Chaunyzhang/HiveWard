@@ -14,6 +14,7 @@ import type {
   CreateBusinessProjectRequest,
   CreateBusinessProjectResponse,
   Decision,
+  LaunchCeoRequest,
   LaunchProjectLeaderRequest,
   LeaderScreenResponse,
   OverviewResponse,
@@ -312,6 +313,25 @@ export function useResumeRecord() {
         `/api/records/${encodeURIComponent(id)}/resume`,
         noMock('重新打开'),
         { method: 'POST' },
+        m
+      ),
+    onSuccess: () => queryClient.invalidateQueries(),
+  })
+}
+
+/** 开终端坐这块业务的 CEO 位（已有人坐着时不带 replace 就只把 prompt 发给它） */
+export function useLaunchCeo() {
+  const queryClient = useQueryClient()
+  const m = useMachineId()
+  return useMutation({
+    mutationFn: ({
+      businessId,
+      ...body
+    }: LaunchCeoRequest & { businessId: string }) =>
+      request<{ business: BusinessSummary; terminal: string }>(
+        `${businessPath(businessId)}/ceo`,
+        noMock('开 CEO Agent'),
+        { method: 'POST', body: JSON.stringify(body) },
         m
       ),
     onSuccess: () => queryClient.invalidateQueries(),

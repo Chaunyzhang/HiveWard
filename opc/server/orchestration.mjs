@@ -19,6 +19,7 @@ import {
   recordTerminalSnapshot
 } from './timeline.mjs'
 import { timelineEventsFromSources } from './timeline-projection.mjs'
+import { seatOccupantId, summarizeSeat } from './seat-occupants.mjs'
 
 export const OWNER = 'opc-owner' // OPC's explicit message address; never impersonate a coordinator.
 // Set this to an actual OPC HQ run:<id> or terminal handle when a boss mailbox exists.
@@ -104,6 +105,7 @@ async function collect() {
       const leader = terminals.find(
         (t) =>
           canonicalPath(t.worktreePath) === canonicalPath(business.workspacePath) &&
+          t.handle !== business.ceo?.terminal &&
           t.agent === business.leaderAgent
       )
       if (leader) {
@@ -339,7 +341,10 @@ async function collect() {
       tasksOpen: tasks.filter((t) => !['completed', 'failed'].includes(t.status)).length,
       tasksDone: tasks.filter((t) => t.status === 'completed').length,
       workersLive: workers.filter(
-        (w) => w.liveness === 'live' && !projectLeaders.includes(w.terminal)
+        (w) =>
+          w.liveness === 'live' &&
+          !projectLeaders.includes(w.terminal) &&
+          w.terminal !== business.ceo?.terminal
       ).length,
       decisionsPending: decisions.filter((d) => d.state === 'pending').length
     }
@@ -358,6 +363,7 @@ async function collect() {
         kind: business.kind,
         missing: business.missing,
         leader,
+        ceo: null,
         projects: [],
         counts,
         updatedAt: business.updatedAt
@@ -425,6 +431,11 @@ async function collect() {
   })
   for (const detail of details) {
     detail.business.projects = projectSummaries(detail.business.id, terminals, sent, detail.workers)
+    detail.business.ceo = summarizeSeat(
+      registrations.find((row) => row.id === detail.business.id)?.ceo,
+      terminals,
+      sent
+    )
     for (const task of detail.tasks) {
       const worker = detail.workers.find((w) => w.taskId === task.id)
       task.projectId ??= projectOf(
@@ -594,7 +605,9 @@ export function topology(details, sent = [], withProjects = true) {
         ...(c.decisionsPending ? [`待决定 ${c.decisionsPending}`] : [])
       ],
       attention:
-        c.decisionsPending > 0 || projects.some((p) => p.leader?.liveness === 'unverifiable')
+        c.decisionsPending > 0 ||
+        b.ceo?.liveness === 'unverifiable' ||
+        projects.some((p) => p.leader?.liveness === 'unverifiable')
     })
     nodes.push({
       id: `grok:${b.id}`,
@@ -604,6 +617,23 @@ export function topology(details, sent = [], withProjects = true) {
       agent: 'grokbot',
       activity: grok.length ? tally(grok) : '还没派过活',
       lastSeenAt: grok.at(-1)?.updatedAt ?? grok.at(-1)?.at
+    })
+    const ceo = b.ceo
+    nodes.push({
+      id: `ceo:${b.id}`,
+      kind: 'ceo',
+      parentId: rootId,
+      businessId: b.id,
+      project: b.workspacePath,
+      label: 'CEO Agent',
+      sublabel: ceo ? agentName(ceo.agent) : 'CEO 位空着',
+      agent: ceo?.agent,
+      liveness: ceo?.liveness,
+      terminal: ceo?.terminal,
+      sessionId: ceo?.occupant?.kind === 'session' ? ceo.occupant.sessionId : undefined,
+      state: ceo?.state,
+      activity: ceo?.activity,
+      startedAt: ceo?.startedAt
     })
     for (const p of projects.filter((p) => p.status === 'active')) {
       const l = p.leader
@@ -620,17 +650,21 @@ export function topology(details, sent = [], withProjects = true) {
         agent: l?.agent,
         liveness: l?.liveness,
         terminal: l?.terminal,
+        sessionId: l?.occupant?.kind === 'session' ? l.occupant.sessionId : undefined,
         state: l?.state,
         activity: l?.activity,
         startedAt: l?.startedAt
       })
     }
-    const parentFor = (p) => {
+    const parentFor = (p, d) => {
       if (p?.status === 'archived') {
         return null
       }
       if (p) {
         return `leader:${p.id}`
+      }
+      if (ceo && d?.by.kind !== 'grok' && d?.by.id === seatOccupantId(ceo)) {
+        return `ceo:${b.id}`
       }
       const id = `leader:${b.id}:unassigned`
       if (!nodes.some((n) => n.id === id)) {
@@ -638,13 +672,15 @@ export function topology(details, sent = [], withProjects = true) {
       }
       return id
     }
-    const leaders = new Set(projects.map((p) => p.leader?.terminal).filter(Boolean))
+    const leaders = new Set(
+      [...projects.map((p) => p.leader?.terminal), ceo?.terminal].filter(Boolean)
+    )
     for (const d of latest.values()) {
       if (leaders.has(d.handle) || businessOf(roots.get(d.handle), details)?.business.id !== b.id) {
         continue
       }
       const p = projectOf({ ...d, path: d.project }, projects, sent)
-      const parent = parentFor(p)
+      const parent = parentFor(p, d)
       placed.add(d.handle)
       if (parent) {
         nodes.push({ ...dispatchedWorker(d, parent, b.id), projectId: p?.id })

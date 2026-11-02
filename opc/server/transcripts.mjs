@@ -394,6 +394,116 @@ export function transcriptSessionId(agent, path) {
   return null
 }
 
+const sessionFiles = new Map() // agent:sessionId -> 记录文件（会话 id 不会重复，找到一次就记住）
+
+/** 在每个子目录里找 <sessionId><suffix>：坐座位时的 cwd 不一定是会话自己的目录（比如 cd 进业务目录再跑 hiwd seat） */
+function findInSubdirectories(root, suffix) {
+  let entries
+  try {
+    entries = readdirSync(root, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  for (const entry of entries) {
+    const file = join(root, entry.name, suffix)
+    if (entry.isDirectory() && existsSync(file)) {
+      return file
+    }
+  }
+  return null
+}
+
+/** 外部会话没有终端进程可定位，按会话 id 找它自己的记录：先按 cwd，对不上再按会话 id 全找一遍。 */
+export function findSessionTranscript(agent, sessionId, cwd) {
+  const key = `${agent}:${sessionId}`
+  const known = sessionFiles.get(key)
+  if (known && existsSync(known)) {
+    return known
+  }
+  const file = findSessionTranscriptUncached(agent, sessionId, cwd)
+  if (file) {
+    sessionFiles.set(key, file)
+  }
+  return file
+}
+
+function findSessionTranscriptUncached(agent, sessionId, cwd) {
+  agent = agent === 'claude-desktop' || agent === 'claude-code' ? 'claude' : agent
+  if (
+    !['claude', 'codex', 'kimi'].includes(agent) ||
+    typeof sessionId !== 'string' ||
+    !sessionId ||
+    /[/\\]/.test(sessionId) ||
+    typeof cwd !== 'string' ||
+    !cwd
+  ) {
+    return null
+  }
+  if (agent === 'claude') {
+    const paths = [cwd]
+    try {
+      paths.push(realpathSync(cwd))
+    } catch {
+      /* Keep the original cwd when it no longer exists. */
+    }
+    for (const path of paths) {
+      const file = join(
+        HOME,
+        '.claude/projects',
+        path.replace(/[^A-Za-z0-9]/g, '-'),
+        `${sessionId}.jsonl`
+      )
+      if (existsSync(file)) {
+        return file
+      }
+    }
+    return findInSubdirectories(join(HOME, '.claude/projects'), `${sessionId}.jsonl`)
+  }
+  if (agent === 'kimi') {
+    const file = join(
+      HOME,
+      '.kimi/sessions',
+      createHash('md5').update(cwd).digest('hex'),
+      sessionId,
+      'wire.jsonl'
+    )
+    return existsSync(file)
+      ? file
+      : findInSubdirectories(join(HOME, '.kimi/sessions'), join(sessionId, 'wire.jsonl'))
+  }
+  const root = join(HOME, '.codex/sessions')
+  const pending = [root]
+  while (pending.length) {
+    const dir = pending.pop()
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        pending.push(path)
+      } else if (
+        entry.isFile() &&
+        entry.name.endsWith('.jsonl') &&
+        entry.name.includes(sessionId)
+      ) {
+        try {
+          // 文件名带着会话 id，再核对一遍记录里的 id；cwd 不强求一致（同上，坐座位时的目录可能不是会话的）
+          if (transcriptSessionId('codex', path) === sessionId) {
+            return path
+          }
+        } catch {
+          /* A rollout can still be creating its first line. */
+        }
+      }
+    }
+  }
+  return null
+}
+
 const LOCATE_TTL_MS = 4_000
 const locateCache = new Map() // pid -> { identity, cwd, expiresAt, promise }
 

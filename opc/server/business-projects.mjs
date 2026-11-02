@@ -5,10 +5,15 @@ import { containsPath, validProjectDir } from './workspace-path.mjs'
 import { dataDir } from './data-dir.mjs'
 import { getBusiness, badRequest, apiError, canonicalPath } from './business.mjs'
 import { appendTimelineEvents } from './timeline.mjs'
+import { normalizeSeat, seatOccupantId, summarizeSeat } from './seat-occupants.mjs'
 
 function read() {
   try {
-    return JSON.parse(readFileSync(join(dataDir(), 'business-projects.json'), 'utf8'))
+    const data = JSON.parse(readFileSync(join(dataDir(), 'business-projects.json'), 'utf8'))
+    return {
+      ...data,
+      projects: data.projects.map((p) => ({ ...p, leader: normalizeSeat(p.leader) }))
+    }
   } catch (e) {
     if (e.code === 'ENOENT') {
       return { projects: [], migrated: [], bindings: {} }
@@ -70,6 +75,9 @@ function nameOf(name, projects, except) {
   }
   return name.trim()
 }
+function actor(by) {
+  return by?.kind === 'owner' ? '老板' : `CEO（${by.id}）`
+}
 function event(p, title) {
   appendTimelineEvents({
     id: `project:${p.id}:${randomUUID()}`,
@@ -81,7 +89,7 @@ function event(p, title) {
     path: p.path
   })
 }
-export function createBusinessProject(businessId, body) {
+export function createBusinessProject(businessId, body, by) {
   const data = read(),
     b = getBusiness(businessId)
   const name = nameOf(
@@ -104,10 +112,10 @@ export function createBusinessProject(businessId, body) {
   }
   data.projects.push(p)
   save(data)
-  event(p, `新建项目：${name}`)
+  event(p, by ? `${actor(by)}新建项目 ${name}` : `新建项目：${name}`)
   return p
 }
-export function updateProject(id, patch) {
+export function updateProject(id, patch, by) {
   const data = read(),
     p = data.projects.find((p) => p.id === id)
   if (!p) {
@@ -123,12 +131,39 @@ export function updateProject(id, patch) {
   if (patch.status !== undefined && !['active', 'archived'].includes(patch.status)) {
     throw badRequest('status 必须为 active 或 archived')
   }
+  const oldLeader = p.leader
   Object.assign(p, patch, { updatedAt: new Date().toISOString() })
+  if (patch.status === 'archived') {
+    p.leader = null
+    const handle = seatOccupantId(oldLeader)
+    if (handle) {
+      delete data.bindings?.[handle]
+    }
+  }
   save(data)
   if (patch.name || patch.status) {
-    event(p, `${patch.status === 'archived' ? '归档项目' : '更新项目'}：${p.name}`)
+    const action =
+      patch.status === 'archived' ? '归档项目' : patch.status === 'active' ? '恢复项目' : '更新项目'
+    event(p, by ? `${actor(by)}${action} ${p.name}` : `${action}：${p.name}`)
   }
   return p
+}
+
+export function assertProjectArchiveable(id, sent) {
+  const projects = businessProjects()
+  const project = getProject(id)
+  const active = sent.filter(
+    (d) =>
+      !d.parent &&
+      projectOf({ ...d, path: d.project }, projects, sent)?.id === id &&
+      (!['completed', 'failed'].includes(d.status) ||
+        ['awaiting', 'rework'].includes(d.review?.state))
+  )
+  if (active.length) {
+    const list = active.map((d) => `${d.id}（${d.prompt.split('\n')[0].slice(0, 60)}）`).join('、')
+    throw apiError(409, 'project_busy', `项目还有在干活 / 待复核的单：${list}`)
+  }
+  return project
 }
 export function bindProjectTerminal(handle, projectId) {
   getProject(projectId)
@@ -149,7 +184,7 @@ export function projectOf({ handle, projectId, path, by }, projects, sent = []) 
   let current = handle
   while (current && !visited.has(current)) {
     visited.add(current)
-    const leader = projects.find((p) => p.leader?.terminal === current)
+    const leader = projects.find((p) => seatOccupantId(p.leader) === current)
     if (leader) {
       return leader
     }
@@ -165,7 +200,8 @@ export function migrateProjects(business, terminals, sent) {
   if (data.migrated.includes(business.id)) {
     return
   }
-  const alive = (handle) => terminals.find((t) => t.handle === handle && t.agent)
+  const alive = (handle) =>
+    handle !== business.ceo?.terminal && terminals.find((t) => t.handle === handle && t.agent)
   const registered = alive(business.leaderTerminal)
   const owner = sent.findLast(
     (d) =>
@@ -185,6 +221,7 @@ export function migrateProjects(business, terminals, sent) {
       status: 'active',
       leader: {
         terminal: terminal.handle,
+        occupant: { kind: 'terminal', terminal: terminal.handle },
         agent: terminal.agent,
         liveness: 'live',
         startedAt: terminal.startedAt || business.leaderStartedAt || ''
@@ -203,27 +240,9 @@ export function projectSummaries(businessId, terminals, sent, workers = []) {
     const rows = sent.filter(
       (d) => projectOf({ ...d, path: d.project }, projects, sent)?.id === p.id
     )
-    const last = rows.findLast((d) => d.handle === p.leader?.terminal)
-    const t = terminals.find((t) => t.handle === p.leader?.terminal)
     return {
       ...p,
-      leader: p.leader
-        ? {
-            ...p.leader,
-            liveness: !t ? 'exited' : t.agent ? 'live' : 'unverifiable',
-            state: !t
-              ? 'exited'
-              : last?.delivery === 'failed'
-                ? 'failed'
-                : ({ dispatched: 'working', pending: 'pending', blocked: 'blocked' }[
-                    last?.status
-                  ] ?? 'idle'),
-            activity:
-              last?.delivery === 'failed'
-                ? last.blockedReason
-                : last?.prompt.split('\n')[0].slice(0, 80)
-          }
-        : null,
+      leader: summarizeSeat(p.leader, terminals, sent),
       counts: {
         workersLive: new Set([
           ...workers

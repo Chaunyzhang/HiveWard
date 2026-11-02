@@ -60,7 +60,7 @@ export function recordDispatch(body) {
     prompt: body.prompt.trim(),
     by: { kind: by.kind, id: by.id, label: String(by.label ?? by.kind), cwd: by.cwd },
     // leader：这句话是派给这一行的 Leader Agent 的（老板卡 / hiwd assign），开出来的 Agent 就是 Leader Agent
-    ...(body.role === 'leader' ? { role: 'leader' } : {}),
+    ...(['leader', 'ceo'].includes(body.role) ? { role: body.role } : {}),
     at: new Date().toISOString(),
     ...(body.delivery === 'queued' ? { delivery: 'queued' } : {}),
     status: 'pending'
@@ -88,7 +88,8 @@ const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s)
 
 const OPEN = new Set(['pending', 'dispatched'])
 
-const reviewerOf = (d) => (d.by.kind === 'owner' || d.role === 'leader' ? 'owner' : 'dispatcher')
+const reviewerOf = (d) =>
+  d.by.kind === 'owner' || ['leader', 'ceo'].includes(d.role) ? 'owner' : 'dispatcher'
 const awaitingReview = (d) => ({
   ...d.review,
   state: 'awaiting',

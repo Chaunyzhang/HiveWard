@@ -308,6 +308,13 @@ export function createLan({ lanPort, directory = dataDir(), onInvite, now, invit
       ) {
         throw error(403, 'forbidden', 'Agent 不能跨电脑复核')
       }
+      if (
+        ['POST', 'PATCH'].includes(req.method) &&
+        /^\/api\/businesses\/[^/]+\/projects(?:\/[^/]+)?$/.test(pathname) &&
+        req.headers['x-opc-caller'] === 'agent'
+      ) {
+        throw error(403, 'forbidden', 'Agent 不能跨电脑增减项目')
+      }
       if (id === machine.id) {
         if (/^\/api\/m(\/|$)/.test(pathname)) {
           throw error(400, 'bad_request', '不支持多跳转发')

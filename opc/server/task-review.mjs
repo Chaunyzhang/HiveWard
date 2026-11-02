@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { exitRegionGuard } from './agent-exit-region.mjs'
 import { ensureRepo, rpc } from './api-runtime.mjs'
-import { apiError, badRequest } from './business.mjs'
+import { apiError, badRequest, businesses } from './business.mjs'
 import { bindProjectTerminal, businessProjects, getProject } from './business-projects.mjs'
 import { agentCommand, locateTerminalSession } from './business-terminals.mjs'
 import {
@@ -71,8 +71,9 @@ function unresolved(dispatch) {
 
 function shouldClose(dispatch) {
   if (
-    dispatch.role === 'leader' ||
-    businessProjects().some((project) => project.leader?.terminal === dispatch.handle)
+    ['leader', 'ceo'].includes(dispatch.role) ||
+    businessProjects().some((project) => project.leader?.terminal === dispatch.handle) ||
+    businesses().some((business) => business.ceo?.terminal === dispatch.handle)
   ) {
     return false
   }

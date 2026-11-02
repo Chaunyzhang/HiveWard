@@ -26,6 +26,7 @@ import { useOrcaTerminals } from '@/lib/orca-live'
 import { cn } from '@/lib/utils'
 import { useSettledStatus } from '@/hooks/use-settled-status'
 import { AgentLogo } from './agent-logo'
+import { CeoSeat } from './ceo-seat'
 import { GrokBotAvatar } from './grokbot-avatar'
 import { ProjectLogo } from './project-logo'
 
@@ -94,15 +95,29 @@ function MachineColumn({
             const leaders = childrenOf(root.id).filter(
               (n) => n.kind === 'leader'
             )
+            const ceo = childrenOf(root.id).find((n) => n.kind === 'ceo')
+            // CEO 直接派的 Worker（不属于任何项目）挂在 CEO 位下面
+            const ceoWorkers = ceo ? childrenOf(ceo.id) : []
             return (
               <li key={root.id}>
                 <BusinessCard
                   root={root}
                   machine={machineId === null ? null : (machine ?? null)}
                 />
-                <Wire grok={byId(leaders.find((n) => n.via)?.via)} {...open} />
+                <Wire
+                  grok={byId(leaders.find((n) => n.via)?.via)}
+                  ceo={ceo}
+                  {...open}
+                />
                 <div className='htree'>
                   <ul className='ms-0'>
+                    {ceoWorkers.length > 0 && (
+                      <CeoWorkers
+                        workers={ceoWorkers}
+                        childrenOf={childrenOf}
+                        {...open}
+                      />
+                    )}
                     {leaders.map((n) =>
                       n.projectId || isUnassigned(n) ? (
                         <ProjectBranch
@@ -423,14 +438,26 @@ const LIT_FOR = 30 * 60_000
 const recent = (iso: string) => Date.now() - new Date(iso).getTime() < LIT_FOR
 
 /**
- * 业务到它的 Leader Agent 们是一条直线；这块业务的 Personal Agent（现在是 Grok Bot）像并联的灯泡，从直线上分出去再接回来。
- * 最近 30 分钟派过活的灯泡是亮的。没登记的目录没有 Grok，只有直线。
+ * 业务到它的项目们是一条直线；上面并联 Personal Agent（现在是 Grok Bot），下面并联 CEO 位：
+ * 老板走哪条都行，Personal Agent 可以绕过 CEO 直接派活。
+ * 最近 30 分钟派过活的 Personal Agent 是亮的。没登记的目录两样都没有，只有直线。
  */
-function Wire({ grok, openId, onOpen }: NodeProps & { grok?: TopologyNode }) {
+function Wire({
+  grok,
+  ceo,
+  openId,
+  onOpen,
+}: NodeProps & { grok?: TopologyNode; ceo?: TopologyNode }) {
   const lit = !!grok?.lastSeenAt && recent(grok.lastSeenAt)
   return (
-    <div className='relative h-28 w-44 shrink-0'>
+    <div className={cn('relative w-44 shrink-0', ceo ? 'h-44' : 'h-28')}>
       <span className='absolute inset-x-0 top-1/2 border-t border-muted-foreground/50' />
+      {ceo && (
+        <>
+          <span className='absolute inset-x-5 top-1/2 bottom-3 rounded-b-xl border-x border-b border-muted-foreground/50' />
+          <CeoSeat ceo={ceo} open={ceo.id === openId} onOpen={onOpen} />
+        </>
+      )}
       {grok && (
         <>
           <span className='absolute inset-x-5 top-3 bottom-1/2 rounded-t-xl border-x border-t border-muted-foreground/50' />
@@ -489,6 +516,32 @@ function Branch({
           ))}
         </ul>
       )}
+    </li>
+  )
+}
+
+/** CEO 直接派的 Worker：前面一张「CEO 直派」卡，后面挂这些 Worker */
+function CeoWorkers({
+  workers,
+  childrenOf,
+  ...rest
+}: NodeProps & {
+  workers: TopologyNode[]
+  childrenOf: (id: string) => TopologyNode[]
+}) {
+  return (
+    <li>
+      <div className='w-40 shrink-0 rounded-lg border border-dashed bg-panel/60 px-3 py-2'>
+        <p className='truncate text-[13px] text-muted-foreground'>CEO 直派</p>
+        <p className='truncate font-mono text-[11px] text-muted-foreground'>
+          不属于任何项目
+        </p>
+      </div>
+      <ul>
+        {workers.map((k) => (
+          <Branch key={k.id} node={k} childrenOf={childrenOf} {...rest} />
+        ))}
+      </ul>
     </li>
   )
 }

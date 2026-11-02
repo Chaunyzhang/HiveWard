@@ -1,4 +1,5 @@
 import { pathKey } from './workspace-path.mjs'
+import { normalizeSeat } from './seat-occupants.mjs'
 import { dataDir } from './data-dir.mjs'
 // OPC owns registration only. Runtime activity always comes from Orca.
 import { homedir } from 'node:os'
@@ -7,6 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, realpathSync } from
 import { randomUUID } from 'node:crypto'
 
 const file = join(dataDir(), 'businesses.json')
+const withCeo = (row) => ({ ...row, ceo: normalizeSeat(row.ceo) })
 export const apiError = (status, code, message) =>
   Object.assign(new Error(message), { status, code })
 export const badRequest = (message) => apiError(400, 'bad_request', message)
@@ -32,7 +34,7 @@ export function canonicalPath(path) {
 }
 export function businesses() {
   try {
-    return JSON.parse(readFileSync(file, 'utf8'))
+    return JSON.parse(readFileSync(file, 'utf8')).map(withCeo)
   } catch (e) {
     if (e.code !== 'ENOENT') {
       throw e
@@ -57,7 +59,7 @@ export function businesses() {
       updatedAt
     }))
     save(rows)
-    return rows
+    return rows.map(withCeo)
   }
 }
 function save(rows) {

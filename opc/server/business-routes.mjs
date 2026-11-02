@@ -1,4 +1,5 @@
 import {
+  assertProjectArchiveable,
   businessProjects,
   createBusinessProject,
   getProject,
@@ -21,8 +22,19 @@ import {
 import { readFile } from 'node:fs/promises'
 import { reviewCaller, reviewTask, resumeWorkRecord } from './task-review.mjs'
 import { getWorkRecord } from './work-records.mjs'
+import { assertProjectManager, claimSeat, launchCeo, leaveSeat } from './seats.mjs'
 
 const resolving = new Map()
+function terminalSeatClaim(req) {
+  if (req.headers['x-opc-seat-claim'] !== 'terminal') {
+    return undefined
+  }
+  const caller = reviewCaller(req)
+  if (caller.kind !== 'agent' || !caller.id) {
+    throw apiError(403, 'forbidden', '终端坐座位需要调用者终端身份')
+  }
+  return caller.id
+}
 function detail(snapshot, id) {
   const found = snapshot.details.find((d) => d.business.id === id)
   if (!found) {
@@ -50,6 +62,7 @@ async function stubSummary(b) {
     kind: b.kind,
     missing: b.missing,
     leader: null,
+    ceo: b.ceo ?? null,
     projects: businessProjects(b.id),
     lastEvent: latestTimelineEvent(b.id),
     updatedAt: b.updatedAt,
@@ -87,10 +100,12 @@ export function businessRoutes(readJson) {
     [
       'POST',
       /^\/api\/businesses\/([^/]+)\/projects$/,
-      async (req, [id]) => {
+      async (req, [id], _url, context) => {
+        const caller = reviewCaller(req)
+        await assertProjectManager(id, caller, context?.isLan)
         await snapshot()
         const body = await readJson(req)
-        let project = createBusinessProject(id, body)
+        let project = createBusinessProject(id, body, caller)
         invalidate()
         if (!body.agent) {
           return { project }
@@ -111,13 +126,23 @@ export function businessRoutes(readJson) {
     [
       'PATCH',
       /^\/api\/businesses\/([^/]+)\/projects\/([^/]+)$/,
-      async (req, [id, projectId]) => {
-        getProject(projectId, id)
+      async (req, [id, projectId], _url, context) => {
+        const caller = reviewCaller(req)
+        await assertProjectManager(id, caller, context?.isLan)
+        const current = getProject(projectId, id)
         const { name, status } = await readJson(req)
-        const project = updateProject(projectId, {
-          ...(name !== undefined ? { name } : {}),
-          ...(status !== undefined ? { status } : {})
-        })
+        if (status === 'archived' && current.status !== 'archived') {
+          invalidate()
+          assertProjectArchiveable(projectId, (await snapshot()).dispatches)
+        }
+        const project = updateProject(
+          projectId,
+          {
+            ...(name !== undefined ? { name } : {}),
+            ...(status !== undefined ? { status } : {})
+          },
+          caller
+        )
         invalidate()
         return { project }
       }
@@ -127,11 +152,33 @@ export function businessRoutes(readJson) {
       /^\/api\/businesses\/([^/]+)\/projects\/([^/]+)\/leader$/,
       async (req, [id, projectId]) => {
         try {
-          return await launchProjectLeader(id, projectId, await readJson(req))
+          return await launchProjectLeader(id, projectId, await readJson(req), {
+            claimTerminal: terminalSeatClaim(req)
+          })
         } finally {
           invalidate()
         }
       }
+    ],
+    [
+      'POST',
+      /^\/api\/businesses\/([^/]+)\/ceo$/,
+      async (req, [id]) => {
+        try {
+          const result = await launchCeo(id, await readJson(req), {
+            claimTerminal: terminalSeatClaim(req)
+          })
+          return { ...result, business: await stubSummary(result.business) }
+        } finally {
+          invalidate()
+        }
+      }
+    ],
+    ['POST', /^\/api\/seats\/claim$/, async (req) => claimSeat(await readJson(req))],
+    [
+      'POST',
+      /^\/api\/seats\/leave$/,
+      async (req) => leaveSeat(await readJson(req), reviewCaller(req))
     ],
 
     [
