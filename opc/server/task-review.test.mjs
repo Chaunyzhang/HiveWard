@@ -6,13 +6,14 @@ import { once } from 'node:events'
 import * as fs from 'node:fs'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
 async function dispatchFixture(t) {
-  const root = await mkdtemp('/tmp/opc-review-state-')
+  const root = await mkdtemp(join(tmpdir(), 'opc-review-state-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const chats = {}
   const context = vm.createContext({ process: { pid: process.pid } })
@@ -239,10 +240,10 @@ async function runCli(base, ...args) {
 }
 
 test(
-  'review HTTP/CLI：权限、关窗、记录、重开与时间线（独立端口和 /tmp）',
+  'review HTTP/CLI：权限、关窗、记录、重开与时间线（独立端口和临时目录）',
   { timeout: 60000 },
   async (t) => {
-    const root = await mkdtemp('/tmp/opc-review-http-')
+    const root = await mkdtemp(join(tmpdir(), 'opc-review-http-'))
     const data = join(root, 'data')
     const workspace = join(root, 'workspace')
     await Promise.all([mkdir(data), mkdir(workspace)])
@@ -418,14 +419,18 @@ test(
         }
       })
     })
-    runtime.listen(join(root, 'runtime.sock'))
+    const socketPath =
+      process.platform === 'win32'
+        ? String.raw`\\.\pipe\opc-task-review-${process.pid}`
+        : join(root, 'runtime.sock')
+    runtime.listen(socketPath)
     await once(runtime, 'listening')
     const meta = join(root, 'runtime.json')
     await writeFile(
       meta,
       JSON.stringify({
         authToken: 'test',
-        transports: [{ kind: 'unix', endpoint: join(root, 'runtime.sock') }]
+        transports: [{ kind: 'unix', endpoint: socketPath }]
       })
     )
     const previous = {

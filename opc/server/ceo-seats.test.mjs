@@ -3,11 +3,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises'
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { pathKey } from './workspace-path.mjs'
 
 const hiwd = fileURLToPath(new URL('./hiwd.mjs', import.meta.url))
 
@@ -15,7 +17,7 @@ test(
   'CEO seats: terminal/session occupants, ownership, projects, owner prompts and review',
   { timeout: 180000 },
   async () => {
-    const root = await mkdtemp('/tmp/opc-ceo-seats-')
+    const root = await mkdtemp(join(tmpdir(), 'opc-ceo-seats-'))
     const data = join(root, 'data'),
       home = join(root, 'home'),
       workspace = join(root, 'business')
@@ -45,9 +47,13 @@ test(
     await writeFile(join(data, 'dispatches.json'), '[]')
 
     const previous = Object.fromEntries(
-      ['HOME', 'OPC_DATA_DIR', 'ORCA_RUNTIME_META'].map((key) => [key, process.env[key]])
+      ['HOME', 'USERPROFILE', 'OPC_DATA_DIR', 'ORCA_RUNTIME_META'].map((key) => [
+        key,
+        process.env[key]
+      ])
     )
     process.env.HOME = home
+    process.env.USERPROFILE = home
     process.env.OPC_DATA_DIR = data
 
     const terminals = [],
@@ -183,7 +189,10 @@ test(
           return undefined
       }
     }
-    const socketPath = join(root, 'runtime.sock')
+    const socketPath =
+      process.platform === 'win32'
+        ? String.raw`\\.\pipe\opc-ceo-seats-${process.pid}`
+        : join(root, 'runtime.sock')
     const runtime = createServer((socket) => {
       sockets.add(socket)
       socket.on('close', () => sockets.delete(socket))
@@ -220,6 +229,14 @@ test(
     const { startBridge } = await import('./orca-bridge.mjs')
     const { invalidate } = await import('./orchestration.mjs')
     const { closeRuntimeConnection } = await import('./orca-client.mjs')
+    const { configureWindowsProcesses } = await import('./transcripts.mjs')
+    configureWindowsProcesses(async () =>
+      [...children.values()].map((child) => ({
+        pid: child.pid,
+        creationTimeMs: Date.parse(now),
+        command: 'claude'
+      }))
+    )
     const guard = {
       assertAllowed: async () => {},
       beforeRpc: async () => {},
@@ -310,8 +327,11 @@ test(
       assert.equal(launch.status, 200, JSON.stringify(launch))
       const ceo = launch.terminal
       const ceoCreate = creates().at(-1)
-      assert.equal(ceoCreate.params.worktree, `path:${workspaceReal}`)
-      assert.equal(terminals.find((t) => t.handle === ceo).worktreePath, workspaceReal)
+      assert.equal(pathKey(ceoCreate.params.worktree), pathKey(`path:${workspaceReal}`))
+      assert.equal(
+        pathKey(terminals.find((t) => t.handle === ceo).worktreePath),
+        pathKey(workspaceReal)
+      )
       assert.match(ceoCreate.params.command, /^claude --dangerously-skip-permissions/)
       assert.ok(ceoCreate.params.command.includes('--append-system-prompt'))
       assert.ok(ceoCreate.params.command.includes(launch.brief), 'full CEO brief must be injected')
@@ -337,7 +357,7 @@ test(
       const directWorker = creates().at(-1).params
       const directHandle = terminals.at(-1).handle
       assert.match(direct.stdout, new RegExp(directHandle))
-      assert.equal(directWorker.worktree, `path:${workspaceReal}`)
+      assert.equal(pathKey(directWorker.worktree), pathKey(`path:${workspaceReal}`))
       let nodes = (await api('/api/topology?businessId=business')).nodes
       const directNode = nodes.find((n) => n.terminal === directHandle && n.kind === 'worker')
       assert.equal(directNode.parentId, 'ceo:business')
@@ -377,7 +397,7 @@ test(
       assert.ok(main, add.stdout)
       const leader = main.leader.terminal
       assert.ok(leader)
-      assert.equal(main.path, join(workspaceReal, 'delivery'))
+      assert.equal(pathKey(main.path), pathKey(join(workspaceReal, 'delivery')))
       assert.match(add.stdout, new RegExp(leader))
 
       const delegation = '请 Leader 拆解交付任务'

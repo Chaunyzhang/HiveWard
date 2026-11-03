@@ -20,6 +20,8 @@ import {
   recentTimelineEvents
 } from './timeline.mjs'
 import { readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { reviewCaller, reviewTask, resumeWorkRecord } from './task-review.mjs'
 import { getWorkRecord } from './work-records.mjs'
 import { assertProjectManager, claimSeat, launchCeo, leaveSeat } from './seats.mjs'
@@ -254,12 +256,12 @@ export function businessRoutes(readJson) {
       }
     ],
     ['POST', /^\/api\/records\/([^/]+)\/resume$/, async (_req, [id]) => resumeWorkRecord(id)],
-    // Agent 用 hiwd browser screenshot 存的截图，只开放 /tmp/opc-shot-<数字>.png 这一种
+    // Agent 用 hiwd browser screenshot 存的截图，只开放系统临时目录里 opc-shot-<数字>.png 这一种
     [
       'GET',
       /^\/api\/shots\/(opc-shot-\d+\.png)$/,
       async (_req, [name]) => ({
-        raw: await readFile(`/tmp/${name}`).catch(() => {
+        raw: await readFile(join(tmpdir(), name)).catch(() => {
           throw apiError(404, 'not_found', '截图不存在')
         }),
         type: 'image/png'

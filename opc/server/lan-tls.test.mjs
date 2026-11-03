@@ -4,6 +4,7 @@ import { invitationCode, nonceCommitment } from './lan-invitation-verification.m
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, stat, rm, unlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, request } from 'node:http'
 import { createServer as httpsServer } from 'node:https'
@@ -39,7 +40,7 @@ async function json(port, path = '/api/machines', body) {
 }
 
 test('certificate identity persists at 0600; loss changes fingerprint; malformed identity fails closed', async () => {
-  const root = await mkdtemp('/tmp/hiveward-tls-cert-')
+  const root = await mkdtemp(join(tmpdir(), 'hiveward-tls-cert-'))
   try {
     const a = loadLanCertificate(root)
     assert.equal(loadLanCertificate(root).fingerprint, a.fingerprint)
@@ -66,7 +67,7 @@ test(
   'two TLS instances, active MITM SAS, pin change refusal, plaintext denial, 1 GiB streaming',
   { timeout: 120000 },
   async () => {
-    const root = await mkdtemp('/tmp/hiveward-tls-acceptance-')
+    const root = await mkdtemp(join(tmpdir(), 'hiveward-tls-acceptance-'))
     const machines = [],
       extra = []
     const build = async (id, port) => {

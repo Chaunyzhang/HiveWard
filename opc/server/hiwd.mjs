@@ -30,7 +30,8 @@ import { within } from './business-projects.mjs'
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 const browserGuide = fileURLToPath(new URL('../docs/agent-browser.md', import.meta.url))
 
@@ -68,7 +69,7 @@ function fail(msg) {
   process.exit(1)
 }
 
-const short = (p) => p.split('/').pop()
+const short = (p) => p.split(/[/\\]/).pop()
 
 // 谁在派单：桌面端 Claude 会话 / 终端里的 Claude Code / Grok（设 OPC_DISPATCHER=grok）/ 其它命令行
 function dispatcher() {
@@ -145,6 +146,9 @@ function takeOption(args, name) {
 
 // 往上找父进程，有一层是 Grok Bot.app 里的进程就算 Grok Bot 派的
 function fromGrokBot() {
+  if (process.platform !== 'darwin') {
+    return false
+  }
   let pid = process.ppid
   for (let i = 0; i < 12 && pid > 1; i++) {
     let line
@@ -453,7 +457,7 @@ async function browser(argv) {
     if (!res.ok) {
       fail((await res.json().catch(() => null))?.error?.message ?? `HTTP ${res.status}`)
     }
-    const out = resolve(options.out ?? `/tmp/opc-shot-${Date.now()}.png`)
+    const out = resolve(options.out ?? join(tmpdir(), `opc-shot-${Date.now()}.png`))
     await writeFile(out, Buffer.from(await res.arrayBuffer()))
     console.log(out)
     return
@@ -792,12 +796,15 @@ switch (cmd) {
     }
     const { projects } = await api('/api/orca/projects')
     // 也可以直接给目录：还没登记的，开终端时后台会自动登记
-    const dir = resolve(project.replace(/^~(?=\/|$)/, process.env.HOME))
+    const expanded = project.replace(/^~(?=[\\/]|$)/, homedir())
+    const dir = resolve(expanded)
     const p =
       selectedProject ??
       projects.find((x) => x.path === project || x.path === dir) ??
       projects.find((x) => x.name.toLowerCase() === project.toLowerCase()) ??
-      (project.includes('/') && existsSync(dir) ? { path: dir, name: dir.split('/').at(-1) } : null)
+      (/[/\\]/.test(expanded) && existsSync(dir)
+        ? { path: dir, name: short(dir) || dir }
+        : null)
     if (!p) {
       fail(`没有可用目录「${project}」，可选：${projects.map((x) => x.name).join('、')}`)
     }

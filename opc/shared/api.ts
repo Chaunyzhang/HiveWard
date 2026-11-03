@@ -322,7 +322,7 @@ export interface Decision {
   /** 派单 Agent 停下来问的（它的回话里带【需要确认】）← 派单记录；答复会直接发回这个终端 */
   /** menu：Agent 停在终端选择菜单上，options 就是菜单项，选了直接替它按（不能自定义回复） */
   dispatch?: { handle: string; agent: AgentKind | null; by: string; menu?: boolean }
-  /** Agent 附的截图地址（/api/shots/…） ← 它回话里的 /tmp/opc-shot-*.png */
+  /** Agent 附的截图地址（/api/shots/…） ← 它回话里 hiwd browser screenshot 输出的路径 */
   screenshot?: string
   createdAt: IsoTime
   resolution?: { choice: string; note?: string; custom?: boolean; resolvedAt: IsoTime }

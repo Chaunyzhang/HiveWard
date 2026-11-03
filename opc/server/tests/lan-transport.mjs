@@ -27,7 +27,7 @@ if (process.env.OPC_TRANSPORT_FIXTURE) {
   }
   try {
     for (const [index, port] of [18791, 18793].entries()) {
-      const child = spawn(process.execPath, [new URL(import.meta.url).pathname], { env: { ...process.env, OPC_TRANSPORT_FIXTURE: '1', OPC_DATA_DIR: join(dir, String(index)), OPC_PORT: String(port), OPC_LAN_PORT: String(port + 1) }, stdio: ['ignore', 'pipe', 'inherit'] })
+      const child = spawn(process.execPath, [import.meta.filename], { env: { ...process.env, OPC_TRANSPORT_FIXTURE: '1', OPC_DATA_DIR: join(dir, String(index)), OPC_PORT: String(port), OPC_LAN_PORT: String(port + 1) }, stdio: ['ignore', 'pipe', 'inherit'] })
       children.push(child)
       for (let i = 0; ; i++) {
         try { await json(`http://127.0.0.1:${port}`, '/api/machines'); break } catch (e) { if (i > 50 || child.exitCode !== null) throw e; await sleep(100) }

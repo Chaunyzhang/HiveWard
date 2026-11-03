@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { waitForAgent, sendFirst } from './agent-first-prompt.mjs'
 
@@ -62,7 +63,7 @@ test('first prompt confirms a new matching user message and retries only once', 
 })
 
 test('background first prompt persists failure and timeline; successful retry settles dispatch', async () => {
-  const root = await mkdtemp('/tmp/opc-leader-delivery-')
+  const root = await mkdtemp(join(tmpdir(), 'opc-leader-delivery-'))
   process.env.OPC_DATA_DIR = join(root, 'data')
   await mkdir(process.env.OPC_DATA_DIR)
   await writeFile(

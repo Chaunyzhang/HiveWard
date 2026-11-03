@@ -1,16 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { runProcess } from '@orca/process-host'
+import { pathKey } from './workspace-path.mjs'
 
 test(
   'business projects: isolated HTTP, migration, ownership, guard and real CLI',
   { timeout: 60000 },
   async () => {
-    const root = await mkdtemp('/tmp/opc-projects-')
+    const root = await mkdtemp(join(tmpdir(), 'opc-projects-'))
     const data = join(root, 'data'),
       workspace = join(root, 'business'),
       old = join(root, 'legacy')
@@ -109,7 +111,10 @@ test(
           return undefined
       }
     }
-    const socketPath = join(root, 'runtime.sock')
+    const socketPath =
+      process.platform === 'win32'
+        ? String.raw`\\.\pipe\opc-business-projects-${process.pid}`
+        : join(root, 'runtime.sock')
     const runtime = createServer((socket) => {
       sockets.add(socket)
       socket.on('close', () => sockets.delete(socket))
@@ -212,7 +217,7 @@ test(
         prompt: '构建任务'
       })
       assert.match(mutations.find((m) => m.method === 'terminal.create').params.command, /项目目录/)
-      await symlink(root, join(workspace, 'escape'))
+      await symlink(root, join(workspace, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
       for (const dir of ['../x', root, 'escape/out']) {
         const r = await api('/api/businesses/business/projects', { name: dir, dir })
         assert.equal(r.status, 400, JSON.stringify(r))
@@ -310,7 +315,7 @@ test(
       assert.equal((await cli('assign', '未归业务', '单项目自动选择')).code, 0)
       assert.equal((await cli('new', workspace, 'claude', '--project', b.id)).code, 0)
       const latestTerminal = terminals.at(-1)
-      assert.equal(latestTerminal.worktreePath, b.path)
+      assert.equal(pathKey(latestTerminal.worktreePath), pathKey(b.path))
       invalidate()
       assert.equal(
         (await api('/api/topology')).nodes.find((n) => n.terminal === latestTerminal.handle)

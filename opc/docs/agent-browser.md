@@ -36,7 +36,7 @@ hiwd browser tabs | goto <网址> | back | close
    1. 选项一（比如：发布）
    2. 选项二（比如：先不发，改一下标题）
    建议：选 1，因为……
-   截图：/tmp/opc-shot-xxx.png
+   截图：<hiwd browser screenshot 命令输出的路径>
    ```
 
    然后停下等。老板的答复会直接发回给你，里面带一个**确认码**；老板同意执行时，在最后那一下加上它：

@@ -4,11 +4,12 @@ import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocket } from 'ws'
 
-const root = await mkdtemp('/tmp/opc-mcp-acceptance-')
+const root = await mkdtemp(join(tmpdir(), 'opc-mcp-acceptance-'))
 const hiwd = fileURLToPath(new URL('../hiwd.mjs', import.meta.url))
 const stdioFixture = fileURLToPath(new URL('./mcp-stdio-fixture.mjs', import.meta.url))
 const bridgeFixture = fileURLToPath(new URL('./mcp-bridge-fixture.mjs', import.meta.url))

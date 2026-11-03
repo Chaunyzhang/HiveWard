@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { WebSocketServer } from 'ws'
 import { runMcp } from './mcp-cli.mjs'
 
@@ -247,7 +247,7 @@ test('invalid argument counts and add forms reject before any request', async ()
   )
 })
 
-const moduleUrl = pathToFileURL(new URL('./mcp-cli.mjs', import.meta.url).pathname).href
+const moduleUrl = pathToFileURL(fileURLToPath(new URL('./mcp-cli.mjs', import.meta.url))).href
 const bridgeSource = `
   import { runMcp } from ${JSON.stringify(moduleUrl)};
   try {

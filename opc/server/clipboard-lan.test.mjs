@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { createTlsClipboardInstance, freePorts } from './clipboard-lan-fixture.mjs'
 import { digest, waitFor } from './clipboard-test-fixture.mjs'
@@ -11,7 +12,7 @@ test(
     timeout: 30000
   },
   async () => {
-    const root = await mkdtemp('/tmp/hiveward-clipboard-lan-')
+    const root = await mkdtemp(join(tmpdir(), 'hiveward-clipboard-lan-'))
     const previousDiscovery = process.env.OPC_DISCOVERY_PORT
     const instances = []
     try {

@@ -23,24 +23,34 @@ HiveWard 是给「一人公司」老板用的桌面驾驶舱。你登记几块**
 - **`opc` 命令行**：Agent 自己也能用它开下属、派活、看进度、操作内嵌浏览器、跨电脑执行（`--on <电脑>`）。
 - **内嵌浏览器**：Agent 能在 HiveWard 里的真浏览器上操作网页。发布、提交这类不可撤回的动作要老板给确认码。
 
-正在做：Windows 版、局域网通道加密、跨电脑文件访问、跨电脑剪贴板。
+正在做：局域网通道加密、跨电脑文件访问、跨电脑剪贴板。
 
 ## 现状
 
-- 目前只在 macOS（Apple Silicon）上打包和日常使用。
+- 日常主要在 macOS（Apple Silicon）使用；Windows x64 支持源码构建，GitHub Actions 提供未签名安装包和 ZIP。
 - 这是早期版本，接口和数据格式还会变。
-- 本仓库之前的旧版本已经封存在 [`legacy`](../../tree/legacy) 分支，旧的发布标签保留不动。
+- 本仓库之前的旧版本已经封存在 [`legacy`](https://github.com/Chaunyzhang/HiveWard/tree/legacy) 分支，旧的发布标签保留不动。
 
 ## 从源码构建
 
-需要 Node.js 和 pnpm。
+需要 Node.js 24 和 pnpm 12.14.0。
 
 ```bash
 pnpm install
-(cd opc/web && pnpm install && pnpm build)
+pnpm build:cockpit
 pnpm build
 pnpm exec electron-builder --config config/electron-builder.config.cjs --mac --arm64 --dir --publish never
 ```
+
+Windows 还需要 Rust/Cargo 和 Visual Studio 的「使用 C++ 的桌面开发」工作负载（含 MSVC 与 Windows SDK），然后运行：
+
+```bash
+pnpm install
+pnpm build:cockpit
+pnpm build:win
+```
+
+Windows 安装包和 ZIP 输出到 `dist/`。也可以从 GitHub Actions 的 `HiveWard Windows 版` 工作流下载未签名产物。
 
 开发模式：
 

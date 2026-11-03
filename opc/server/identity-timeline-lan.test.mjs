@@ -19,12 +19,17 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
   process.once('SIGTERM', stop)
 } else {
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const allocatedPorts = new Set()
   async function freePort() {
     const server = createServer()
     server.listen(0, '127.0.0.1')
     await once(server, 'listening')
     const { port } = server.address()
     await new Promise((resolve) => server.close(resolve))
+    if (allocatedPorts.has(port)) {
+      return freePort()
+    }
+    allocatedPorts.add(port)
     return port
   }
 
@@ -86,7 +91,10 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
       })
     })
     try {
-      const socketPath = join(root, 'runtime.sock')
+      const socketPath =
+        process.platform === 'win32'
+          ? String.raw`\\.\pipe\opc-identity-lan-${process.pid}`
+          : join(root, 'runtime.sock')
       runtime.listen(socketPath)
       await once(runtime, 'listening')
       const metadata = join(root, 'runtime.json')
@@ -105,7 +113,9 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
       )
       const png = Buffer.from('89504e470d0a1a0a00ff801122', 'hex')
       await writeFile(join(project, 'resources', 'icon.png'), png)
-      const [aPort, aLanPort, bPort, bLanPort] = await Promise.all([
+      const [aPort, aLanPort, aTlsPort, bPort, bLanPort, bTlsPort] = await Promise.all([
+        freePort(),
+        freePort(),
         freePort(),
         freePort(),
         freePort(),
@@ -129,7 +139,7 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
             id: 'B',
             name: 'B',
             address: `127.0.0.1:${bLanPort}`,
-            tlsPort: bLanPort + 1, fingerprint: bIdentity.fingerprint,
+            tlsPort: bTlsPort, fingerprint: bIdentity.fingerprint,
             inboundToken: bToA,
             outboundToken: aToB
           }
@@ -142,7 +152,7 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
             id: 'A',
             name: 'A',
             address: `127.0.0.1:${aLanPort}`,
-            tlsPort: aLanPort + 1, fingerprint: aIdentity.fingerprint,
+            tlsPort: aTlsPort, fingerprint: aIdentity.fingerprint,
             inboundToken: aToB,
             outboundToken: bToA
           }
@@ -184,14 +194,15 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
           }
         ])
       )
-      async function start(name, port, lanPort, directory) {
-        const child = spawn(process.execPath, [new URL(import.meta.url).pathname], {
+      async function start(name, port, lanPort, tlsPort, directory) {
+        const child = spawn(process.execPath, [import.meta.filename], {
           env: {
             ...process.env,
             OPC_IDENTITY_LAN_FIXTURE: '1',
             ORCA_BACKGROUND_LAUNCH: '1',
             OPC_PORT: String(port),
             OPC_LAN_PORT: String(lanPort),
+            OPC_LAN_TLS_PORT: String(tlsPort),
             OPC_DATA_DIR: directory,
             ORCA_RUNTIME_META: metadata
           },
@@ -213,8 +224,8 @@ if (process.env.OPC_IDENTITY_LAN_FIXTURE) {
         }
         throw new Error(`${name} startup timed out: ${output}`)
       }
-      await start('B', bPort, bLanPort, bDir)
-      await start('A', aPort, aLanPort, aDir)
+      await start('B', bPort, bLanPort, bTlsPort, bDir)
+      await start('A', aPort, aLanPort, aTlsPort, aDir)
       const base = `http://127.0.0.1:${aPort}/api/m/B`
       const first = await fetch(`${base}/api/timeline?businessId=p1&limit=1`)
       assert.equal(first.status, 200)

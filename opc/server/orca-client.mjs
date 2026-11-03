@@ -85,8 +85,8 @@ function open() {
 /** 调一个 Orca RPC 方法；成功返回 result，失败抛错（带 Orca 的错误码）。 */
 export async function call(method, params) {
   if (method === 'terminal.create') {
-    params = terminalCliParams(params)
     await exitRegionGuard().beforeRpc(method, params)
+    params = terminalCliParams(params)
   }
   if (!conn) {
     conn = open()

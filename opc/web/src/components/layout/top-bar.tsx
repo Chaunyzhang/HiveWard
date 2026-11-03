@@ -58,7 +58,9 @@ export function TopBar() {
         >
           <SearchIcon className='size-4' />
           <span>搜索…</span>
-          <kbd className='ms-auto font-mono text-xs'>⌘K</kbd>
+          <kbd className='ms-auto font-mono text-xs'>
+            {navigator.userAgent.includes('Mac') ? '⌘K' : 'Ctrl K'}
+          </kbd>
         </button>
         <ThemeSwitch />
         <SideToggle />

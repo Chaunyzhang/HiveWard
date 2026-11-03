@@ -177,8 +177,8 @@ export function dispatchDecision(d, businessId) {
     .filter(Boolean)
     .slice(0, 6)
   const hint = lines.find((l) => /建议/.test(l))
-  // Agent 附的截图（hiwd browser screenshot 存在 /tmp/opc-shot-*.png）直接给老板看
-  const shot = /\/tmp\/(opc-shot-\d+\.png)/.exec(text)?.[1]
+  // Agent 附的截图（hiwd browser screenshot 存在系统临时目录）直接给老板看
+  const shot = /[\\/](opc-shot-\d+\.png)/.exec(text)?.[1]
   const plain = (l) => l.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
   return {
     id: d.id,

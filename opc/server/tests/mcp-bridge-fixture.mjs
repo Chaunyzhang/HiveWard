@@ -1,9 +1,11 @@
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createExitRegionGuard } from '../agent-exit-region.mjs'
 import { startBridge } from '../orca-bridge.mjs'
 
 const directory = process.env.OPC_DATA_DIR
-if (!directory?.startsWith('/tmp/opc-mcp-acceptance-')) {
-  throw new Error('MCP fixture requires an isolated /tmp OPC_DATA_DIR')
+if (!directory?.startsWith(join(tmpdir(), 'opc-mcp-acceptance-'))) {
+  throw new Error('MCP fixture requires an isolated temporary OPC_DATA_DIR')
 }
 const regionGuard = createExitRegionGuard({
   capture: async () => ({ env: { MCP_FIXTURE: '1' }, shell: 'fixture-shell' }),

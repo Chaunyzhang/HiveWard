@@ -55,11 +55,13 @@ test('Windows agent terminals receive PowerShell, CLI shim and common user insta
     {
       Path: 'C:\\Windows',
       APPDATA: 'C:\\Users\\me\\AppData\\Roaming',
-      USERPROFILE: 'C:\\Users\\me'
+      USERPROFILE: 'C:\\Users\\me',
+      HIVEWARD_EXECUTABLE: 'C:\\HiveWard\\HiveWard.exe'
     },
     'win32'
   )
   assert.equal(p.shell, 'powershell.exe')
+  assert.equal(p.env.HIVEWARD_EXECUTABLE, 'C:\\HiveWard\\HiveWard.exe')
   assert.match(p.env.Path, /resources\\opc\\bin/)
   assert.match(p.env.Path, /Roaming\\npm/)
   assert.match(p.env.Path, /me\\.local\\bin/)

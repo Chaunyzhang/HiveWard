@@ -5,8 +5,12 @@ import { spawn, execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { once } from 'node:events'
 import { setTimeout as sleep } from 'node:timers/promises'
-const cwd = new URL('../../', import.meta.url).pathname
-const dirs = ['/tmp/opc-a', '/tmp/opc-b']
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+const cwd = fileURLToPath(new URL('../../', import.meta.url))
+const hiwd = fileURLToPath(new URL('../hiwd.mjs', import.meta.url))
+const dirs = [join(tmpdir(), 'opc-a'), join(tmpdir(), 'opc-b')]
 const owned = [],
   processes = new Map()
 let handle, aid, bid
@@ -143,7 +147,7 @@ try {
     { authorization: `Bearer ${'0'.repeat(64)}` },
     401
   )
-  const peerB = JSON.parse(readFileSync('/tmp/opc-b/peers.json'))[0]
+  const peerB = JSON.parse(readFileSync(join(dirs[1], 'peers.json')))[0]
   const auth = { authorization: `Bearer ${peerB.outboundToken}` }
   for (const path of [
     '/api/app/status',
@@ -191,13 +195,16 @@ try {
   for (const args of [['machines'], ['agents', '--on', 'studio']]) {
     console.log(`$ OPC_BRIDGE=${B} hiwd ${args.join(' ')}`)
     console.log(
-      execFileSync('hiwd', args, { env: { ...process.env, OPC_BRIDGE: B }, encoding: 'utf8' })
+      execFileSync(process.execPath, [hiwd, ...args], {
+        env: { ...process.env, OPC_BRIDGE: B },
+        encoding: 'utf8'
+      })
     )
   }
   console.log('\n8. Unpair revokes both tokens')
   await api(B, `/api/machines/${aid}/unpair`, {})
-  assert.equal(JSON.parse(readFileSync('/tmp/opc-a/peers.json')).length, 0)
-  assert.equal(JSON.parse(readFileSync('/tmp/opc-b/peers.json')).length, 0)
+  assert.equal(JSON.parse(readFileSync(join(dirs[0], 'peers.json'))).length, 0)
+  assert.equal(JSON.parse(readFileSync(join(dirs[1], 'peers.json'))).length, 0)
   await api('http://127.0.0.1:8792', '/api/overview', undefined, auth, 401)
   await api(
     'http://127.0.0.1:8794',
@@ -212,10 +219,14 @@ try {
   const manual = await api(A, '/api/machines/pair-code', {})
   console.log(`$ OPC_BRIDGE=${B} hiwd machines pair --address 127.0.0.1:8792 ${manual.code}`)
   console.log(
-    execFileSync('hiwd', ['machines', 'pair', '--address', '127.0.0.1:8792', manual.code], {
-      env: { ...process.env, OPC_BRIDGE: B },
-      encoding: 'utf8'
-    })
+    execFileSync(
+      process.execPath,
+      [hiwd, 'machines', 'pair', '--address', '127.0.0.1:8792', manual.code],
+      {
+        env: { ...process.env, OPC_BRIDGE: B },
+        encoding: 'utf8'
+      }
+    )
   )
   await until(
     async () =>

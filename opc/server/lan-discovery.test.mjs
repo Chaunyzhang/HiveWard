@@ -3,6 +3,7 @@ import test from 'node:test'
 import { EventEmitter, once } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnProcess, runProcess } from '@orca/process-host'
 import { createDiscoveryPresence } from './discovery-presence.mjs'
@@ -309,7 +310,7 @@ test(
   'macOS guardian reaps R/B/L on normal close and parent SIGKILL; startup reaps owned orphan',
   { skip: process.platform !== 'darwin' },
   async () => {
-    const root = await mkdtemp('/tmp/hiveward-bonjour-test-')
+    const root = await mkdtemp(join(tmpdir(), 'hiveward-bonjour-test-'))
     const moduleUrl = new URL('./bonjour-process.mjs', import.meta.url).href
     const processes = []
     const directories = []
@@ -516,7 +517,7 @@ test(
     timeout: 15000
   },
   async () => {
-    const root = await mkdtemp('/tmp/hiveward-bonjour-race-')
+    const root = await mkdtemp(join(tmpdir(), 'hiveward-bonjour-race-'))
     const children = []
     try {
       for (let round = 0; round < 4; round++) {

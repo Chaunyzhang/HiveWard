@@ -737,7 +737,7 @@ export function topology(details, sent = [], withProjects = true) {
         id: projectId,
         kind: 'business',
         project: path,
-        label: path.split('/').pop() || path,
+        label: path.split(/[/\\]/).pop() || path,
         unregistered: true,
         stats: [tally(rows)]
       })

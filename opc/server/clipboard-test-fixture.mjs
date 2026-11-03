@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
 import { createClipboardService } from './clipboard.mjs'
@@ -58,7 +59,7 @@ export function createFakeAdapter({ writeDelay = 0, readDelay = 0 } = {}) {
 }
 
 export async function createClipboardNetwork() {
-  const root = await mkdtemp('/tmp/hiveward-clipboard-test-')
+  const root = await mkdtemp(join(tmpdir(), 'hiveward-clipboard-test-'))
   const network = new Map()
   const instances = []
 

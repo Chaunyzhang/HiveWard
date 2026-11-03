@@ -22,6 +22,7 @@ export async function startCockpit({
   clipboardAdapter,
   onClipboardNotice
 }) {
+  process.env.HIVEWARD_EXECUTABLE = process.execPath
   if (windowsProcesses) {
     configureWindowsProcesses(windowsProcesses)
   }

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { spawnProcess } from '@orca/process-host'
 
-const root = await mkdtemp('/tmp/hiveward-discovery-')
+const root = await mkdtemp(join(tmpdir(), 'hiveward-discovery-'))
 const children = []
 const ports = []
 async function freePort() {
@@ -25,7 +26,7 @@ async function until(check) {
 }
 const machines = async (i) => (await (await fetch(`http://127.0.0.1:${ports[i]}/api/machines`)).json()).machines
 async function stop(child) {
-  if (child.exitCode !== null) { return }
+  if (child.exitCode !== null || child.signalCode !== null) { return }
   const exited = once(child, 'exit')
   child.kill('SIGTERM')
   await exited
@@ -52,8 +53,8 @@ try {
   const b = (await machines(1)).find((m) => m.self).id
   await until(async () => (await machines(0)).some((m) => m.id === b && m.discovered) &&
     (await machines(1)).some((m) => m.id === a && m.discovered))
-  assert.equal((await machines(0)).find((m) => m.id === b).platform, 'darwin')
-  console.log('PASS independent bridges discover each other over UDP, platform=darwin')
+  assert.equal((await machines(0)).find((m) => m.id === b).platform, process.platform)
+  console.log(`PASS independent bridges discover each other over UDP, platform=${process.platform}`)
   await stop(children[1])
   await until(async () => !(await machines(0)).some((m) => m.id === b && m.discovered))
   console.log('PASS stopped peer disappears')
@@ -61,7 +62,7 @@ try {
   for (let i = 0; i < 2; i++) {
     const registry = await readdir(join(root, String(i), 'bonjour-processes')).catch(() => [])
     assert.deepEqual(registry, [])
-    assert.notEqual(children[i].exitCode, null)
+    assert.ok(children[i].exitCode !== null || children[i].signalCode !== null)
   }
   console.log('PASS both child processes exited; no dns-sd children or registrations created')
 } finally {
