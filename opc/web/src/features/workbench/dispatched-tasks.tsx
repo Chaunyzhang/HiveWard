@@ -1,9 +1,8 @@
 import type { Task } from '@shared/api'
 import { timeAgo } from '@/lib/opc-format'
-import { cn } from '@/lib/utils'
 import { AgentName } from '@/components/opc/agent-logo'
 import { Markdown } from '@/features/live/chat-view'
-import { statusIcon } from './task-status'
+import { TaskGlyph } from './task-status'
 
 /** 某个派单方派出去的活和结果，新的在前（派单方详情、Grok Bot 主页共用） */
 export function TaskList({ tasks }: { tasks: Task[] }) {
@@ -18,15 +17,10 @@ export function TaskList({ tasks }: { tasks: Task[] }) {
         </li>
       )}
       {sorted.map((t) => {
-        const s = statusIcon[t.status]
-        const Icon = s.icon
         return (
           <li key={t.id} className='rounded-md px-2 py-2.5 hover:bg-accent'>
             <div className='flex items-start gap-3'>
-              <Icon
-                className={cn('mt-0.5 size-4 shrink-0', s.className)}
-                aria-label={s.label}
-              />
+              <TaskGlyph task={t} className='mt-0.5' />
               <div className='min-w-0 flex-1'>
                 <p className='flex items-baseline gap-2 text-[13px] leading-5'>
                   <span className='truncate'>{t.title}</span>

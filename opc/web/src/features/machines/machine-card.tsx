@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import type { Machine, MachineInvitation } from '@shared/api'
 import { Laptop, LoaderCircle, Monitor, MoreHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
@@ -30,7 +30,8 @@ const secondary =
 
 /**
  * 局域网页的一张电脑卡片：本机、组织里的电脑、局域网里还没加入的电脑都用它。
- * 组织里的能切过去看；没加入的能邀请；有待处理的邀请 / 申请时在卡片底部核对确认码、同意或撤回。
+ * 组织里的点卡片进它的「传输」页，也能切过去看；没加入的能邀请；
+ * 有待处理的邀请 / 申请时在卡片底部核对确认码、同意或撤回。
  */
 export function MachineCard({
   machine: m,
@@ -43,8 +44,25 @@ export function MachineCard({
 }) {
   const online = m.self || m.status === 'online'
   const Icon = m.platform === 'win32' ? Monitor : Laptop
+  // 组织里的电脑整张卡能点，进传输页；卡上的按钮浮在上面照常点
+  const transfer = member && online
   return (
-    <div className='flex min-h-40 flex-col rounded-xl border bg-card p-4'>
+    <div
+      className={cn(
+        'relative flex min-h-40 flex-col rounded-xl border bg-card p-4',
+        transfer &&
+          'transition-colors hover:bg-accent/40 [&_button]:relative [&_button]:z-10'
+      )}
+    >
+      {transfer && (
+        <Link
+          to='/machines/$machineId'
+          params={{ machineId: m.id }}
+          aria-label={`给「${m.name}」传文件`}
+          title='点进去传文件'
+          className='absolute inset-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring'
+        />
+      )}
       <div className='flex items-start gap-2.5'>
         <Icon className='mt-0.5 size-4 shrink-0 text-muted-foreground' />
         <div className='min-w-0 flex-1'>

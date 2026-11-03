@@ -37,33 +37,22 @@ import { ProjectLogo } from '@/components/opc/project-logo'
  * 业务 / 项目：logo、名字、目录、管理菜单；看项目时名字前面带上它属于哪块业务（点了回业务主页）。
  * 派活不在这里：点架构图里的 Leader Agent，在它的对话里说。
  */
-export type HomeTab =
-  | 'overview'
-  | 'topology'
-  | 'tasks'
-  | 'decisions'
-  | 'live'
-  | 'timeline'
+export type HomeTab = 'overview' | 'topology' | 'tasks' | 'live'
 
 const LABELS: Record<HomeTab, string> = {
   overview: '概览',
   topology: '架构图',
   tasks: '任务',
-  decisions: '待办',
   live: '现场',
-  timeline: '时间线',
 }
 
-/** 集团总览只有前三个；待办、时间线在左栏「集团」下面 */
-export const GROUP_TABS: HomeTab[] = ['overview', 'topology', 'tasks']
-export const HOME_TABS: HomeTab[] = [
-  'overview',
-  'topology',
-  'tasks',
-  'decisions',
-  'live',
-  'timeline',
-]
+/** 集团的页面（总览、任务、架构图）各是左栏里的一项，没有标签栏 */
+const GROUP_TITLES: Partial<Record<HomeTab, string>> = {
+  overview: '集团总览',
+  tasks: '任务',
+  topology: '架构图',
+}
+export const HOME_TABS: HomeTab[] = ['overview', 'topology', 'tasks', 'live']
 
 export function HomeHeader({
   business,
@@ -76,10 +65,9 @@ export function HomeHeader({
   /** 看的是业务里的某个项目 */
   project?: Project
   tab: HomeTab
-  /** 标签后面的数字（待办几件、任务几条） */
+  /** 标签后面的数字（任务后面是待办几件） */
   counts?: Partial<Record<HomeTab, number>>
 }) {
-  const tabs = business ? HOME_TABS : GROUP_TABS
   const path = project?.path ?? business?.workspacePath
   return (
     <div className='space-y-4'>
@@ -100,7 +88,7 @@ export function HomeHeader({
               </>
             )}
             <h1 className='truncate text-lg font-semibold'>
-              {project?.name ?? business?.name ?? '集团总览'}
+              {project?.name ?? business?.name ?? GROUP_TITLES[tab]}
             </h1>
             {business && !project && business.kind && (
               <span className='shrink-0 rounded bg-muted px-1.5 text-[11px] leading-5 whitespace-nowrap text-muted-foreground'>
@@ -129,51 +117,41 @@ export function HomeHeader({
         </div>
         {business && !project && <ProjectMenu project={business} />}
       </div>
-      <nav className='flex gap-1 overflow-x-auto border-b whitespace-nowrap'>
-        {tabs.map((t) => {
-          const cls = cn(
-            '-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 pb-2 text-sm text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:text-foreground',
-            t === tab
-              ? 'border-foreground text-foreground'
-              : 'border-transparent'
-          )
-          const count = counts?.[t] ? (
-            <span
-              className={cn(
-                'font-mono text-[11px]',
-                t === 'decisions' ? 'text-attention' : 'text-muted-foreground'
-              )}
-            >
-              {counts[t]}
-            </span>
-          ) : null
-          const search = t === 'overview' ? undefined : t
-          return business ? (
-            <Link
-              key={t}
-              to='/b/$businessId'
-              params={{ businessId: business.id }}
-              search={{ project: project?.id, tab: search }}
-              className={cls}
-            >
-              {LABELS[t]}
-              {count}
-            </Link>
-          ) : (
-            <Link
-              key={t}
-              to='/'
-              search={{
-                tab: t === 'topology' || t === 'tasks' ? t : undefined,
-              }}
-              className={cls}
-            >
-              {LABELS[t]}
-              {count}
-            </Link>
-          )
-        })}
-      </nav>
+      {business && (
+        <nav className='flex gap-1 overflow-x-auto border-b whitespace-nowrap'>
+          {HOME_TABS.map((t) => {
+            const cls = cn(
+              '-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 pb-2 text-sm text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:text-foreground',
+              t === tab
+                ? 'border-foreground text-foreground'
+                : 'border-transparent'
+            )
+            const count = counts?.[t] ? (
+              <span
+                className={cn(
+                  'font-mono text-[11px]',
+                  t === 'tasks' ? 'text-attention' : 'text-muted-foreground'
+                )}
+              >
+                {counts[t]}
+              </span>
+            ) : null
+            const search = t === 'overview' ? undefined : t
+            return (
+              <Link
+                key={t}
+                to='/b/$businessId'
+                params={{ businessId: business.id }}
+                search={{ project: project?.id, tab: search }}
+                className={cls}
+              >
+                {LABELS[t]}
+                {count}
+              </Link>
+            )
+          })}
+        </nav>
+      )}
     </div>
   )
 }

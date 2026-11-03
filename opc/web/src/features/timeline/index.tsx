@@ -1,9 +1,9 @@
-import { useState } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type {
   BusinessSummary,
   Page as Paged,
+  Task,
   TimelineEvent,
   TimelineKind,
 } from '@shared/api'
@@ -13,9 +13,9 @@ import { scoped, useMachineId } from '@/lib/machine'
 import { useOverview, useResumeRecord } from '@/lib/opc-api'
 import { timelineKindLabel } from '@/lib/opc-format'
 import { cn } from '@/lib/utils'
-import { Page, PageTitle } from '@/components/layout/page'
 import { AgentLogo } from '@/components/opc/agent-logo'
 import { ProjectLogo } from '@/components/opc/project-logo'
+import { TaskGlyph } from '@/features/workbench/task-status'
 
 const kindDot: Record<TimelineKind, string> = {
   leader: 'bg-brand',
@@ -28,17 +28,17 @@ const kindDot: Record<TimelineKind, string> = {
   record: 'bg-done',
 }
 
-const dayFmt = new Intl.DateTimeFormat('zh-CN', {
+export const dayFmt = new Intl.DateTimeFormat('zh-CN', {
   month: 'long',
   day: 'numeric',
   weekday: 'short',
 })
-const timeFmt = new Intl.DateTimeFormat('zh-CN', {
+export const timeFmt = new Intl.DateTimeFormat('zh-CN', {
   hour: '2-digit',
   minute: '2-digit',
 })
 
-function dayLabel(iso: string) {
+export function dayLabel(iso: string) {
   const d = new Date(iso)
   const today = new Date()
   const yesterday = new Date(Date.now() - 86_400_000)
@@ -53,26 +53,26 @@ function dayLabel(iso: string) {
 
 /**
  * 时间线：派活、汇报、待办、Agent 一轮干完、开关终端、项目变动，按时间倒序，往前翻。
- * 集团的时间线看全部、可按业务 / 项目筛；业务、项目主页里的「时间线」标签传 scope，只看它自己的。
+ * 是任务页「全部」那一栏；scope 只看某块业务 / 某个项目。和任务有关的条目前面画这个任务现在的状态。
  */
 export function Timeline({
   scope,
   preview,
+  taskOf,
 }: {
-  scope?: { businessId: string; projectId?: string }
+  scope?: { businessId?: string; projectId?: string }
   /** 概览里用：只列最近几条，不能往前翻 */
   preview?: boolean
+  /** 条目关联的任务（画状态图标） */
+  taskOf?: (taskId: string) => Task | undefined
 }) {
   const machine = useMachineId()
   const { data: overview } = useOverview()
   const projects = (overview?.businesses ?? []).filter(
     (b) => b.status !== 'archived'
   )
-  const [pickedBusiness, setBusinessId] = useState<string>('')
-  const [pickedProject, setProjectId] = useState<string>('')
-  const businessId = scope?.businessId ?? pickedBusiness
-  const projectId = scope ? (scope.projectId ?? '') : pickedProject
-  const lines = byIdOf(projects).get(businessId)?.projects ?? []
+  const businessId = scope?.businessId ?? ''
+  const projectId = scope?.projectId ?? ''
   const events = useInfiniteQuery({
     queryKey: ['timeline', machine, businessId, projectId, !!preview],
     queryFn: async ({ pageParam }) => {
@@ -142,6 +142,7 @@ export function Timeline({
                   event={e}
                   project={e.businessId ? byId.get(e.businessId) : undefined}
                   showProject={!businessId}
+                  task={e.taskId ? taskOf?.(e.taskId) : undefined}
                 />
               ))}
             </ol>
@@ -164,51 +165,7 @@ export function Timeline({
       )}
     </>
   )
-  if (scope || preview) {
-    return <div className='space-y-5'>{list}</div>
-  }
-  return (
-    <Page className='space-y-5'>
-      <PageTitle
-        title='时间线'
-        subtitle='派活、汇报、待办、开关终端、项目变动，新的在上面'
-        actions={
-          <>
-            <select
-              value={businessId}
-              onChange={(e) => {
-                setBusinessId(e.target.value)
-                setProjectId('')
-              }}
-              className='h-8 max-w-56 rounded-md border bg-transparent px-2 text-[13px]'
-            >
-              <option value=''>全部业务</option>
-              {projects.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-            {lines.length > 0 && (
-              <select
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-                className='h-8 max-w-44 rounded-md border bg-transparent px-2 text-[13px]'
-              >
-                <option value=''>全部项目</option>
-                {lines.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </>
-        }
-      />
-      {list}
-    </Page>
-  )
+  return <div className='space-y-5'>{list}</div>
 }
 
 const byIdOf = (list: BusinessSummary[]) => new Map(list.map((b) => [b.id, b]))
@@ -217,10 +174,12 @@ function EventRow({
   event: e,
   project,
   showProject,
+  task,
 }: {
   event: TimelineEvent
   project?: BusinessSummary
   showProject: boolean
+  task?: Task
 }) {
   const line = e.projectId
     ? project?.projects?.find((p) => p.id === e.projectId)
@@ -230,9 +189,13 @@ function EventRow({
       <span className='w-11 shrink-0 pt-px font-mono text-[11px] text-muted-foreground'>
         {timeFmt.format(new Date(e.ts))}
       </span>
-      <span
-        className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', kindDot[e.kind])}
-      />
+      {task ? (
+        <TaskGlyph task={task} className='mt-0.5' />
+      ) : (
+        <span className='grid size-4 shrink-0 place-items-center pt-0.5'>
+          <span className={cn('size-1.5 rounded-full', kindDot[e.kind])} />
+        </span>
+      )}
       <span className='min-w-0 flex-1'>
         <span className='flex items-center gap-2'>
           {e.agent && <AgentLogo agent={e.agent} className='size-3.5' />}

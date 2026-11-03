@@ -24,13 +24,17 @@ export function PageTitle({
   title,
   subtitle,
   actions,
+  leading,
 }: {
   title: React.ReactNode
   subtitle?: React.ReactNode
   actions?: React.ReactNode
+  /** 标题前面（返回箭头） */
+  leading?: React.ReactNode
 }) {
   return (
     <div className='flex min-h-10 items-start gap-3'>
+      {leading && <div className='flex h-7 items-center'>{leading}</div>}
       <div className='min-w-0 flex-1'>
         <h1 className='truncate text-lg font-semibold'>{title}</h1>
         {subtitle && (

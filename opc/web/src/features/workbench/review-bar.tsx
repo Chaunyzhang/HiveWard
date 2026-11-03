@@ -42,7 +42,7 @@ export function ReviewBar({ task: t }: { task: Task }) {
   const r = t.review
   if (r?.state !== 'awaiting') {
     return r?.state === 'rework' && r.note ? (
-      <p className='mt-1.5 px-2 ps-9 text-xs leading-5 text-muted-foreground'>
+      <p className='mt-1.5 px-2 ps-[92px] text-xs leading-5 text-muted-foreground'>
         打回意见：{r.note}
       </p>
     ) : null
@@ -80,7 +80,7 @@ export function ReviewBar({ task: t }: { task: Task }) {
     )
 
   return (
-    <div className='mt-1 mb-2 ps-9 pe-2'>
+    <div className='mt-1 mb-2 ps-[92px] pe-2'>
       {reworking ? (
         <div className='flex items-end gap-1.5'>
           <Textarea

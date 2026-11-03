@@ -26,19 +26,19 @@ import {
   type MachineGroup,
 } from '@/components/opc/topology-canvas'
 import { DecisionList } from '@/features/decisions/decision-list'
-import { useDecisionsDrawer } from '@/features/decisions/drawer-context'
 import { ProjectTerminals } from '@/features/terminal/project-terminals'
 import { Timeline } from '@/features/timeline'
 import { AgentPane } from './agent-pane'
 import { HomeHeader, type HomeTab } from './project-header'
 import { ProjectList } from './projects-panel'
 import { TaskFeed } from './task-feed'
-import { awaitingReview } from './task-status'
+import { TASK_FILTERS, taskFilterOf, type TaskFilter } from './task-status'
 
 /**
- * 主页（集团总览 / 业务主页 / 项目主页共用）：顶上标题 + 一排标签，一个标签一样东西——
- * 概览（几个数字、最近动静、项目）· 架构图 · 任务 · 待办 · 现场（这个目录里的终端）· 时间线。
- * 集团总览只有概览、架构图、任务（待办、时间线在左栏）。项目主页的内容都只算这个项目的。
+ * 主页（集团 / 业务主页 / 项目主页共用）：顶上标题 + 一排标签，一个标签一样东西——
+ * 概览（几个数字、最近动静、项目）· 架构图 · 任务 · 现场（这个目录里的终端）。
+ * 集团没有标签栏：总览、任务、架构图各是左栏里的一项。项目主页的内容都只算这个项目的。
+ * 任务就是时间线：「全部」是时间线，其余按状态筛（待办 = 等你复核、受阻的，加上 Agent 问你的事）。
  * 每块功能一个大框，大框里不再套小框：小块都是"隐藏的框"，悬停才变灰显出来。
  * 点架构图节点，在中间栏打开这个 Agent（它开的网页在右栏）；标题行的返回箭头回到主页。
  * 集团总览把局域网里配对过、在线的电脑合在一起看：架构图里每台电脑一列，任务和待办标明来自哪台。
@@ -48,6 +48,8 @@ export function Workbench({
   projectId,
   tab = 'overview',
   terminal,
+  status = 'all',
+  taskFilter,
 }: {
   businessId?: string
   /** 看的是业务里的某个项目 */
@@ -56,7 +58,12 @@ export function Workbench({
   tab?: HomeTab
   /** 现场标签里选中的终端 */
   terminal?: string
+  /** 任务页按状态筛 */
+  status?: TaskFilter
+  /** 集团任务页：只看某块业务 / 某个项目 */
+  taskFilter?: { businessId?: string; projectId?: string }
 }) {
+  const navigate = useNavigate()
   const [open, setOpen] = useState<Opened | null>(null)
   const viewing = useCurrentMachineId()
   const allFleet = useFleet()
@@ -84,14 +91,24 @@ export function Workbench({
   const project = projectId
     ? business?.projects?.find((p) => p.id === projectId)
     : undefined
+  // 任务页选的范围：业务页就是它自己，集团任务页看筛的
+  const allBusinesses = dedupe(
+    overviews.flatMap((o) => o.data?.businesses ?? [])
+  ).filter((b) => b.status !== 'archived')
+  const scopeBusinessId = businessId ?? taskFilter?.businessId
+  const scopeProject =
+    project ??
+    allBusinesses
+      .find((b) => b.id === taskFilter?.businessId)
+      ?.projects?.find((p) => p.id === taskFilter?.projectId)
   // 项目主页的待办：问话的 Agent 开在这个项目目录里
   const { data: liveTerminals } = useOrcaTerminals()
   const inProject = (d: Decision) => {
-    if (!project) {
+    if (!scopeProject) {
       return true
     }
     const t = liveTerminals?.find((x) => x.handle === d.dispatch?.handle)
-    return !!t && insidePath(t.project, project.path)
+    return !!t && insidePath(t.project, scopeProject.path)
   }
 
   const groups: MachineGroup[] = fleet.map((f, i) => {
@@ -130,7 +147,11 @@ export function Workbench({
   // 任务合成一张列表；多台电脑时标明来自哪台，业务名到各自那台电脑上找
   const tasks = taskLists.flatMap((q, i) =>
     (q.data ?? [])
-      .filter((task) => !projectId || task.projectId === projectId)
+      .filter(
+        (task) =>
+          (!scopeBusinessId || task.businessId === scopeBusinessId) &&
+          (!scopeProject || task.projectId === scopeProject.id)
+      )
       .map((task) => ({ task, i }))
   )
   const origin = new Map(tasks.map(({ task, i }) => [task, i]))
@@ -140,7 +161,7 @@ export function Workbench({
     (decisionLists[i].data ?? []).filter(
       (d) =>
         d.state === 'pending' &&
-        (!businessId || d.businessId === businessId) &&
+        (!scopeBusinessId || d.businessId === scopeBusinessId) &&
         inProject(d)
     ).length
   const pending = fleet.reduce((sum, _, i) => sum + pendingOf(i), 0)
@@ -185,24 +206,6 @@ export function Workbench({
     )
   }
 
-  const header = (
-    <HomeHeader
-      business={business}
-      project={project}
-      tab={tab}
-      counts={{ tasks: tasks.length, decisions: pending }}
-    />
-  )
-  const taskFeed = (
-    <TaskFeed
-      tasks={tasks.map((x) => x.task)}
-      showBusiness={!businessId}
-      businessOf={(t) =>
-        businessesOf(origin.get(t) ?? 0).find((b) => b.id === t.businessId)
-      }
-      machineOf={multi ? (t) => machineName(origin.get(t) ?? 0) : undefined}
-    />
-  )
   const errors = (queries: { error: Error | null }[]) =>
     queries.map((q, i) => (
       <LoadError
@@ -212,6 +215,183 @@ export function Workbench({
       />
     ))
 
+  // 每个状态筛选里有几条；待办连带 Agent 问你的事
+  const countOf = (f: TaskFilter) =>
+    tasks.filter(({ task }) => taskFilterOf(task) === f).length +
+    (f === 'todo' ? pending : 0)
+  const todo = countOf('todo')
+
+  const header = (
+    <HomeHeader
+      business={business}
+      project={project}
+      tab={tab}
+      counts={{ tasks: todo }}
+    />
+  )
+  const goTasks = (next: {
+    businessId?: string
+    projectId?: string
+    status?: TaskFilter
+  }) => {
+    const st = next.status === 'all' ? undefined : next.status
+    if (businessId) {
+      void navigate({
+        to: '/b/$businessId',
+        params: { businessId },
+        search: { project: next.projectId, tab: 'tasks', status: st },
+      })
+      return
+    }
+    void navigate({
+      to: '/tasks',
+      search: {
+        business: next.businessId,
+        project: next.projectId,
+        status: st,
+      },
+    })
+  }
+  const taskById = new Map(tasks.map(({ task }) => [task.id, task]))
+  const filtered = tasks
+    .map((x) => x.task)
+    .filter((t) => taskFilterOf(t) === status)
+  const decisionBlock = (
+    <Panel title='Agent 问你的事' meta={`${pending} 件`}>
+      <div className='px-2 pb-3'>
+        {errors(decisionLists)}
+        {withPending.map(({ f, i }) => (
+          <MachineScope key={f.id ?? 'self'} id={f.id}>
+            {multi && (
+              <h3 className='mt-2 flex items-center gap-1.5 px-2 text-xs text-muted-foreground'>
+                <Laptop className='size-3' />
+                {machineName(i)}
+              </h3>
+            )}
+            <DecisionList
+              businessId={scopeBusinessId}
+              match={scopeProject ? inProject : undefined}
+            />
+          </MachineScope>
+        ))}
+      </div>
+    </Panel>
+  )
+  const taskPage = (
+    <div className='space-y-5'>
+      <div className='flex flex-wrap items-center gap-3'>
+        <div className='flex gap-1 rounded-md bg-muted p-0.5'>
+          {TASK_FILTERS.map((f) => {
+            const n = f.value === 'all' ? 0 : countOf(f.value)
+            return (
+              <button
+                key={f.value}
+                type='button'
+                onClick={() =>
+                  goTasks({
+                    businessId: scopeBusinessId,
+                    projectId: scopeProject?.id,
+                    status: f.value,
+                  })
+                }
+                className={cn(
+                  'flex h-7 items-center gap-1.5 rounded-[5px] px-3 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground',
+                  status === f.value && 'bg-panel text-foreground shadow-sm'
+                )}
+              >
+                {f.label}
+                {n > 0 && (
+                  <span
+                    className={cn(
+                      'font-mono text-[11px]',
+                      f.value === 'todo'
+                        ? 'text-attention'
+                        : 'text-muted-foreground'
+                    )}
+                  >
+                    {n}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+        <div className='ms-auto flex items-center gap-2'>
+          {!businessId && (
+            <select
+              aria-label='业务'
+              value={scopeBusinessId ?? ''}
+              onChange={(e) =>
+                goTasks({ businessId: e.target.value || undefined, status })
+              }
+              className='h-8 max-w-56 rounded-md border bg-transparent px-2 text-[13px]'
+            >
+              <option value=''>全部业务</option>
+              {allBusinesses.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {scopeBusinessId && (
+            <select
+              aria-label='项目'
+              value={scopeProject?.id ?? ''}
+              onChange={(e) =>
+                goTasks({
+                  businessId: scopeBusinessId,
+                  projectId: e.target.value || undefined,
+                  status,
+                })
+              }
+              className='h-8 max-w-44 rounded-md border bg-transparent px-2 text-[13px]'
+            >
+              <option value=''>全部项目</option>
+              {(
+                allBusinesses.find((b) => b.id === scopeBusinessId)?.projects ??
+                []
+              )
+                .filter((p) => p.status !== 'archived')
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+            </select>
+          )}
+        </div>
+      </div>
+      {errors(taskLists)}
+      {status === 'all' ? (
+        <Timeline
+          scope={{ businessId: scopeBusinessId, projectId: scopeProject?.id }}
+          taskOf={(id) => taskById.get(id)}
+        />
+      ) : (
+        <>
+          {status === 'todo' && pending > 0 && decisionBlock}
+          <TaskFeed
+            tasks={filtered}
+            showBusiness={!businessId}
+            businessOf={(t) =>
+              businessesOf(origin.get(t) ?? 0).find(
+                (b) => b.id === t.businessId
+              )
+            }
+            machineOf={
+              multi ? (t) => machineName(origin.get(t) ?? 0) : undefined
+            }
+            empty={
+              status === 'todo'
+                ? '没有等你处理的事。'
+                : `没有${TASK_FILTERS.find((f) => f.value === status)?.label}的任务。`
+            }
+          />
+        </>
+      )}
+    </div>
+  )
   // 现场、架构图填满窗口剩下的高度
   if (business && tab === 'live') {
     return (
@@ -253,46 +433,7 @@ export function Workbench({
       {header}
 
       {tab === 'tasks' ? (
-        <Panel title='任务与汇报' meta='最近有动静的在上面'>
-          <div className='px-2 pb-3'>
-            {errors(taskLists)}
-            {taskFeed}
-          </div>
-        </Panel>
-      ) : business && tab === 'decisions' ? (
-        <Panel
-          title='待办'
-          meta={pending ? `${pending} 件要你决定` : undefined}
-        >
-          <div className='px-2 pb-3'>
-            {errors(decisionLists)}
-            {withPending.length === 0 ? (
-              <MachineScope id={ids[0]}>
-                <DecisionList
-                  businessId={businessId}
-                  match={project ? inProject : undefined}
-                />
-              </MachineScope>
-            ) : (
-              withPending.map(({ f, i }) => (
-                <MachineScope key={f.id ?? 'self'} id={f.id}>
-                  {multi && (
-                    <h3 className='mt-2 flex items-center gap-1.5 px-2 text-xs text-muted-foreground'>
-                      <Laptop className='size-3' />
-                      {machineName(i)}
-                    </h3>
-                  )}
-                  <DecisionList
-                    businessId={businessId}
-                    match={project ? inProject : undefined}
-                  />
-                </MachineScope>
-              ))
-            )}
-          </div>
-        </Panel>
-      ) : business && tab === 'timeline' ? (
-        <Timeline scope={{ businessId: business.id, projectId: project?.id }} />
+        taskPage
       ) : (
         <Overview
           business={business}
@@ -305,21 +446,16 @@ export function Workbench({
             },
             {
               label: '进行中的任务',
-              value: tasks.filter(({ task }) =>
-                ['dispatched', 'ready', 'pending'].includes(task.status)
-              ).length,
+              value: countOf('active'),
               tab: 'tasks',
+              status: 'active',
             },
             {
-              label: '待复核',
-              value: tasks.filter(({ task }) => awaitingReview(task)).length,
+              label: '待办',
+              value: todo,
               tab: 'tasks',
-            },
-            {
-              label: '要你决定',
-              value: pending,
-              tab: 'decisions',
-              attention: pending > 0,
+              status: 'todo',
+              attention: todo > 0,
             },
           ]}
           projects={
@@ -349,40 +485,36 @@ function Overview({
     label: string
     value: number | string
     tab: HomeTab
+    status?: TaskFilter
     attention?: boolean
   }[]
   projects?: React.ReactNode
 }) {
   const navigate = useNavigate()
-  const drawer = useDecisionsDrawer()
-  const go = (tab: HomeTab) => {
+  const go = (tab: HomeTab, filter?: TaskFilter) => {
+    const status = filter === 'all' ? undefined : filter
     if (!business) {
-      if (tab === 'decisions') {
-        drawer.setOpen(true)
-        return
-      }
-      void navigate({
-        to: '/',
-        search: {
-          tab: tab === 'topology' || tab === 'tasks' ? tab : undefined,
-        },
-      })
+      void navigate(
+        tab === 'topology'
+          ? { to: '/topology' }
+          : { to: '/tasks', search: { status } }
+      )
       return
     }
     void navigate({
       to: '/b/$businessId',
       params: { businessId: business.id },
-      search: { project: project?.id, tab },
+      search: { project: project?.id, tab, status },
     })
   }
   return (
     <div className='space-y-5'>
-      <div className='grid grid-cols-2 gap-3 @3xl:grid-cols-4'>
+      <div className='grid grid-cols-3 gap-3'>
         {stats.map((s) => (
           <button
             key={s.label}
             type='button'
-            onClick={() => go(s.tab)}
+            onClick={() => go(s.tab, s.status)}
             className='rounded-xl panel px-4 py-3 text-start transition-colors hover:bg-accent/50'
           >
             <span className='block text-xs text-muted-foreground'>
@@ -412,14 +544,14 @@ function Overview({
               <Link
                 to='/b/$businessId'
                 params={{ businessId: business.id }}
-                search={{ project: project?.id, tab: 'timeline' }}
+                search={{ project: project?.id, tab: 'tasks' }}
                 className='text-xs text-muted-foreground hover:text-foreground'
               >
                 全部 →
               </Link>
             ) : (
               <Link
-                to='/timeline'
+                to='/tasks'
                 className='text-xs text-muted-foreground hover:text-foreground'
               >
                 全部 →
@@ -589,4 +721,10 @@ function Legend() {
       ))}
     </span>
   )
+}
+
+/** 几台电脑的概况合在一起时，同一块业务只留一份 */
+function dedupe(list: BusinessSummary[]) {
+  const seen = new Set<string>()
+  return list.filter((b) => !seen.has(b.id) && !!seen.add(b.id))
 }

@@ -17,14 +17,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Page } from '@/components/layout/page'
-import { Files } from '@/features/files'
 import { ManualInviteDialog, NameDialog } from './dialogs'
 import { MachineCard } from './machine-card'
 
 /**
  * 局域网：标题就是本机所在的组织（默认以本机建），点开能切到局域网里的别的组织（申请加入）。
  * 下面一张张卡片：本机、组织里的电脑、局域网里还没加入的电脑。能邀请别的电脑加入，
- * 别的电脑也能申请加入，这边同意；两边屏幕核对同一个确认码。最下面看各台电脑共享出来的文件、收件箱。
+ * 别的电脑也能申请加入，这边同意；两边屏幕核对同一个确认码。
+ * 点组织里的某台电脑，进它的「传输」页选文件、传文件。
  * 设置（共享、剪贴板、MCP）在「设置」里。
  */
 export function Machines() {
@@ -100,10 +100,6 @@ export function Machines() {
           </button>
         </div>
       )}
-
-      <div className='mt-10'>
-        <Files />
-      </div>
 
       <ManualInviteDialog open={manual} onClose={() => setManual(false)} />
     </Page>

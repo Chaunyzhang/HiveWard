@@ -1,10 +1,11 @@
 import React from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import {
-  History,
   House,
+  Inbox,
   Laptop,
-  Lightbulb,
+  ListChecks,
+  Network,
   Moon,
   Settings,
   Sun,
@@ -21,14 +22,12 @@ import {
   CommandList,
   CommandSeparator,
 } from '@/components/ui/command'
-import { useDecisionsDrawer } from '@/features/decisions/drawer-context'
 import { ScrollArea } from './ui/scroll-area'
 
 export function CommandMenu() {
   const navigate = useNavigate()
   const { setTheme } = useTheme()
   const { open, setOpen } = useSearch()
-  const drawer = useDecisionsDrawer()
   const { data } = useOverview()
 
   const run = React.useCallback(
@@ -49,13 +48,22 @@ export function CommandMenu() {
             <CommandItem onSelect={() => run(() => navigate({ to: '/' }))}>
               <House /> 总览
             </CommandItem>
-            <CommandItem
-              onSelect={() => run(() => navigate({ to: '/timeline' }))}
-            >
-              <History /> 时间线
+            <CommandItem onSelect={() => run(() => navigate({ to: '/tasks' }))}>
+              <ListChecks /> 任务
             </CommandItem>
-            <CommandItem onSelect={() => run(() => drawer.setOpen(true))}>
-              <Lightbulb /> 待我决定
+            <CommandItem
+              onSelect={() =>
+                run(() =>
+                  navigate({ to: '/tasks', search: { status: 'todo' } })
+                )
+              }
+            >
+              <Inbox /> 待办
+            </CommandItem>
+            <CommandItem
+              onSelect={() => run(() => navigate({ to: '/topology' }))}
+            >
+              <Network /> 架构图
             </CommandItem>
             <CommandItem
               onSelect={() => run(() => navigate({ to: '/settings' }))}

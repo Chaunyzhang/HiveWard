@@ -18,12 +18,14 @@ import { Route as errors404RouteImport } from './routes/(errors)/404'
 import { Route as errors403RouteImport } from './routes/(errors)/403'
 import { Route as errors401RouteImport } from './routes/(errors)/401'
 import { Route as AuthenticatedSettingsRouteRouteImport } from './routes/_authenticated/settings/route'
-import { Route as AuthenticatedTimelineIndexRouteImport } from './routes/_authenticated/timeline/index'
+import { Route as AuthenticatedTopologyIndexRouteImport } from './routes/_authenticated/topology/index'
+import { Route as AuthenticatedTasksIndexRouteImport } from './routes/_authenticated/tasks/index'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
 import { Route as AuthenticatedMachinesIndexRouteImport } from './routes/_authenticated/machines/index'
 import { Route as AuthenticatedSettingsSharingRouteImport } from './routes/_authenticated/settings/sharing'
 import { Route as AuthenticatedSettingsMachineRouteImport } from './routes/_authenticated/settings/machine'
 import { Route as AuthenticatedSettingsGeneralRouteImport } from './routes/_authenticated/settings/general'
+import { Route as AuthenticatedMachinesMachineIdRouteImport } from './routes/_authenticated/machines/$machineId'
 import { Route as AuthenticatedBBusinessIdRouteImport } from './routes/_authenticated/b/$businessId'
 
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
@@ -71,12 +73,17 @@ const AuthenticatedSettingsRouteRoute =
     path: '/settings',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedTimelineIndexRoute =
-  AuthenticatedTimelineIndexRouteImport.update({
-    id: '/timeline/',
-    path: '/timeline/',
+const AuthenticatedTopologyIndexRoute =
+  AuthenticatedTopologyIndexRouteImport.update({
+    id: '/topology/',
+    path: '/topology/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedTasksIndexRoute = AuthenticatedTasksIndexRouteImport.update({
+  id: '/tasks/',
+  path: '/tasks/',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedSettingsIndexRoute =
   AuthenticatedSettingsIndexRouteImport.update({
     id: '/',
@@ -107,6 +114,12 @@ const AuthenticatedSettingsGeneralRoute =
     path: '/general',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
   } as any)
+const AuthenticatedMachinesMachineIdRoute =
+  AuthenticatedMachinesMachineIdRouteImport.update({
+    id: '/machines/$machineId',
+    path: '/machines/$machineId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedBBusinessIdRoute =
   AuthenticatedBBusinessIdRouteImport.update({
     id: '/b/$businessId',
@@ -124,12 +137,14 @@ export interface FileRoutesByFullPath {
   '/503': typeof errors503Route
   '/go': typeof AuthenticatedGoRoute
   '/b/$businessId': typeof AuthenticatedBBusinessIdRoute
+  '/machines/$machineId': typeof AuthenticatedMachinesMachineIdRoute
   '/settings/general': typeof AuthenticatedSettingsGeneralRoute
   '/settings/machine': typeof AuthenticatedSettingsMachineRoute
   '/settings/sharing': typeof AuthenticatedSettingsSharingRoute
   '/machines/': typeof AuthenticatedMachinesIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
-  '/timeline/': typeof AuthenticatedTimelineIndexRoute
+  '/tasks/': typeof AuthenticatedTasksIndexRoute
+  '/topology/': typeof AuthenticatedTopologyIndexRoute
 }
 export interface FileRoutesByTo {
   '/401': typeof errors401Route
@@ -140,12 +155,14 @@ export interface FileRoutesByTo {
   '/go': typeof AuthenticatedGoRoute
   '/': typeof AuthenticatedIndexRoute
   '/b/$businessId': typeof AuthenticatedBBusinessIdRoute
+  '/machines/$machineId': typeof AuthenticatedMachinesMachineIdRoute
   '/settings/general': typeof AuthenticatedSettingsGeneralRoute
   '/settings/machine': typeof AuthenticatedSettingsMachineRoute
   '/settings/sharing': typeof AuthenticatedSettingsSharingRoute
   '/machines': typeof AuthenticatedMachinesIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
-  '/timeline': typeof AuthenticatedTimelineIndexRoute
+  '/tasks': typeof AuthenticatedTasksIndexRoute
+  '/topology': typeof AuthenticatedTopologyIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -159,12 +176,14 @@ export interface FileRoutesById {
   '/_authenticated/go': typeof AuthenticatedGoRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/b/$businessId': typeof AuthenticatedBBusinessIdRoute
+  '/_authenticated/machines/$machineId': typeof AuthenticatedMachinesMachineIdRoute
   '/_authenticated/settings/general': typeof AuthenticatedSettingsGeneralRoute
   '/_authenticated/settings/machine': typeof AuthenticatedSettingsMachineRoute
   '/_authenticated/settings/sharing': typeof AuthenticatedSettingsSharingRoute
   '/_authenticated/machines/': typeof AuthenticatedMachinesIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
-  '/_authenticated/timeline/': typeof AuthenticatedTimelineIndexRoute
+  '/_authenticated/tasks/': typeof AuthenticatedTasksIndexRoute
+  '/_authenticated/topology/': typeof AuthenticatedTopologyIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -178,12 +197,14 @@ export interface FileRouteTypes {
     | '/503'
     | '/go'
     | '/b/$businessId'
+    | '/machines/$machineId'
     | '/settings/general'
     | '/settings/machine'
     | '/settings/sharing'
     | '/machines/'
     | '/settings/'
-    | '/timeline/'
+    | '/tasks/'
+    | '/topology/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/401'
@@ -194,12 +215,14 @@ export interface FileRouteTypes {
     | '/go'
     | '/'
     | '/b/$businessId'
+    | '/machines/$machineId'
     | '/settings/general'
     | '/settings/machine'
     | '/settings/sharing'
     | '/machines'
     | '/settings'
-    | '/timeline'
+    | '/tasks'
+    | '/topology'
   id:
     | '__root__'
     | '/_authenticated'
@@ -212,12 +235,14 @@ export interface FileRouteTypes {
     | '/_authenticated/go'
     | '/_authenticated/'
     | '/_authenticated/b/$businessId'
+    | '/_authenticated/machines/$machineId'
     | '/_authenticated/settings/general'
     | '/_authenticated/settings/machine'
     | '/_authenticated/settings/sharing'
     | '/_authenticated/machines/'
     | '/_authenticated/settings/'
-    | '/_authenticated/timeline/'
+    | '/_authenticated/tasks/'
+    | '/_authenticated/topology/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -294,11 +319,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsRouteRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/timeline/': {
-      id: '/_authenticated/timeline/'
-      path: '/timeline'
-      fullPath: '/timeline/'
-      preLoaderRoute: typeof AuthenticatedTimelineIndexRouteImport
+    '/_authenticated/topology/': {
+      id: '/_authenticated/topology/'
+      path: '/topology'
+      fullPath: '/topology/'
+      preLoaderRoute: typeof AuthenticatedTopologyIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/tasks/': {
+      id: '/_authenticated/tasks/'
+      path: '/tasks'
+      fullPath: '/tasks/'
+      preLoaderRoute: typeof AuthenticatedTasksIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/settings/': {
@@ -336,6 +368,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsGeneralRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
+    '/_authenticated/machines/$machineId': {
+      id: '/_authenticated/machines/$machineId'
+      path: '/machines/$machineId'
+      fullPath: '/machines/$machineId'
+      preLoaderRoute: typeof AuthenticatedMachinesMachineIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/b/$businessId': {
       id: '/_authenticated/b/$businessId'
       path: '/b/$businessId'
@@ -371,8 +410,10 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedGoRoute: typeof AuthenticatedGoRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedBBusinessIdRoute: typeof AuthenticatedBBusinessIdRoute
+  AuthenticatedMachinesMachineIdRoute: typeof AuthenticatedMachinesMachineIdRoute
   AuthenticatedMachinesIndexRoute: typeof AuthenticatedMachinesIndexRoute
-  AuthenticatedTimelineIndexRoute: typeof AuthenticatedTimelineIndexRoute
+  AuthenticatedTasksIndexRoute: typeof AuthenticatedTasksIndexRoute
+  AuthenticatedTopologyIndexRoute: typeof AuthenticatedTopologyIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -380,8 +421,10 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedGoRoute: AuthenticatedGoRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedBBusinessIdRoute: AuthenticatedBBusinessIdRoute,
+  AuthenticatedMachinesMachineIdRoute: AuthenticatedMachinesMachineIdRoute,
   AuthenticatedMachinesIndexRoute: AuthenticatedMachinesIndexRoute,
-  AuthenticatedTimelineIndexRoute: AuthenticatedTimelineIndexRoute,
+  AuthenticatedTasksIndexRoute: AuthenticatedTasksIndexRoute,
+  AuthenticatedTopologyIndexRoute: AuthenticatedTopologyIndexRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =

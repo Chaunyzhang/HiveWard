@@ -1,22 +1,21 @@
 import { useState } from 'react'
 import type { BusinessSummary, Task } from '@shared/api'
 import { Laptop } from 'lucide-react'
-import { timeAgo } from '@/lib/opc-format'
-import { cn } from '@/lib/utils'
 import {
   AgentLogo,
   AgentName,
   dispatcherAgent,
 } from '@/components/opc/agent-logo'
 import { Markdown } from '@/features/live/chat-view'
+import { dayLabel, timeFmt } from '@/features/timeline'
 import { ReviewBar, ReviewChip } from './review-bar'
-import { statusIcon } from './task-status'
+import { TaskGlyph } from './task-status'
 
 // 先列这么多，再多点「显示更多」
 const PAGE = 30
 
 /**
- * 任务与汇报：所有任务按最近动静的时间倒序排成一列，不按状态分组（状态看每行前面的图标）。
+ * 任务页按状态筛出来的任务：和时间线一个样子——按天一块，左边是时间（最近动静），前面是状态图标。
  * 行是隐藏的框，悬停变灰。已完成 / 失败的任务直接展示下属的汇报摘要（worker_done），
  * 点开看全文和改动文件；待复核的点开后能通过或打回。
  */
@@ -25,8 +24,11 @@ export function TaskFeed({
   showBusiness,
   businessOf,
   machineOf,
+  empty = '这里没有任务。',
 }: {
   tasks: Task[]
+  /** 筛完一条都没有时说什么 */
+  empty?: string
   showBusiness: boolean
   /** 任务属于哪块业务（几台电脑合在一起时，业务要到任务所在那台电脑上找） */
   businessOf: (t: Task) => BusinessSummary | undefined
@@ -38,34 +40,52 @@ export function TaskFeed({
 
   if (tasks.length === 0) {
     return (
-      <p className='px-2 py-6 text-[13px] text-muted-foreground'>
-        还没有任务。
+      <p className='rounded-xl panel p-6 text-[13px] text-muted-foreground'>
+        {empty}
       </p>
     )
   }
   const all = [...tasks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  // 按天分组（已经是倒序）
+  const days: { label: string; items: Task[] }[] = []
+  for (const t of all.slice(0, shown)) {
+    const label = dayLabel(t.updatedAt)
+    const last = days.at(-1)
+    if (last?.label === label) {
+      last.items.push(t)
+    } else {
+      days.push({ label, items: [t] })
+    }
+  }
   return (
-    <div>
-      <ul>
-        {all.slice(0, shown).map((task) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            business={showBusiness ? businessOf(task) : undefined}
-            machine={machineOf?.(task)}
-            showProject={showBusiness}
-            open={task.id === openId}
-            onToggle={() => setOpenId(task.id === openId ? null : task.id)}
-          />
-        ))}
-      </ul>
+    <div className='space-y-5'>
+      {days.map((day) => (
+        <section key={day.label} className='rounded-xl panel'>
+          <h2 className='flex h-10 items-center px-4 text-xs text-muted-foreground'>
+            {day.label}
+          </h2>
+          <ol className='px-2 pb-2'>
+            {day.items.map((task) => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                business={showBusiness ? businessOf(task) : undefined}
+                machine={machineOf?.(task)}
+                showProject={showBusiness}
+                open={task.id === openId}
+                onToggle={() => setOpenId(task.id === openId ? null : task.id)}
+              />
+            ))}
+          </ol>
+        </section>
+      ))}
       {shown < all.length && (
         <button
           type='button'
           onClick={() => setShown(shown + PAGE)}
-          className='mt-1 px-2 text-xs text-muted-foreground hover:text-foreground'
+          className='mx-auto flex h-8 items-center rounded-md px-4 text-xs text-muted-foreground hover:bg-accent hover:text-foreground'
         >
-          显示更多（还有 {all.length - shown} 条）
+          更早的（还有 {all.length - shown} 条）
         </button>
       )}
     </div>
@@ -87,8 +107,6 @@ function TaskRow({
   open: boolean
   onToggle: () => void
 }) {
-  const s = statusIcon[t.status]
-  const Icon = s.icon
   const report = t.report
   const files = report
     ? [
@@ -105,10 +123,10 @@ function TaskRow({
         data-open={open}
         className='flex w-full items-start gap-3 rounded-md hover-box px-2 py-2 text-start'
       >
-        <Icon
-          className={cn('mt-0.5 size-4 shrink-0', s.className)}
-          aria-label={s.label}
-        />
+        <span className='w-11 shrink-0 pt-px font-mono text-[11px] text-muted-foreground'>
+          {timeFmt.format(new Date(t.updatedAt))}
+        </span>
+        <TaskGlyph task={t} className='mt-0.5' />
         <span className='min-w-0 flex-1'>
           <span className='flex items-baseline gap-2'>
             <span className='truncate text-[13px] leading-5'>{t.title}</span>
@@ -177,13 +195,10 @@ function TaskRow({
           </span>
         )}
         {(b || (showProject && t.project)) && (
-          <span className='hidden w-28 shrink-0 truncate text-xs text-muted-foreground sm:block'>
+          <span className='hidden w-36 shrink-0 truncate text-end text-xs text-muted-foreground sm:block'>
             {b ? b.name : t.project}
           </span>
         )}
-        <span className='w-16 shrink-0 text-end text-xs text-muted-foreground'>
-          {timeAgo(t.updatedAt)}
-        </span>
       </button>
       {open && <ReviewBar task={t} />}
     </li>

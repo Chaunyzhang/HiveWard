@@ -20,7 +20,7 @@ import {
   Upload,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { scoped, useMachines } from '@/lib/machine'
+import { scoped } from '@/lib/machine'
 import { timeAgo } from '@/lib/opc-format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -32,91 +32,40 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { platformName } from '@/features/machines/verify-code'
 
 /**
- * 局域网页下面的「文件」：看组织里任意一台电脑的共享目录、收件箱，下载、拖进来上传、建文件夹。
+ * 一台电脑的「传输」：看它的共享目录、收件箱，选文件下载，拖进来或点上传把文件传过去，建文件夹。
  * （业务 / 项目自己的文件在右栏看。）
  * 每台电脑只开放它自己设定的共享目录（业务目录、收件箱、下载、桌面、文稿…），路径用那台电脑自己的格式。
  * 别的电脑只走加密且核对过证书的组织通道；没加密的不让传。
  */
-export function Files() {
-  const { data: machines } = useMachines()
-  const list = (machines ?? []).filter((m) => m.self || m.paired)
-  const [machineId, setMachineId] = useState<string | null>(null)
+export function MachineTransfer({ machine }: { machine: Machine }) {
   const [path, setPath] = useState<string | null>(null)
-  const machine =
-    list.find((m) => (machineId ? m.id === machineId : m.self)) ?? undefined
-  const remote = machineId ? machineId : null
-  const insecure = !!remote && machine?.secure !== true
-
-  const pick = (id: string | null) => {
-    setMachineId(id)
-    setPath(null)
+  const remote = machine.self ? null : machine.id
+  if (remote && machine.status !== 'online') {
+    return (
+      <p className='rounded-xl panel p-6 text-[13px] text-muted-foreground'>
+        「{machine.name}」现在离线，连上局域网后才能传文件。
+      </p>
+    )
   }
-
+  if (remote && machine.secure !== true) {
+    return (
+      <p className='flex items-start gap-2 px-1 text-xs leading-5 text-danger'>
+        <TriangleAlert className='mt-0.5 size-3.5 shrink-0' />
+        和「{machine.name}
+        」的通道还没加密，文件不能传。两台都升级到新版 HiveWard 后会自动加密。
+      </p>
+    )
+  }
   return (
-    <section className='space-y-4'>
-      <div className='flex flex-wrap items-center gap-3'>
-        <h2 className='text-[15px] font-semibold'>电脑上的文件</h2>
-        <div className='ms-auto flex flex-wrap gap-1 rounded-md bg-muted p-0.5'>
-          {list.map((m) => (
-            <MachineTab
-              key={m.id}
-              machine={m}
-              active={m === machine}
-              onClick={() => pick(m.self ? null : m.id)}
-            />
-          ))}
-        </div>
-      </div>
-
-      {insecure ? (
-        <p className='flex items-start gap-2 px-1 text-xs leading-5 text-danger'>
-          <TriangleAlert className='mt-0.5 size-3.5 shrink-0' />
-          和「{machine?.name}
-          」的通道还没加密，文件不能传。两台都升级到新版 HiveWard 后会自动加密。
-        </p>
-      ) : (
-        <Browser
-          key={remote ?? 'self'}
-          machine={remote}
-          name={machine?.name}
-          path={path}
-          onPath={setPath}
-        />
-      )}
-    </section>
-  )
-}
-
-function MachineTab({
-  machine: m,
-  active,
-  onClick,
-}: {
-  machine: Machine
-  active: boolean
-  onClick: () => void
-}) {
-  const offline = !m.self && m.status !== 'online'
-  return (
-    <button
-      type='button'
-      disabled={offline}
-      onClick={onClick}
-      className={cn(
-        'flex h-7 items-center gap-1.5 rounded-[5px] px-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40',
-        active && 'bg-panel text-foreground shadow-sm'
-      )}
-    >
-      {m.name}
-      {m.platform && (
-        <span className='text-[10px] text-muted-foreground'>
-          {platformName(m.platform)}
-        </span>
-      )}
-    </button>
+    <Browser
+      key={remote ?? 'self'}
+      machine={remote}
+      name={machine.name}
+      path={path}
+      onPath={setPath}
+    />
   )
 }
 

@@ -3,8 +3,6 @@ import { useDesktopNavigation } from '@/lib/desktop'
 import { SearchProvider } from '@/context/search-provider'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { SkipToMain } from '@/components/skip-to-main'
-import { DecisionsDrawer } from '@/features/decisions/decisions-drawer'
-import { DecisionsDrawerProvider } from '@/features/decisions/drawer-context'
 import { InvitePrompt } from '@/features/machines/invite-prompt'
 import { Rail } from './rail'
 import { SidePanel } from './side-panel'
@@ -14,27 +12,24 @@ import { TopBar } from './top-bar'
 export function AppShell() {
   useDesktopNavigation()
   return (
-    <DecisionsDrawerProvider>
-      <SearchProvider>
-        <TooltipProvider delayDuration={200}>
-          <SkipToMain />
-          <div className='flex h-svh flex-col'>
-            <TopBar />
-            <div className='flex min-h-0 flex-1'>
-              <Rail />
-              <main
-                id='content'
-                className='@container min-w-0 flex-1 overflow-y-auto'
-              >
-                <Outlet />
-              </main>
-              <SidePanel />
-            </div>
+    <SearchProvider>
+      <TooltipProvider delayDuration={200}>
+        <SkipToMain />
+        <div className='flex h-svh flex-col'>
+          <TopBar />
+          <div className='flex min-h-0 flex-1'>
+            <Rail />
+            <main
+              id='content'
+              className='@container min-w-0 flex-1 overflow-y-auto'
+            >
+              <Outlet />
+            </main>
+            <SidePanel />
           </div>
-          <DecisionsDrawer />
-          <InvitePrompt />
-        </TooltipProvider>
-      </SearchProvider>
-    </DecisionsDrawerProvider>
+        </div>
+        <InvitePrompt />
+      </TooltipProvider>
+    </SearchProvider>
   )
 }

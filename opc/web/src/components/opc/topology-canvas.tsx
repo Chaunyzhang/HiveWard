@@ -666,9 +666,9 @@ function StateChip({
   status: AgentStatus
   review?: TopologyNode['review']
 }) {
-  const s = agentStatusStyle[status]
-  // 交了活、等上级复核：仍是「完成」，但标出来还差一步
+  // 交了活、等上级复核：标成「等待」的颜色（任务页里它也在「待办」），和任务页一致
   const awaiting = status === 'done' && review === 'awaiting'
+  const s = agentStatusStyle[awaiting ? 'waiting' : status]
   return (
     <span
       className={cn(

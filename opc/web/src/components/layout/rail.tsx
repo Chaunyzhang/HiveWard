@@ -3,10 +3,10 @@ import { Link, useLocation, useSearch } from '@tanstack/react-router'
 import type { BusinessSummary, Project } from '@shared/api'
 import {
   ChevronDown,
-  History,
-  Inbox,
   Laptop,
   LayoutDashboard,
+  ListChecks,
+  Network,
   Plus,
   Settings,
 } from 'lucide-react'
@@ -19,12 +19,11 @@ import { cn } from '@/lib/utils'
 import { ProjectLogo } from '@/components/opc/project-logo'
 import { StatusDot } from '@/components/opc/status-dot'
 import { AddBusinessDialog } from '@/features/businesses/add-business-dialog'
-import { useDecisionsDrawer } from '@/features/decisions/drawer-context'
 import { NewProjectDialog } from '@/features/workbench/projects-panel'
 
 /**
  * 左栏（常驻 232px）分两块：
- * - 集团：总览、待办、时间线、局域网——看整个集团的；
+ * - 集团：总览、任务（时间线 + 按状态筛，待办也在里面）、架构图、局域网——看整个集团的；
  * - 业务：标题点了整块收起 / 展开，右边 + 加业务。每块业务名后面的小三角展开它的项目，
  *   项目缩进挂在下面；悬停业务时最右边出 +，新建项目。选中只用底色，不画框。
  *   点业务看整块业务的主页，点项目看这个项目的主页；有 Agent 在干活亮蓝点，等你确认亮橙点。
@@ -32,13 +31,11 @@ import { NewProjectDialog } from '@/features/workbench/projects-panel'
 export function Rail() {
   const pathname = useLocation({ select: (l) => l.pathname })
   const search: { project?: string } = useSearch({ strict: false })
-  const { setOpen } = useDecisionsDrawer()
   const { data } = useOverview()
   const [adding, setAdding] = useState(false)
   const [newProjectIn, setNewProjectIn] = useState<BusinessSummary | null>(null)
   const closed = useWorkspace((s) => s.businessesClosed)
   const toggleBusinesses = useWorkspace((s) => s.toggleBusinesses)
-  const pending = data?.decisionsPending ?? 0
   const businesses = (data?.businesses ?? []).filter(
     (b) => b.status !== 'archived'
   )
@@ -66,16 +63,16 @@ export function Rail() {
         active={pathname === '/'}
       />
       <Item
-        icon={<Inbox />}
-        label='待办'
-        onClick={() => setOpen(true)}
-        trailing={pending > 0 ? String(pending) : undefined}
+        to='/tasks'
+        icon={<ListChecks />}
+        label='任务'
+        active={pathname.startsWith('/tasks')}
       />
       <Item
-        to='/timeline'
-        icon={<History />}
-        label='时间线'
-        active={pathname.startsWith('/timeline')}
+        to='/topology'
+        icon={<Network />}
+        label='架构图'
+        active={pathname.startsWith('/topology')}
       />
       <Item
         to='/machines'
