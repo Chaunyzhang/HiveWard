@@ -9,6 +9,34 @@ import { createSocket } from 'node:dgram'
 import { networkInterfaces } from 'node:os'
 
 // Discovery never grants trust; tokens are exchanged only after local consent.
+export function publicOrganizationSummary(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+  const members = Array.isArray(value.members) ? value.members.length : value.members
+  if (
+    typeof value.id !== 'string' ||
+    !value.id.trim() ||
+    value.id.length > 200 ||
+    typeof value.name !== 'string' ||
+    !value.name.trim() ||
+    value.name.length > 200 ||
+    !Number.isInteger(members) ||
+    members < 1
+  ) {
+    return null
+  }
+  return { id: value.id, name: value.name, members }
+}
+
+function currentOrganization(source) {
+  try {
+    return publicOrganizationSummary(typeof source === 'function' ? source() : source)
+  } catch {
+    return null
+  }
+}
+
 export function discoverUdp(
   machine,
   port,
@@ -18,7 +46,8 @@ export function discoverUdp(
     version = machine.version ?? 'unknown',
     discoveryPort = 18889,
     interval = 3000,
-    ttl = 15000
+    ttl = 15000,
+    organization
   } = {}
 ) {
   const socket = createSocket({ type: 'udp4', reuseAddr: true })
@@ -30,6 +59,9 @@ export function discoverUdp(
     if (!ready) {
       return
     }
+    const organizationSummary = currentOrganization(
+      organization === undefined ? machine.organization : organization
+    )
     const packet = Buffer.from(
       JSON.stringify({
         protocol: 'hiveward-discovery-1',
@@ -37,7 +69,8 @@ export function discoverUdp(
         name: machine.name,
         port,
         version,
-        platform: machine.platform ?? process.platform
+        platform: machine.platform ?? process.platform,
+        ...(organizationSummary ? { organization: organizationSummary } : {})
       })
     )
     socket.send(packet, discoveryPort, group, () => {})
@@ -56,6 +89,8 @@ export function discoverUdp(
     }
     try {
       const d = JSON.parse(buffer.toString())
+      const organization =
+        d.organization === undefined ? undefined : publicOrganizationSummary(d.organization)
       if (
         d.protocol !== 'hiveward-discovery-1' ||
         typeof d.id !== 'string' ||
@@ -68,7 +103,9 @@ export function discoverUdp(
         d.port < 1 ||
         d.port > 65535 ||
         (d.version !== undefined && (typeof d.version !== 'string' || d.version.length > 100)) ||
-        (d.platform !== undefined && !['darwin', 'win32', 'linux'].includes(d.platform))
+        (d.platform !== undefined && !['darwin', 'win32', 'linux'].includes(d.platform)) ||
+        (d.organization !== undefined &&
+          (!organization || !Number.isInteger(d.organization?.members)))
       ) {
         return
       }
@@ -82,7 +119,8 @@ export function discoverUdp(
         version: d.version,
         platform: d.platform,
         address: `${info.address}:${d.port}`,
-        lastSeenAt: new Date().toISOString()
+        lastSeenAt: new Date().toISOString(),
+        ...(organization ? { organization } : {})
       })
     } catch {}
   })
@@ -177,7 +215,8 @@ export function discoverBonjour(
     },
     resolve,
     interval = 5000,
-    timeout = 4000
+    timeout = 4000,
+    organization
   } = {}
 ) {
   const children = new Set(),
@@ -217,6 +256,10 @@ export function discoverBonjour(
     record.lastAttempt = ++sequence
     let id,
       address,
+      organization,
+      organizationId,
+      organizationName,
+      organizationMembers,
       resolving = false,
       finished = false
     const finish = () => {
@@ -240,7 +283,8 @@ export function discoverBonjour(
           name: record.name,
           address,
           version: record.version,
-          lastSeenAt: new Date().toISOString()
+          lastSeenAt: new Date().toISOString(),
+          ...(organization ? { organization } : {})
         })
         finish()
       }
@@ -251,12 +295,35 @@ export function discoverBonjour(
       }
       const host = /can be reached at (.+?):(\d+)\s/.exec(text)
       const identity = /\bid=([^\s]+)/.exec(text),
-        v = /\bv=([^\s]+)/.exec(text)
+        v = /\bv=([^\s]+)/.exec(text),
+        org = /\borg=([^\s]+)/.exec(text),
+        orgName = /\borgName=([^\s]+)/.exec(text),
+        orgMembers = /\borgMembers=([^\s]+)/.exec(text)
       if (identity) {
         id = identity[1]
       }
       if (v) {
         record.version = v[1]
+      }
+      if (org) {
+        organizationId = org[1]
+      }
+      if (orgName) {
+        organizationName = orgName[1]
+      }
+      if (orgMembers) {
+        organizationMembers = orgMembers[1]
+      }
+      if (organizationId && organizationName && organizationMembers) {
+        try {
+          organization = publicOrganizationSummary({
+            id: decodeURIComponent(organizationId),
+            name: decodeURIComponent(organizationName),
+            members: /^\d+$/.test(organizationMembers) ? Number(organizationMembers) : Number.NaN
+          })
+        } catch {
+          organization = null
+        }
       }
       if (host && !resolving) {
         resolving = true
@@ -289,6 +356,9 @@ export function discoverBonjour(
       if (closed) {
         return
       }
+      const summary = currentOrganization(
+        organization === undefined ? machine.organization : organization
+      )
       child([
         '-R',
         machine.name,
@@ -296,7 +366,14 @@ export function discoverBonjour(
         'local',
         String(port),
         `id=${machine.id}`,
-        `v=${version}`
+        `v=${version}`,
+        ...(summary
+          ? [
+              `org=${encodeURIComponent(summary.id)}`,
+              `orgName=${encodeURIComponent(summary.name)}`,
+              `orgMembers=${summary.members}`
+            ]
+          : [])
       ])
       child(['-B', '_opc._tcp'], (line) => {
         const m = /\b(Add|Rmv)\s+\d+\s+(\d+)\s+(\S+)\s+(_opc\._tcp\.?)\s+(.+?)\s*$/.exec(line)

@@ -1,6 +1,14 @@
 import React from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { History, House, Laptop, Lightbulb, Moon, Settings, Sun } from 'lucide-react'
+import {
+  History,
+  House,
+  Laptop,
+  Lightbulb,
+  Moon,
+  Settings,
+  Sun,
+} from 'lucide-react'
 import { useOverview } from '@/lib/opc-api'
 import { useSearch } from '@/context/search-provider'
 import { useTheme } from '@/context/theme-provider'
@@ -41,13 +49,17 @@ export function CommandMenu() {
             <CommandItem onSelect={() => run(() => navigate({ to: '/' }))}>
               <House /> 总览
             </CommandItem>
-            <CommandItem onSelect={() => run(() => navigate({ to: '/timeline' }))}>
+            <CommandItem
+              onSelect={() => run(() => navigate({ to: '/timeline' }))}
+            >
               <History /> 时间线
             </CommandItem>
             <CommandItem onSelect={() => run(() => drawer.setOpen(true))}>
               <Lightbulb /> 待我决定
             </CommandItem>
-            <CommandItem onSelect={() => run(() => navigate({ to: '/settings' }))}>
+            <CommandItem
+              onSelect={() => run(() => navigate({ to: '/settings' }))}
+            >
               <Settings /> 设置
             </CommandItem>
           </CommandGroup>
@@ -58,7 +70,10 @@ export function CommandMenu() {
                 value={`业务 ${b.name}`}
                 onSelect={() =>
                   run(() =>
-                    navigate({ to: '/b/$businessId', params: { businessId: b.id } })
+                    navigate({
+                      to: '/b/$businessId',
+                      params: { businessId: b.id },
+                    })
                   )
                 }
               >

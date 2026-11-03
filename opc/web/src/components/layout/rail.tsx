@@ -1,21 +1,20 @@
-import { useState } from 'react'
-import { Link, useLocation } from '@tanstack/react-router'
-import type { BusinessSummary } from '@shared/api'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useSearch } from '@tanstack/react-router'
+import type { BusinessSummary, Project } from '@shared/api'
 import {
-  FolderOpen,
-  Globe,
+  ChevronRight,
   History,
   Inbox,
   Laptop,
   LayoutDashboard,
   Plus,
   Settings,
-  SquareTerminal,
 } from 'lucide-react'
+import { useWorkspace } from '@/stores/workspace'
 import { useOverview } from '@/lib/opc-api'
 import { terminalStatus, type AgentStatus } from '@/lib/opc-format'
 import { useOrcaTerminals } from '@/lib/orca-live'
-import { projectForPath } from '@/lib/project-for-path'
+import { insidePath, projectForPath } from '@/lib/project-for-path'
 import { cn } from '@/lib/utils'
 import { ProjectLogo } from '@/components/opc/project-logo'
 import { StatusDot } from '@/components/opc/status-dot'
@@ -23,34 +22,42 @@ import { AddBusinessDialog } from '@/features/businesses/add-business-dialog'
 import { useDecisionsDrawer } from '@/features/decisions/drawer-context'
 
 /**
- * 侧栏（常驻 232px）：驾驶舱、待办和几个全局页面在上面，下面是业务列表——
- * 点进去是业务页（项目、架构、终端）。「业务」旁边的 + 加业务。
+ * 左栏（常驻 232px）分两块：
+ * - 集团：总览、待办、时间线、局域网——看整个集团的；
+ * - 业务：每块业务能展开看它的项目。点业务看整块业务的主页，点项目看这个项目的主页；
+ *   有 Agent 在干活的业务 / 项目亮蓝点，有 Agent 等你确认亮橙点。
  */
 export function Rail() {
   const pathname = useLocation({ select: (l) => l.pathname })
+  const search: { project?: string } = useSearch({ strict: false })
   const { setOpen } = useDecisionsDrawer()
   const { data } = useOverview()
   const [adding, setAdding] = useState(false)
   const pending = data?.decisionsPending ?? 0
-  const projects = (data?.businesses ?? []).filter(
+  const businesses = (data?.businesses ?? []).filter(
     (b) => b.status !== 'archived'
   )
-  // 每个项目里终端的实况：有 Agent 在干活就亮蓝点，有 Agent 等你确认就亮橙点
+  // 终端的实况按业务归拢：每个终端的目录落在哪块业务里
   const { data: terminals } = useOrcaTerminals()
-  const live = new Map<string, AgentStatus[]>()
+  const live = new Map<string, { path: string; status: AgentStatus }[]>()
   for (const t of terminals ?? []) {
-    const p = t.agent && projectForPath(projects, t.project)
-    if (p) {
-      live.set(p.id, [...(live.get(p.id) ?? []), terminalStatus(t.status)])
+    const b = t.agent && projectForPath(businesses, t.project)
+    if (b) {
+      live.set(b.id, [
+        ...(live.get(b.id) ?? []),
+        { path: t.project, status: terminalStatus(t.status) },
+      ])
     }
   }
+  const current = pathname.startsWith('/b/') ? pathname.slice(3) : null
 
   return (
     <nav className='flex w-58 shrink-0 flex-col border-e bg-background py-3'>
+      <Heading>集团</Heading>
       <Item
         to='/'
         icon={<LayoutDashboard />}
-        label='驾驶舱'
+        label='总览'
         active={pathname === '/'}
       />
       <Item
@@ -60,10 +67,10 @@ export function Rail() {
         trailing={pending > 0 ? String(pending) : undefined}
       />
       <Item
-        to='/browser'
-        icon={<Globe />}
-        label='浏览器'
-        active={pathname.startsWith('/browser')}
+        to='/timeline'
+        icon={<History />}
+        label='时间线'
+        active={pathname.startsWith('/timeline')}
       />
       <Item
         to='/machines'
@@ -71,27 +78,9 @@ export function Rail() {
         label='局域网'
         active={pathname.startsWith('/machines')}
       />
-      <Item
-        to='/files'
-        icon={<FolderOpen />}
-        label='文件'
-        active={pathname.startsWith('/files')}
-      />
-      <Item
-        to='/live'
-        icon={<SquareTerminal />}
-        label='现场'
-        active={pathname.startsWith('/live')}
-      />
-      <Item
-        to='/timeline'
-        icon={<History />}
-        label='时间线'
-        active={pathname.startsWith('/timeline')}
-      />
 
-      <div className='mx-3 mt-5 mb-1 flex h-6 items-center ps-2.5'>
-        <span className='text-[11px] text-muted-foreground'>业务</span>
+      <Heading>
+        业务
         <button
           type='button'
           title='加业务'
@@ -101,17 +90,18 @@ export function Rail() {
         >
           <Plus className='size-3.5' />
         </button>
-      </div>
+      </Heading>
       <div className='min-h-0 flex-1 overflow-y-auto'>
-        {projects.map((b) => (
-          <ProjectItem
+        {businesses.map((b) => (
+          <BusinessItem
             key={b.id}
-            project={b}
+            business={b}
             agents={live.get(b.id) ?? []}
-            active={pathname === `/b/${b.id}`}
+            current={current === b.id}
+            project={current === b.id ? search.project : undefined}
           />
         ))}
-        {data && projects.length === 0 && (
+        {data && businesses.length === 0 && (
           <button
             type='button'
             onClick={() => setAdding(true)}
@@ -134,36 +124,121 @@ export function Rail() {
   )
 }
 
-function ProjectItem({
-  project: b,
+function Heading({ children }: { children: React.ReactNode }) {
+  return (
+    <div className='mx-3 mt-4 mb-1 flex h-6 items-center ps-2.5 text-[11px] text-muted-foreground first:mt-0'>
+      {children}
+    </div>
+  )
+}
+
+/** 一组终端的实况合成一个点：有人等你 → 橙；有人在干活 → 蓝 */
+function liveDot(list: { status: AgentStatus }[]): AgentStatus | undefined {
+  const s = list.map((a) => a.status)
+  return s.includes('waiting')
+    ? 'waiting'
+    : s.includes('working')
+      ? 'working'
+      : undefined
+}
+
+function BusinessItem({
+  business: b,
   agents,
-  active,
+  current,
+  project,
 }: {
-  project: BusinessSummary
-  /** 这个项目里各个 Agent 终端的实况 */
-  agents: AgentStatus[]
-  active: boolean
+  business: BusinessSummary
+  /** 这块业务里各个 Agent 终端的目录和实况 */
+  agents: { path: string; status: AgentStatus }[]
+  /** 正在看这块业务（或它的某个项目） */
+  current: boolean
+  /** 正在看的项目 */
+  project?: string
 }) {
+  const open = useWorkspace((s) => !!s.expanded[b.id])
+  const toggle = useWorkspace((s) => s.toggleExpanded)
+  const lines = (b.projects ?? []).filter((p) => p.status === 'active')
+  // 进了这块业务就把它展开
+  useEffect(() => {
+    if (current && lines.length > 0) {
+      toggle(b.id, true)
+    }
+  }, [current, lines.length, b.id, toggle])
+
   const waiting = b.counts.decisionsPending
   const status: AgentStatus | undefined =
     b.leader?.liveness === 'unverifiable'
       ? 'failed'
-      : waiting > 0 || agents.includes('waiting')
+      : waiting > 0
         ? 'waiting'
-        : agents.includes('working')
-          ? 'working'
-          : undefined
+        : liveDot(agents)
   return (
-    <Item
-      to={`/b/${b.id}`}
-      icon={<ProjectLogo project={b} />}
-      label={b.name}
-      title={b.missing ? `目录不在了：${b.workspacePath}` : b.workspacePath}
-      active={active}
-      muted={b.status === 'paused' || b.missing}
-      trailing={waiting > 0 ? String(waiting) : undefined}
-      dot={status}
-    />
+    <div>
+      <div className='group relative'>
+        <Item
+          to={`/b/${b.id}`}
+          icon={<ProjectLogo project={b} />}
+          label={b.name}
+          title={b.missing ? `目录不在了：${b.workspacePath}` : b.workspacePath}
+          active={current && !project}
+          muted={b.status === 'paused' || b.missing}
+          trailing={waiting > 0 ? String(waiting) : undefined}
+          dot={status}
+        />
+        {lines.length > 0 && (
+          <button
+            type='button'
+            aria-label={open ? '收起项目' : '展开项目'}
+            aria-expanded={open}
+            onClick={() => toggle(b.id)}
+            className='absolute start-2.5 top-1/2 grid size-[18px] -translate-y-1/2 place-items-center rounded bg-accent text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100'
+          >
+            <ChevronRight
+              className={cn(
+                'size-3.5 transition-transform',
+                open && 'rotate-90'
+              )}
+            />
+          </button>
+        )}
+      </div>
+      {open &&
+        lines.map((p) => (
+          <ProjectItem
+            key={p.id}
+            project={p}
+            status={liveDot(agents.filter((a) => insidePath(a.path, p.path)))}
+            active={current && project === p.id}
+          />
+        ))}
+    </div>
+  )
+}
+
+function ProjectItem({
+  project: p,
+  status,
+  active,
+}: {
+  project: Project
+  status?: AgentStatus
+  active: boolean
+}) {
+  return (
+    <Link
+      to='/b/$businessId'
+      params={{ businessId: p.businessId }}
+      search={{ project: p.id }}
+      title={p.path}
+      className={cn(
+        'mx-2 flex h-7 items-center gap-2 rounded-md ps-[38px] pe-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+        active && 'bg-accent text-foreground'
+      )}
+    >
+      <span className='min-w-0 truncate'>{p.name}</span>
+      {status && <StatusDot status={status} />}
+    </Link>
   )
 }
 

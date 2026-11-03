@@ -12,6 +12,7 @@ import {
   Minus,
   Plus,
 } from 'lucide-react'
+import { grokMood, useGrokBots } from '@/lib/grok'
 import { MachineScope, useSwitchMachine } from '@/lib/machine'
 import { overviewQuery } from '@/lib/opc-api'
 import {
@@ -438,8 +439,8 @@ const LIT_FOR = 30 * 60_000
 const recent = (iso: string) => Date.now() - new Date(iso).getTime() < LIT_FOR
 
 /**
- * 业务到它的项目们是一条直线；上面并联 Personal Agent（现在是 Grok Bot），下面并联 CEO 位：
- * 老板走哪条都行，Personal Agent 可以绕过 CEO 直接派活。
+ * 业务到它的项目们是一条直线，CEO 位就坐在这条直线上（业务 → CEO → 项目）；
+ * Personal Agent（现在是 Grok Bot）是并联的另一条路，从 CEO 前面分出去、绕过 CEO 再接回来。
  * 最近 30 分钟派过活的 Personal Agent 是亮的。没登记的目录两样都没有，只有直线。
  */
 function Wire({
@@ -449,15 +450,19 @@ function Wire({
   onOpen,
 }: NodeProps & { grok?: TopologyNode; ceo?: TopologyNode }) {
   const lit = !!grok?.lastSeenAt && recent(grok.lastSeenAt)
+  // 画这台电脑上的主 Grok Bot 的真实形象和表情；读不到 Grok Bot 时按业务推一个
+  const main = useGrokBots().data?.bots[0]
+  const mood = main?.awaitingYou
+    ? 'waiting'
+    : lit
+      ? 'working'
+      : main
+        ? grokMood(main)
+        : 'idle'
   return (
     <div className={cn('relative w-44 shrink-0', ceo ? 'h-44' : 'h-28')}>
       <span className='absolute inset-x-0 top-1/2 border-t border-muted-foreground/50' />
-      {ceo && (
-        <>
-          <span className='absolute inset-x-5 top-1/2 bottom-3 rounded-b-xl border-x border-b border-muted-foreground/50' />
-          <CeoSeat ceo={ceo} open={ceo.id === openId} onOpen={onOpen} />
-        </>
-      )}
+      {ceo && <CeoSeat ceo={ceo} open={ceo.id === openId} onOpen={onOpen} />}
       {grok && (
         <>
           <span className='absolute inset-x-5 top-3 bottom-1/2 rounded-t-xl border-x border-t border-muted-foreground/50' />
@@ -466,7 +471,7 @@ function Wire({
           <button
             type='button'
             data-open={grok.id === openId}
-            title={`Grok Bot · ${grok.activity ?? ''}`}
+            title={`${main?.name ?? 'Grok Bot'}${main?.awaitingYou ? ' · 在等你回复' : ''}${grok.activity ? ` · ${grok.activity}` : ''}`}
             onClick={() => onOpen?.(grok)}
             className={cn(
               'absolute start-1/2 top-3 size-10 -translate-1/2 overflow-hidden rounded-full border-2 bg-panel transition-shadow hover:scale-105',
@@ -478,7 +483,9 @@ function Wire({
           >
             <GrokBotAvatar
               seed={grok.businessId ?? grok.id}
-              mood={lit ? 'working' : 'idle'}
+              look={main}
+              mood={mood}
+              animate
               className='size-full p-1'
             />
           </button>

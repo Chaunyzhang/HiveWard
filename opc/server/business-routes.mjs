@@ -11,7 +11,7 @@ import { bounded, rpc, iso } from './api-runtime.mjs'
 import { FULL_ACCESS, terminalScreen } from './business-terminals.mjs'
 import { snapshot, invalidate, topology, OWNER } from './orchestration.mjs'
 import { registerProject, removeProject, renameProjectRepo } from './projects.mjs'
-import { recordDispatch, answerDispatch } from './dispatches.mjs'
+import { recordDispatch, answerDispatch, chooseDispatchMenu } from './dispatches.mjs'
 import { businessIdentity, detectProjectIdentity } from './project-identity.mjs'
 import {
   appendTimelineEvents,
@@ -428,6 +428,18 @@ export function businessRoutes(readJson) {
           )
           if (!decision) {
             throw apiError(404, 'not_found', `待办不存在：${id}`)
+          }
+          // 派单 Agent 停在终端菜单上：替它按选中的那项
+          if (decision.dispatch?.menu) {
+            await chooseDispatchMenu(id, body.choice, rpc)
+            const resolvedAt = new Date().toISOString()
+            recordDecisionResolution(decision, body, resolvedAt)
+            invalidate()
+            return {
+              ...decision,
+              state: 'resolved',
+              resolution: { choice: body.choice, note: body.note, custom: false, resolvedAt }
+            }
           }
           // 派单 Agent 停下来问的：答复直接发回它的终端
           if (decision.dispatch) {

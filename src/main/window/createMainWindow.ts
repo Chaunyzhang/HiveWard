@@ -9,7 +9,7 @@ import { rectHasVisibleAreaOnAnyDisplay } from './window-bounds-validation'
 import { MIN_HEIGHT, MIN_WIDTH } from './main-window-visual-lifecycle'
 
 export function loadMainWindow(window: BrowserWindow, observer?: MainWindowLoadObserver): void {
-  const origin = process.env.OPC_BRIDGE ?? `http://127.0.0.1:${process.env.OPC_PORT ?? 8787}`
+  const origin = process.env.OPC_BRIDGE ?? `http://127.0.0.1:${process.env.OPC_PORT ?? 47615}`
   void window.loadURL(origin).then(
     () => observer?.onLoaded?.(),
     (error) => observer?.onError?.(error)

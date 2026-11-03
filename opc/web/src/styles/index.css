@@ -399,3 +399,50 @@ html.is-desktop .app-top-bar :is(a, button, input, [role='button']) {
     border-bottom: none;
   }
 }
+
+/* Grok Bot 头像的动作：空闲呼吸、干活蹦、等你眨眼；系统要求减少动态效果时不动 */
+@media (prefers-reduced-motion: no-preference) {
+  .grokbot-breathe {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation: grokbot-breathe 3.2s ease-in-out infinite;
+  }
+  .grokbot-hop {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation: grokbot-hop 0.9s cubic-bezier(0.3, 0, 0.3, 1) infinite;
+  }
+  .grokbot-blink {
+    transform-box: fill-box;
+    transform-origin: 50% 50%;
+    animation: grokbot-blink 3.6s ease-in-out infinite;
+  }
+}
+@keyframes grokbot-breathe {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(1.03, 0.97);
+  }
+}
+@keyframes grokbot-hop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1.04, 0.96);
+  }
+  45% {
+    transform: translateY(-9%) scale(0.97, 1.03);
+  }
+}
+@keyframes grokbot-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.1);
+  }
+}

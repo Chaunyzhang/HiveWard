@@ -8,7 +8,10 @@ export function ThemeSwitch() {
 
   useEffect(() => {
     const meta = document.querySelector("meta[name='theme-color']")
-    meta?.setAttribute('content', resolvedTheme === 'dark' ? '#2e2e2e' : '#fcfcfc')
+    meta?.setAttribute(
+      'content',
+      resolvedTheme === 'dark' ? '#2e2e2e' : '#fcfcfc'
+    )
   }, [resolvedTheme])
 
   const dark = resolvedTheme === 'dark'

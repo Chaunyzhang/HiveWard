@@ -38,7 +38,7 @@ export function GoToPath({ path, t }: { path: string; t?: string }) {
       ? navigate({
           to: '/b/$businessId',
           params: { businessId: project.id },
-          search: { tab: 'terminal', t },
+          search: { tab: 'live', t },
           replace: true,
         })
       : navigate({ to: '/', replace: true }))

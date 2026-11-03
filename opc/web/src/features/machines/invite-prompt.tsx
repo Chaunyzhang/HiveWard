@@ -8,12 +8,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { InviteButtons } from './index'
+import { InviteButtons } from './machine-card'
 import { spaced } from './verify-code'
 
 /**
- * 别的电脑邀请这台加入组织：在哪个页面都弹出来让老板确认。
- * 同意就等于让对方能在这台电脑上开终端、跑 Agent，所以写清是谁、哪台、什么地址。
+ * 别的电脑邀请这台加入组织，或者申请加入这台的组织：在哪个页面都弹出来让老板确认。
+ * 同意就等于让双方能在对方电脑上开终端、跑 Agent，所以写清是谁、哪台、什么地址。
  * 「稍后」只是先关掉，局域网页里还能处理，邀请过期就没了。
  */
 export function InvitePrompt() {
@@ -29,6 +29,7 @@ export function InvitePrompt() {
     return null
   }
   const m = invitation.machine
+  const request = invitation.kind === 'request'
   const dismiss = () => setLater((l) => [...l, invitation.id])
 
   return (
@@ -36,7 +37,9 @@ export function InvitePrompt() {
       <DialogContent className='sm:max-w-md'>
         <DialogHeader>
           <DialogTitle>
-            「{m.name}」邀请这台电脑加入「{invitation.organization.name}」
+            {request
+              ? `「${m.name}」申请加入「${invitation.organization.name}」`
+              : `「${m.name}」邀请这台电脑加入「${invitation.organization.name}」`}
           </DialogTitle>
           <DialogDescription asChild>
             <div className='space-y-3 pt-1'>
@@ -58,8 +61,9 @@ export function InvitePrompt() {
               )}
               <p className='flex gap-2 rounded-md bg-attention/10 px-3 py-2 text-xs leading-5 text-attention'>
                 <TriangleAlert className='mt-0.5 size-3.5 shrink-0' />
-                同意后，组织里的电脑都能在这台电脑上开终端、跑命令、控制
-                Agent。不认识这台电脑就拒绝。
+                {request
+                  ? '同意后，这台电脑和组织里的电脑能互相开终端、跑命令、控制 Agent。不认识它就拒绝。'
+                  : '同意后，这台会离开现在的组织；新组织里的电脑都能在这台上开终端、跑命令、控制 Agent。不认识这台电脑就拒绝。'}
               </p>
             </div>
           </DialogDescription>

@@ -8,7 +8,7 @@ export function Page({
   return (
     <div
       className={cn(
-        'mx-auto w-full max-w-[1400px] px-6 py-8 lg:px-10',
+        'mx-auto w-full max-w-[1400px] px-6 py-8 @4xl:px-10',
         className
       )}
       {...props}

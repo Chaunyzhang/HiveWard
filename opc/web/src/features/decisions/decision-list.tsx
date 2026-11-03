@@ -25,9 +25,12 @@ const COMPACT_OPTIONS = 3
  */
 export function DecisionList({
   businessId,
+  match,
   onNavigate,
 }: {
   businessId?: string
+  /** 再筛一道（项目主页只看这个项目里 Agent 问的） */
+  match?: (d: Decision) => boolean
   onNavigate?: () => void
 }) {
   const { data: decisions = [] } = useDecisions()
@@ -35,6 +38,7 @@ export function DecisionList({
   const pending = decisions
     .filter((d) => d.state === 'pending')
     .filter((d) => !businessId || d.businessId === businessId)
+    .filter((d) => !match || match(d))
     .sort((a, b) => rank(a) - rank(b) || a.createdAt.localeCompare(b.createdAt))
   const [openId, setOpenId] = useState<string | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -181,7 +185,10 @@ function Actions({
       }
     )
 
-  const shown = compact ? d.options.slice(0, COMPACT_OPTIONS) : d.options
+  // 终端菜单上的选项都很短，一次摆全；也只能选，不能自定义回复
+  const menu = !!d.dispatch?.menu
+  const shown =
+    compact && !menu ? d.options.slice(0, COMPACT_OPTIONS) : d.options
   const hidden = d.options.length - shown.length
 
   return (
@@ -239,27 +246,29 @@ function Actions({
         ))}
       </div>
 
-      <div className='mt-2.5 flex items-end gap-1.5'>
-        <Textarea
-          value={reply}
-          onChange={(e) => setReply(e.target.value)}
-          placeholder={
-            compact
-              ? '回复 Leader Agent…'
-              : '回复 Leader Agent：点选项时一起带上，或点「自定义」单独发送'
-          }
-          rows={compact ? 1 : 3}
-          className='min-h-8 flex-1 resize-none py-1.5 text-xs md:text-xs'
-        />
-        <button
-          type='button'
-          disabled={!text || resolve.isPending}
-          onClick={() => send(text, true)}
-          className='h-8 shrink-0 rounded-md bg-foreground px-3 text-xs text-background transition-opacity disabled:opacity-30'
-        >
-          自定义
-        </button>
-      </div>
+      {!menu && (
+        <div className='mt-2.5 flex items-end gap-1.5'>
+          <Textarea
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+            placeholder={
+              compact
+                ? '回复 Leader Agent…'
+                : '回复 Leader Agent：点选项时一起带上，或点「自定义」单独发送'
+            }
+            rows={compact ? 1 : 3}
+            className='min-h-8 flex-1 resize-none py-1.5 text-xs md:text-xs'
+          />
+          <button
+            type='button'
+            disabled={!text || resolve.isPending}
+            onClick={() => send(text, true)}
+            className='h-8 shrink-0 rounded-md bg-foreground px-3 text-xs text-background transition-opacity disabled:opacity-30'
+          >
+            自定义
+          </button>
+        </div>
+      )}
 
       {compact && (
         <button

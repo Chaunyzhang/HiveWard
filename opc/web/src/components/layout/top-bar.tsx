@@ -1,6 +1,12 @@
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import type { ObjectiveStatus } from '@shared/api'
-import { ChevronsUpDown, Laptop, Search as SearchIcon } from 'lucide-react'
+import {
+  ChevronsUpDown,
+  Laptop,
+  PanelRight,
+  Search as SearchIcon,
+} from 'lucide-react'
+import { useWorkspace } from '@/stores/workspace'
 import {
   useCurrentMachine,
   useMachineGuard,
@@ -20,6 +26,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { HiveLogo } from '@/components/opc/hive-logo'
 import { ThemeSwitch } from '@/components/theme-switch'
+import { useSideScope } from './side-panel'
 import { StatusPill } from './status-pill'
 
 /** 面包屑：HiveWard / 电脑（有配对的电脑时才出现）/ 项目（可切换）/ 目标 = Orca Run（可切换），同 Supabase 的 组织/项目/分支。 */
@@ -54,8 +61,35 @@ export function TopBar() {
           <kbd className='ms-auto font-mono text-xs'>⌘K</kbd>
         </button>
         <ThemeSwitch />
+        <SideToggle />
       </div>
     </header>
+  )
+}
+
+/** 开关右栏（文件 / 浏览器） */
+function SideToggle() {
+  const open = useWorkspace((s) => s.sideOpen)
+  const setOpen = useWorkspace((s) => s.setSideOpen)
+  const { root, agent } = useSideScope()
+  // 集团页面右栏没东西可看，不出现
+  if (!root && !agent) {
+    return null
+  }
+  return (
+    <button
+      type='button'
+      title={open ? '收起右栏' : '打开右栏：文件 / 浏览器'}
+      aria-label={open ? '收起右栏' : '打开右栏'}
+      aria-pressed={open}
+      onClick={() => setOpen(!open)}
+      className={cn(
+        'grid size-8 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground',
+        open && 'text-foreground'
+      )}
+    >
+      <PanelRight className='size-4' />
+    </button>
   )
 }
 

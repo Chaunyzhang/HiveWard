@@ -81,6 +81,68 @@ test('discovery requires matching hello, rechecks failures, expires without Rmv,
   late.close()
 })
 
+test('presence refreshes same-address organizations and prefers a safe hello summary', async () => {
+  let time = 0
+  const hello = { id: 'peer', name: 'confirmed' }
+  const visible = new Map()
+  const presence = createDiscoveryPresence({
+    now: () => time,
+    interval: 5000,
+    ttl: 30000,
+    probe: async () => hello,
+    found: (value) => visible.set(value.id, value),
+    removed: (id) => visible.delete(id)
+  })
+  const candidate = {
+    id: 'peer',
+    name: 'untrusted',
+    address: '127.0.0.1:18898',
+    organization: { id: 'org', name: '公告组织', members: 1 }
+  }
+  try {
+    await presence.found(candidate)
+    assert.deepEqual(visible.get('peer').organization, {
+      id: 'org',
+      name: '公告组织',
+      members: 1
+    })
+
+    time = 5000
+    hello.organization = {
+      id: 'org',
+      name: '握手组织',
+      members: ['peer', 'other'],
+      token: 'must-not-leak',
+      capability: 'must-not-leak'
+    }
+    await presence.found(candidate)
+    assert.deepEqual(visible.get('peer').organization, {
+      id: 'org',
+      name: '握手组织',
+      members: 2
+    })
+    assert.deepEqual(Object.keys(visible.get('peer').organization).sort(), [
+      'id',
+      'members',
+      'name'
+    ])
+
+    time = 10000
+    delete hello.organization
+    await presence.found({
+      ...candidate,
+      organization: { id: 'org', name: '公告新名称', members: 3 }
+    })
+    assert.deepEqual(visible.get('peer').organization, {
+      id: 'org',
+      name: '公告新名称',
+      members: 3
+    })
+  } finally {
+    presence.close()
+  }
+})
+
 test('Bonjour resolvers are one-shot, deduplicated, bounded and timeout; late callbacks cannot resurrect removed records', async () => {
   const children = [],
     found = []
@@ -136,6 +198,103 @@ test('Bonjour resolvers are one-shot, deduplicated, bounded and timeout; late ca
     stop()
   }
   assert.ok(children.every((p) => p.stops > 0))
+})
+
+test('Bonjour TXT carries only encoded public organization metadata after the version', async () => {
+  const children = [],
+    found = []
+  let organization = { id: 'old', name: 'Old', members: 1 }
+  let initialized
+  const spawn = (args) => {
+    const child = new EventEmitter()
+    child.args = args
+    child.stdout = new PassThrough()
+    child.stops = 0
+    child.stop = () => {
+      child.stops++
+      child.emit('exit', 0)
+    }
+    children.push(child)
+    return child
+  }
+  const stop = discoverBonjour(
+    { id: 'self', name: 'test', token: 'machine-token-must-not-leak' },
+    18898,
+    'test',
+    (value) => found.push(value),
+    () => {},
+    {
+      spawn,
+      cleanup: () =>
+        new Promise((resolve) => {
+          initialized = resolve
+        }),
+      resolve: async () => '127.0.0.1',
+      organization: () => organization
+    }
+  )
+  organization = {
+    id: 'org=中文',
+    name: '研发 团队 = 中文',
+    members: 2,
+    memberIds: ['member-list-must-not-leak'],
+    token: 'org-token-must-not-leak',
+    capability: 'org-capability-must-not-leak'
+  }
+  initialized()
+  try {
+    await pause(0)
+    const registration = children.find((child) => child.args[0] === '-R')
+    assert.deepEqual(registration.args.slice(5), [
+      'id=self',
+      'v=test',
+      `org=${encodeURIComponent('org=中文')}`,
+      `orgName=${encodeURIComponent('研发 团队 = 中文')}`,
+      'orgMembers=2'
+    ])
+    const registered = registration.args.join(' ')
+    for (const secret of [
+      'member-list-must-not-leak',
+      'org-token-must-not-leak',
+      'org-capability-must-not-leak',
+      'machine-token-must-not-leak'
+    ]) {
+      assert.equal(registered.includes(secret), false)
+    }
+
+    const browser = children.find((child) => child.args[0] === '-B')
+    browser.stdout.write('00:00 Add 2 1 local. _opc._tcp. Test peer\n')
+    children
+      .find((child) => child.args[0] === '-L')
+      .stdout.write(
+        `Test can be reached at test.local.:18898 (interface 1)\n id=peer v=1 org=${encodeURIComponent('org=中文')} orgName=${encodeURIComponent('研发 团队 = 中文')} orgMembers=2 token=must-not-leak members=peer,other\n`
+      )
+    await until(() => found.length === 1)
+    assert.deepEqual(found[0].organization, {
+      id: 'org=中文',
+      name: '研发 团队 = 中文',
+      members: 2
+    })
+    assert.deepEqual(Object.keys(found[0]).sort(), [
+      'address',
+      'id',
+      'lastSeenAt',
+      'name',
+      'organization',
+      'version'
+    ])
+
+    browser.stdout.write('00:00 Add 2 1 local. _opc._tcp. Bad peer\n')
+    children
+      .find((child) => child.args[0] === '-L' && child.args[1] === 'Bad peer')
+      .stdout.write(
+        'Bad can be reached at bad.local.:18899 (interface 1)\n id=bad org=org orgName=%E0%A4%A orgMembers=1\n'
+      )
+    await until(() => found.length === 2)
+    assert.equal(found[1].organization, undefined)
+  } finally {
+    await stop()
+  }
 })
 
 test('startup cleanup requires orphan parent, executable and recorded process birth identity', () => {

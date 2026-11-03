@@ -193,7 +193,14 @@ export function useInviteMachine() {
   )
 }
 
-/** 收到的邀请同意 / 拒绝，发出的邀请撤回 */
+/** 申请加入那台电脑所在的组织；组织那边同意后加入（原来的组织自动退出） */
+export function useRequestJoin() {
+  return useLanAction((req: MachineInviteRequest) =>
+    local<MachineInvitation>('/api/machines/join', req)
+  )
+}
+
+/** 收到的邀请 / 申请同意、拒绝，发出的撤回 */
 export function useInvitation() {
   return useLanAction(
     ({ id, action }: { id: string; action: 'accept' | 'reject' | 'cancel' }) =>

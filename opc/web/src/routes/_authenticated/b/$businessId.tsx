@@ -5,18 +5,21 @@ import { Workbench } from '@/features/workbench'
 export const Route = createFileRoute('/_authenticated/b/$businessId')({
   validateSearch: z.object({
     objective: z.string().optional().catch(undefined),
-    /** 项目页的标签：概览（默认）/ 终端 */
-    tab: z.enum(['overview', 'terminal']).optional().catch(undefined),
-    /** 终端标签里选中的终端 handle */
+    /** 看业务里的哪个项目；不填看整块业务 */
+    project: z.string().optional().catch(undefined),
+    /** 主页的标签：概览（默认）/ 现场 / 时间线 */
+    tab: z.enum(['overview', 'live', 'timeline']).optional().catch(undefined),
+    /** 现场标签里选中的终端 handle */
     t: z.string().optional().catch(undefined),
   }),
   component: function BusinessRoute() {
     const { businessId } = Route.useParams()
-    const { tab, t } = Route.useSearch()
+    const { project, tab, t } = Route.useSearch()
     return (
       <Workbench
-        key={businessId}
+        key={`${businessId}/${project ?? ''}`}
         businessId={businessId}
+        projectId={project}
         tab={tab}
         terminal={t}
       />

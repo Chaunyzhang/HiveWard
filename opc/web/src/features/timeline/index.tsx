@@ -51,15 +51,24 @@ function dayLabel(iso: string) {
   return dayFmt.format(d)
 }
 
-/** 时间线：派活、汇报、待办、Agent 一轮干完、开关终端、项目变动，按时间倒序，可按项目筛、往前翻 */
-export function Timeline() {
+/**
+ * 时间线：派活、汇报、待办、Agent 一轮干完、开关终端、项目变动，按时间倒序，往前翻。
+ * 集团的时间线看全部、可按业务 / 项目筛；业务、项目主页里的「时间线」标签传 scope，只看它自己的。
+ */
+export function Timeline({
+  scope,
+}: {
+  scope?: { businessId: string; projectId?: string }
+}) {
   const machine = useMachineId()
   const { data: overview } = useOverview()
   const projects = (overview?.businesses ?? []).filter(
     (b) => b.status !== 'archived'
   )
-  const [businessId, setBusinessId] = useState<string>('')
-  const [projectId, setProjectId] = useState<string>('')
+  const [pickedBusiness, setBusinessId] = useState<string>('')
+  const [pickedProject, setProjectId] = useState<string>('')
+  const businessId = scope?.businessId ?? pickedBusiness
+  const projectId = scope ? (scope.projectId ?? '') : pickedProject
   const lines = byIdOf(projects).get(businessId)?.projects ?? []
   const events = useInfiniteQuery({
     queryKey: ['timeline', machine, businessId, projectId],
@@ -102,41 +111,8 @@ export function Timeline() {
     }
   }
 
-  return (
-    <Page className='mx-auto max-w-4xl space-y-5'>
-      <div className='flex items-center gap-3'>
-        <h1 className='text-xl font-medium'>时间线</h1>
-        <select
-          value={businessId}
-          onChange={(e) => {
-            setBusinessId(e.target.value)
-            setProjectId('')
-          }}
-          className='ms-auto h-8 max-w-56 rounded-md border bg-transparent px-2 text-[13px]'
-        >
-          <option value=''>全部业务</option>
-          {projects.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
-        {lines.length > 0 && (
-          <select
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className='h-8 max-w-44 rounded-md border bg-transparent px-2 text-[13px]'
-          >
-            <option value=''>全部项目</option>
-            {lines.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-
+  const list = (
+    <>
       {events.isError ? (
         <p className='rounded-xl panel p-6 text-xs text-danger'>
           读取失败：{events.error.message}
@@ -182,6 +158,47 @@ export function Timeline() {
           更早的
         </button>
       )}
+    </>
+  )
+  if (scope) {
+    return <div className='space-y-5'>{list}</div>
+  }
+  return (
+    <Page className='mx-auto max-w-4xl space-y-5'>
+      <div className='flex items-center gap-3'>
+        <h1 className='text-xl font-medium'>时间线</h1>
+        <select
+          value={businessId}
+          onChange={(e) => {
+            setBusinessId(e.target.value)
+            setProjectId('')
+          }}
+          className='ms-auto h-8 max-w-56 rounded-md border bg-transparent px-2 text-[13px]'
+        >
+          <option value=''>全部业务</option>
+          {projects.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+        {lines.length > 0 && (
+          <select
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            className='h-8 max-w-44 rounded-md border bg-transparent px-2 text-[13px]'
+          >
+            <option value=''>全部项目</option>
+            {lines.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {list}
     </Page>
   )
 }
@@ -243,7 +260,9 @@ function EventRow({
           to='/b/$businessId'
           params={{ businessId: project.id }}
           search={
-            e.terminal ? { tab: 'terminal', t: e.terminal } : { tab: undefined }
+            e.terminal
+              ? { project: e.projectId, tab: 'live', t: e.terminal }
+              : { project: e.projectId }
           }
           className={cls}
         >
@@ -282,7 +301,7 @@ function ResumeButton({
               void navigate({
                 to: '/b/$businessId',
                 params: { businessId },
-                search: { tab: 'terminal', t: terminal },
+                search: { tab: 'live', t: terminal },
               })
             }
           },

@@ -25,7 +25,7 @@ export function terminalCliParams(params, env = process.env, platform = process.
       ...params.env,
       Path: folders.join(';'),
       PATH: folders.join(';'),
-      OPC_BRIDGE: env.OPC_BRIDGE || 'http://127.0.0.1:8787'
+      OPC_BRIDGE: env.OPC_BRIDGE || 'http://127.0.0.1:47615'
     }
   }
 }

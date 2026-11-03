@@ -6,6 +6,7 @@ import { exitBlockReason } from '@/lib/exit-region'
 import { useExitRegion } from '@/lib/machine'
 import { terminalStatus } from '@/lib/opc-format'
 import { useOrcaClose, useOrcaCreate, useOrcaTerminals } from '@/lib/orca-live'
+import { insidePath } from '@/lib/project-for-path'
 import { cn } from '@/lib/utils'
 import {
   AlertDialog,
@@ -26,6 +27,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { AgentLogo } from '@/components/opc/agent-logo'
 import { StatusDot } from '@/components/opc/status-dot'
+import { useFocusAgent } from '@/features/live/agent-console'
 import { TerminalView } from './terminal-view'
 
 const NEW_AGENTS = [
@@ -34,24 +36,25 @@ const NEW_AGENTS = [
   { agent: 'kimi', label: 'Kimi Code' },
 ] as const
 
-const inside = (path: string, root: string) =>
-  path === root || path.startsWith(`${root}/`)
-
 // 终端标题前面常带 Agent 自己画的转圈 / 星号，去掉
 const tabTitle = (t: OrcaTerminal) =>
   t.title?.replace(/^[⠀-⣿✳✻✽✶✢·*]+\s*/u, '').trim() || (t.agent ?? '终端')
 
 /**
- * 项目页「终端」：这个项目目录里的所有终端，一个终端一个标签，下面是真终端（能看能打字）。
- * + 新开 Agent 或普通终端；× 关掉终端（Agent 也会一起退出，先确认）。
- * 选中哪个记在网址里（?t=handle），架构图点 Agent 也是跳到这里。
+ * 业务 / 项目主页的「现场」：这个目录里的所有终端，一个终端一个标签，下面是真终端（能看能打字）。
+ * + 新开 Agent 或普通终端（看项目时开在项目里）；× 关掉终端（Agent 也会一起退出，先确认）。
+ * 选中哪个记在网址里（?t=handle）；选中的 Agent 开的网页显示在右栏浏览器里。
  */
 export function ProjectTerminals({
   businessId,
+  projectId,
   workspacePath,
   selected,
 }: {
   businessId: string
+  /** 看的是业务里的某个项目 */
+  projectId?: string
+  /** 业务目录，或项目目录 */
   workspacePath: string
   selected?: string
 }) {
@@ -61,16 +64,19 @@ export function ProjectTerminals({
   const close = useOrcaClose()
   const region = useExitRegion()
   const [closing, setClosing] = useState<OrcaTerminal | null>(null)
-  const terminals = (data ?? []).filter((t) => inside(t.project, workspacePath))
+  const terminals = (data ?? []).filter((t) =>
+    insidePath(t.project, workspacePath)
+  )
   const current = terminals.find((t) => t.handle === selected) ?? terminals[0]
   // 刚新开的终端可能还没出现在列表里，先照网址里的显示
   const handle = current?.handle ?? selected
+  useFocusAgent(current?.agent ? current.handle : undefined)
 
   const select = (t?: string) =>
     navigate({
       to: '/b/$businessId',
       params: { businessId },
-      search: { tab: 'terminal', t },
+      search: { project: projectId, tab: 'live', t },
       replace: true,
     })
 
@@ -85,7 +91,7 @@ export function ProjectTerminals({
 
   const open = (agent?: (typeof NEW_AGENTS)[number]['agent']) =>
     create.mutate(
-      { project: workspacePath, agent },
+      { project: workspacePath, agent, projectId },
       { onSuccess: ({ handle: h }) => void select(h) }
     )
 
@@ -176,7 +182,7 @@ export function ProjectTerminals({
       ) : (
         <div className='grid flex-1 place-items-center text-center text-sm text-muted-foreground'>
           <div>
-            <p>这块业务里还没有终端。</p>
+            <p>{projectId ? '这个项目' : '这块业务'}里还没有终端。</p>
             <p className='mt-1 text-xs'>
               点左上角的 + 新开一个 Agent 或普通终端。
             </p>

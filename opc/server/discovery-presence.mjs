@@ -1,3 +1,5 @@
+import { publicOrganizationSummary } from './lan-discovery.mjs'
+
 // Advertisements are hints; only a matching HTTP identity renews presence.
 export function createDiscoveryPresence({
   probe,
@@ -23,12 +25,17 @@ export function createDiscoveryPresence({
         throw new Error('Identity mismatch')
       }
       record.verified = now()
+      const { organization: advertised, ...value } = record.value
+      const organization = publicOrganizationSummary(
+        hello.organization === undefined ? advertised : hello.organization
+      )
       found({
-        ...record.value,
+        ...value,
         name: hello.name,
         version: hello.version,
         platform: hello.platform ?? record.value.platform,
-        lastSeenAt: new Date(now()).toISOString()
+        lastSeenAt: new Date(now()).toISOString(),
+        ...(organization ? { organization } : {})
       })
     } catch {
       if (!closed && records.get(record.value.id) === record) {
@@ -66,6 +73,7 @@ export function createDiscoveryPresence({
         record = { value, seen: now() }
         records.set(value.id, record)
       }
+      record.value = value
       record.seen = now()
       if (record.verified === undefined || now() - record.verified >= interval) {
         await check(record)

@@ -4,11 +4,22 @@ const streamPath = /^\/api\/orca\/terminals\/([^/]+)\/stream$/
 const reject = (socket, status) =>
   socket.end(`HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
 
-export function installTerminalWebSockets({ server, lanServer, lan, fromThisMachine, streaming }) {
+export function installTerminalWebSockets({
+  server,
+  lanServer,
+  lan,
+  fromThisMachine,
+  streaming,
+  mcp
+}) {
   if (!streaming) {
-    const unavailable = (_req, socket) => reject(socket, 503)
-    server.on('upgrade', unavailable)
-    lanServer?.on('upgrade', unavailable)
+    const unavailable = (req, socket, head, isLan = false) => {
+      if (!mcp?.accept(req, socket, head, isLan)) {
+        reject(socket, 503)
+      }
+    }
+    server.on('upgrade', (req, socket, head) => unavailable(req, socket, head))
+    lanServer?.on('upgrade', (req, socket, head) => unavailable(req, socket, head, true))
     return () => {}
   }
   const wss = new streaming.WebSocketServer({
@@ -30,6 +41,9 @@ export function installTerminalWebSockets({ server, lanServer, lan, fromThisMach
   }, 30000)
   heartbeat.unref()
   function accept(req, socket, head, isLan) {
+    if (mcp?.accept(req, socket, head, isLan)) {
+      return
+    }
     try {
       if (isLan ? !lan.authenticate(req) : !fromThisMachine(req, server.address().port)) {
         return reject(socket, 403)
@@ -98,13 +112,16 @@ export function installTerminalWebSockets({ server, lanServer, lan, fromThisMach
         try {
           if (peer) {
             const connection = lan.streamConnection(peer)
-            upstream = new streaming.WebSocket(`wss://${connection.address}${url.pathname}${url.search}`, {
-              agent: connection.agent,
-              headers: { authorization: `Bearer ${peer.outboundToken}` },
-              maxPayload: 12 * 1024 * 1024,
-              handshakeTimeout: 10000,
-              perMessageDeflate: false
-            })
+            upstream = new streaming.WebSocket(
+              `wss://${connection.address}${url.pathname}${url.search}`,
+              {
+                agent: connection.agent,
+                headers: { authorization: `Bearer ${peer.outboundToken}` },
+                maxPayload: 12 * 1024 * 1024,
+                handshakeTimeout: 10000,
+                perMessageDeflate: false
+              }
+            )
             upstream.on('message', (data, binary) => {
               if (binary) {
                 return fail(new Error('Unexpected binary terminal frame'))

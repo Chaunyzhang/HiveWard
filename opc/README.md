@@ -8,7 +8,7 @@
 
 ## 桌面 App（推荐）
 
-OPC 是一个 Electron 桌面 App：主进程里自带桥接服务（8787），窗口里有真浏览器。
+OPC 是一个 Electron 桌面 App：主进程里自带桥接服务（47615），窗口里有真浏览器。
 
 ```bash
 cd desktop && pnpm install
@@ -33,7 +33,7 @@ Agent 写【需要确认】停下，问题带截图进「待办」；你答复�
 
 命令行：`hiwd machines` 列出电脑；任何子命令加 `--on <电脑名>` 就在那台上执行，比如 `hiwd new 玉石 codex "…" --on 工作室`。
 
-- 本机接口 `127.0.0.1:8787` 只接受本机 OPC 页面和 hiwd 命令；其他电脑走 `:8788`，必须带配对时交换的令牌。
+- 本机接口 `127.0.0.1:47615` 只接受本机 OPC 页面和 hiwd 命令；其他电脑走 `:8788`，必须带配对时交换的令牌。
 - 第一次打开时 macOS 可能问「是否允许 OPC 接受传入的网络连接」，选允许。
 - 别的电脑上的浏览器只能看实时截图（真浏览器窗口在那台电脑的屏幕上），地址栏、前进后退、关标签照常可用。
 
@@ -45,7 +45,7 @@ pnpm install
 pnpm dev          # http://localhost:5180，默认读真实数据（先起 node server/orca-bridge.mjs）
 ```
 
-`/api` 会代理到 `http://127.0.0.1:8787`。只想看界面效果：`VITE_API_MOCK=true pnpm dev` 用 src/mocks 的模拟数据。业务登记存在 `data/businesses.json`（不进 git）。
+`/api` 会代理到 `http://127.0.0.1:47615`。只想看界面效果：`VITE_API_MOCK=true pnpm dev` 用 src/mocks 的模拟数据。业务登记存在 `data/businesses.json`（不进 git）。
 
 ## 现场（直连 Orca）
 
@@ -53,7 +53,7 @@ pnpm dev          # http://localhost:5180，默认读真实数据（先起 node 
 
 ```bash
 # 前提：Orca 应用已打开（或 orca serve 在跑）；项目已在 Orca 里登记（orca repo add --path <dir>）
-node server/orca-bridge.mjs     # 本机 127.0.0.1:8787，网页的 /api 代理到这里
+node server/orca-bridge.mjs     # 本机 127.0.0.1:47615，网页的 /api 代理到这里
 pnpm --dir web dev              # http://localhost:5180/live
 ```
 

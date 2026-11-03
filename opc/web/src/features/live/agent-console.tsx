@@ -1,24 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChatItem, OrcaTerminal } from '@shared/api'
+import type { ChatItem, OrcaTerminal, ScreenMenu } from '@shared/api'
 import { ArrowUp, Square } from 'lucide-react'
 import { toast } from 'sonner'
-import {
-  useBrowser,
-  useBrowserViewport,
-  type BrowserControl,
-  type BrowserTab,
-} from '@/lib/desktop'
+import { useWorkspace } from '@/stores/workspace'
 import {
   agentStatusStyle,
   terminalStatus,
   type AgentStatus,
 } from '@/lib/opc-format'
-import { useOrcaChat, useOrcaScreen, useOrcaSend } from '@/lib/orca-live'
+import {
+  useOrcaChat,
+  useOrcaChoose,
+  useOrcaScreen,
+  useOrcaSend,
+} from '@/lib/orca-live'
 import { cn } from '@/lib/utils'
 import { useSettledStatus } from '@/hooks/use-settled-status'
 import { Textarea } from '@/components/ui/textarea'
 import { AgentLogo } from '@/components/opc/agent-logo'
-import { RemoteViewport } from '@/features/browser'
 import { TerminalView } from '@/features/terminal/terminal-view'
 import { ChatView } from './chat-view'
 
@@ -37,7 +36,7 @@ export function ConsoleView({
   chat,
   terminal,
   screen,
-  browser,
+  menu,
   working,
   placeholder,
   onSend,
@@ -59,8 +58,8 @@ export function ConsoleView({
   /** 直连的终端：「终端」一档显示真终端；没有时显示 screen 的文字画面 */
   terminal?: string
   screen?: React.ReactNode
-  /** 这个 Agent 正在用的浏览器页面（有才出现「浏览器」这一档） */
-  browser?: React.ReactNode
+  /** Agent 停在选择菜单上时的选项条，压在输入框上面，哪一档都看得到 */
+  menu?: React.ReactNode
   working: boolean
   placeholder: string
   /** 不传则输入框禁用；done() 在发出去后清空输入 */
@@ -72,12 +71,8 @@ export function ConsoleView({
   /** 放进抽屉时给右上角的关闭按钮让位 */
   headerClassName?: string
 }) {
-  const [mode, setMode] = useState<'chat' | 'terminal' | 'browser' | null>(null)
-  const modes = [
-    ...(chat ? (['chat'] as const) : []),
-    'terminal' as const,
-    ...(browser ? (['browser'] as const) : []),
-  ]
+  const [mode, setMode] = useState<'chat' | 'terminal' | null>(null)
+  const modes = [...(chat ? (['chat'] as const) : []), 'terminal' as const]
   const view = mode && modes.includes(mode) ? mode : chat ? 'chat' : 'terminal'
   const [text, setText] = useState('')
   const pre = useRef<HTMLPreElement>(null)
@@ -94,7 +89,7 @@ export function ConsoleView({
   }
   // 干活中、没打字时，发送键就是停止键
   const stoppable = working && !!onInterrupt && !text.trim()
-  // 真终端自己收键盘，输入框只在对话 / 浏览器 / 文字画面时出现
+  // 真终端自己收键盘，输入框只在对话 / 文字画面时出现
   const nativeTerminal = view === 'terminal' && !!terminal
 
   return (
@@ -140,7 +135,7 @@ export function ConsoleView({
                   view === v && 'bg-panel text-foreground shadow-sm'
                 )}
               >
-                {{ chat: '对话', terminal: '终端', browser: '浏览器' }[v]}
+                {{ chat: '对话', terminal: '终端' }[v]}
               </button>
             ))}
           </div>
@@ -153,9 +148,7 @@ export function ConsoleView({
         </div>
       )}
 
-      {view === 'browser' ? (
-        browser
-      ) : view === 'chat' ? (
+      {view === 'chat' ? (
         <ChatView items={chat ?? []} working={working} />
       ) : terminal ? (
         <TerminalView handle={terminal} className='flex-1' />
@@ -167,6 +160,8 @@ export function ConsoleView({
           {screen}
         </pre>
       )}
+
+      {menu}
 
       {!nativeTerminal && (
         <footer className='flex shrink-0 items-end gap-2 p-3'>
@@ -221,7 +216,7 @@ export function ConsoleView({
 
 /**
  * 一个终端的控制台：默认看对话（Agent 自己的对话记录），可切到真终端；对话下面的输入框直接对它说话。
- * 关终端在项目页终端标签的 ×，或者像原生终端一样在里面 exit。现场页和架构图的详情抽屉共用。
+ * 关终端在主页「现场」标签的 ×，或者像原生终端一样在里面 exit。中间栏点开 Agent 时用它。
  */
 export function AgentConsole({
   terminal: t,
@@ -243,8 +238,7 @@ export function AgentConsole({
       ? 'working'
       : screen.data?.agent
   const status = useSettledStatus(terminalStatus(agent))
-  const browser = useBrowser()
-  const pages = browser.tabs.filter((b) => b.by === t.handle)
+  useFocusAgent(t.handle)
   // 只有终端里在跑 Agent、且找到了它的对话记录，才有对话可看；普通 shell 只有终端
   const hasChat = !!chat.data?.source
 
@@ -259,22 +253,20 @@ export function AgentConsole({
           ? '普通终端，没有 Agent 在跑'
           : status === 'working'
             ? '干活'
-            : status === 'waiting'
-              ? '等待 · 要你确认'
-              : '空闲 · 等你说话'
+            : screen.data?.menu
+              ? '等待 · 要你选'
+              : status === 'waiting'
+                ? '等待 · 要你确认'
+                : '空闲 · 等你说话'
+      }
+      menu={
+        screen.data?.menu && (
+          <MenuBar handle={t.handle} menu={screen.data.menu} />
+        )
       }
       context={context}
       chat={hasChat ? (chat.data?.items ?? []) : null}
       terminal={t.handle}
-      browser={
-        pages.length && browser.control ? (
-          <AgentBrowser
-            tabs={pages}
-            control={browser.control}
-            remote={browser.remote}
-          />
-        ) : undefined
-      }
       working={status === 'working'}
       placeholder={
         agent != null
@@ -298,53 +290,46 @@ export function AgentConsole({
   )
 }
 
-/** Agent 正在用的网页：真浏览器叠在这里，看着它点，也能自己接手 */
-function AgentBrowser({
-  tabs,
-  control,
-  remote,
-}: {
-  tabs: BrowserTab[]
-  control: BrowserControl
-  remote: boolean
-}) {
-  const [picked, setPicked] = useState<string | null>(null)
-  const tab =
-    tabs.find((t) => t.id === picked) ??
-    [...tabs].sort((a, b) => b.openedAt.localeCompare(a.openedAt))[0]
-  const ref = useBrowserViewport(!remote)
-  // 切到这一档就把它设成正在显示的页面（别的电脑上的看截图，不用切）
-  useEffect(() => {
-    if (!remote && tab && !tab.active) control.activate(tab.id)
-  }, [tab, remote, control])
+/** Agent 停在选择菜单上（Kimi 计划要批准等）：问话 + 每项一个按钮，点了替它在终端里按下去 */
+function MenuBar({ handle, menu }: { handle: string; menu: ScreenMenu }) {
+  const choose = useOrcaChoose(handle)
   return (
-    <div className='flex min-h-0 flex-1 flex-col'>
-      <div className='flex h-9 shrink-0 items-center gap-2 border-y bg-muted/30 px-4 text-xs text-muted-foreground'>
-        {tabs.length > 1 ? (
-          <select
-            value={tab.id}
-            onChange={(e) => setPicked(e.target.value)}
-            className='h-6 max-w-64 rounded bg-transparent text-xs'
+    <div className='shrink-0 space-y-2 border-t bg-attention/5 px-4 py-3'>
+      <p className='text-xs text-attention'>Agent 在等你选：{menu.question}</p>
+      <div className='flex flex-wrap gap-2'>
+        {menu.options.map((o) => (
+          <button
+            key={o.n}
+            type='button'
+            disabled={choose.isPending}
+            onClick={() =>
+              choose.mutate(o.n, {
+                onError: (e) => toast.error(`没选上：${e.message}`),
+              })
+            }
+            className={cn(
+              'h-8 rounded-md px-3 text-xs disabled:opacity-50',
+              o.n === menu.cursor
+                ? 'bg-foreground text-background'
+                : 'border hover:bg-accent'
+            )}
           >
-            {tabs.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.title || t.url}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <span className='truncate text-foreground/80'>{tab.title}</span>
-        )}
-        <span className='truncate font-mono'>{tab.url}</span>
-        {tab.loading && (
-          <span className='ms-auto size-1.5 shrink-0 animate-pulse rounded-full bg-live' />
-        )}
+            {o.label}
+          </button>
+        ))}
       </div>
-      {remote ? (
-        <RemoteViewport tab={tab} />
-      ) : (
-        <div ref={ref} className='min-h-0 flex-1 bg-white' />
-      )}
     </div>
   )
+}
+
+/** 中间栏正在看这个终端：右栏的浏览器跟着显示它开的网页；不看了就清掉 */
+export function useFocusAgent(handle: string | undefined) {
+  const setAgent = useWorkspace((s) => s.setAgent)
+  useEffect(() => {
+    if (!handle) {
+      return
+    }
+    setAgent(handle)
+    return () => setAgent(null)
+  }, [handle, setAgent])
 }

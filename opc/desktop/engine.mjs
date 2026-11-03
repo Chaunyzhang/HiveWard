@@ -1,6 +1,6 @@
 import { configureWindowsProcesses } from '../server/transcripts.mjs'
 import { configureTerminalCli, packagedCliDirectory } from '../server/terminal-cli.mjs'
-import { app, dialog, ipcMain, webContents, Menu } from 'electron'
+import { app, dialog, ipcMain, shell, webContents, Menu } from 'electron'
 import { prepareDataDirectory } from '../server/engine-data.mjs'
 import { captureWindow } from './capture-window.mjs'
 import { BrowserTabs } from './browser.mjs'
@@ -32,7 +32,8 @@ export async function startCockpit({
     await import('../server/orca-client.mjs')
   configureRuntimeMetadata(metadataPath)
   const { startBridge } = await import('../server/orca-bridge.mjs')
-  const port = Number(process.env.OPC_PORT ?? 8787)
+  // 本机端口用冷门的 47615：8787 和 Grok Bot 的 MCP 登录回调撞了
+  const port = Number(process.env.OPC_PORT ?? 47615)
   const lanPort = Number(process.env.OPC_LAN_PORT ?? 8788)
   let origin
   let tabs
@@ -106,7 +107,13 @@ export async function startCockpit({
         window.webContents.send('browser:changed', list)
       }
     })
-    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    // 只放行「在 Grok Bot 里打开某个 Bot 的对话」这一种链接，交给系统打开 Grok Bot；其余新窗口一律拒绝
+    window.webContents.setWindowOpenHandler(({ url }) => {
+      if (/^grokbot:\/\/app\/v1\/agent\?id=[A-Za-z0-9_-]{1,128}$/.test(url)) {
+        void shell.openExternal(url)
+      }
+      return { action: 'deny' }
+    })
     window.webContents.on('will-navigate', (event, url) => {
       if (new URL(url).origin !== origin) {
         event.preventDefault()

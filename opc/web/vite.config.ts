@@ -13,7 +13,7 @@ export default defineConfig({
     // ws：真终端走 WebSocket，也要转发
     proxy: {
       '/api': {
-        target: process.env.OPC_API ?? 'http://127.0.0.1:8787',
+        target: process.env.OPC_API ?? 'http://127.0.0.1:47615',
         ws: true,
       },
     },

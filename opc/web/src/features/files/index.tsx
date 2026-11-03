@@ -32,11 +32,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Page } from '@/components/layout/page'
 import { platformName } from '@/features/machines/verify-code'
 
 /**
- * 文件：看组织里任意一台电脑的共享目录，下载、拖进来上传、建文件夹。
+ * 局域网页下面的「文件」：看组织里任意一台电脑的共享目录、收件箱，下载、拖进来上传、建文件夹。
+ * （业务 / 项目自己的文件在右栏看。）
  * 每台电脑只开放它自己设定的共享目录（业务目录、收件箱、下载、桌面、文稿…），路径用那台电脑自己的格式。
  * 别的电脑只走加密且核对过证书的组织通道；没加密的不让传。
  */
@@ -56,9 +56,9 @@ export function Files() {
   }
 
   return (
-    <Page className='mx-auto max-w-4xl space-y-5'>
+    <section className='space-y-4'>
       <div className='flex flex-wrap items-center gap-3'>
-        <h1 className='text-xl font-medium'>文件</h1>
+        <h2 className='text-[15px] font-semibold'>电脑上的文件</h2>
         <div className='ms-auto flex flex-wrap gap-1 rounded-md bg-muted p-0.5'>
           {list.map((m) => (
             <MachineTab
@@ -86,7 +86,7 @@ export function Files() {
           onPath={setPath}
         />
       )}
-    </Page>
+    </section>
   )
 }
 
@@ -120,7 +120,7 @@ function MachineTab({
   )
 }
 
-async function getJson<T>(url: string): Promise<T> {
+export async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url)
   const body = await res.json().catch(() => ({}))
   if (!res.ok) {
@@ -133,7 +133,7 @@ async function getJson<T>(url: string): Promise<T> {
   return body
 }
 
-const q = (path: string) => encodeURIComponent(path)
+export const q = (path: string) => encodeURIComponent(path)
 
 function Browser({
   machine,
@@ -517,7 +517,7 @@ function Empty({
   )
 }
 
-function size(bytes: number) {
+export function size(bytes: number) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let n = bytes
   let i = 0
@@ -538,7 +538,7 @@ type UploadItem = {
 }
 
 /** 上传：一个文件一个请求，请求体就是文件字节，带进度 */
-function useUpload(machine: string | null, onDone: () => void) {
+export function useUpload(machine: string | null, onDone: () => void) {
   const [items, setItems] = useState<UploadItem[]>([])
   const patch = (id: string, next: Partial<UploadItem>) =>
     setItems((all) => all.map((x) => (x.id === id ? { ...x, ...next } : x)))
@@ -576,7 +576,7 @@ function useUpload(machine: string | null, onDone: () => void) {
   return { items, start }
 }
 
-function Uploads({ items }: { items: UploadItem[] }) {
+export function Uploads({ items }: { items: UploadItem[] }) {
   return (
     <ul className='divide-y border-b'>
       {items.map((x) => (

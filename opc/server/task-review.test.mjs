@@ -45,7 +45,8 @@ async function dispatchFixture(t) {
       readChat: (_agent, file) => chats[file] ?? [],
       readTurnState: () => 'completed'
     },
-    './confirmations.mjs': { issueConfirmation: () => 'confirm-test' }
+    './confirmations.mjs': { issueConfirmation: () => 'confirm-test' },
+    './screen-menu.mjs': { screenMenu: () => null, chooseMenu: async () => ({}) }
   }
   const source = new vm.SourceTextModule(
     await readFile(new URL('./dispatches.mjs', import.meta.url), 'utf8'),

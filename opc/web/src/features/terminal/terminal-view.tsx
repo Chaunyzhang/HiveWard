@@ -34,37 +34,12 @@ const themeNow = () =>
 type Conn = 'connecting' | 'live' | 'reconnecting' | 'exited' | 'error'
 
 const FONT = 13
-const MIN_FONT = 7
-
-/** 只看时按引擎原来的行列显示：缩小字号把整屏装进窗口，不放大 */
-function fitByFont(t: Terminal, el: HTMLElement) {
-  const screen = el.querySelector<HTMLElement>('.xterm-screen')
-  if (!screen || el.clientWidth === 0 || el.clientHeight === 0) {
-    return
-  }
-  const { width, height } = screen.getBoundingClientRect()
-  if (width === 0 || height === 0) {
-    return
-  }
-  const size = t.options.fontSize ?? FONT
-  // 减掉容器的 ps-3 / pt-2 留白
-  const scale = Math.min(
-    (el.clientWidth - 16) / width,
-    (el.clientHeight - 12) / height
-  )
-  const next = Math.max(
-    MIN_FONT,
-    Math.min(FONT, Math.floor(size * scale * 2) / 2)
-  )
-  if (next !== size) {
-    t.options.fontSize = next
-  }
-}
 
 /**
  * 真终端：xterm.js 接后台的 WebSocket（/api/orca/terminals/:handle/stream）。
  * 连上先收一帧 snapshot 还原当前屏幕和滚动历史，之后是输出流；键盘输入、尺寸变化发回去。
  * 断了自动重连（terminal-socket.ts），重连后服务端重新发 snapshot，所以先 reset 再写。
+ * 显示着就铺满窗口：快照按引擎原来的行列回放，回放完按这个窗口的大小排版并报给后台，Agent 跟着重画。
  */
 export function TerminalView({
   handle,
@@ -81,10 +56,8 @@ export function TerminalView({
   const fit = useRef<FitAddon | null>(null)
   const [conn, setConn] = useState<Conn>('connecting')
   const [error, setError] = useState<string | null>(null)
-  // 接管了没有：只看时按引擎里原来的大小显示，不去改终端的排版（别处可能正在看）；
-  // 第一次在这里打字才接管，之后跟着这个窗口的大小排版
+  // 人在这里操作过没有：之前 xterm 自己回的终端查询应答不写进 PTY（交给引擎）
   const claimed = useRef(false)
-  const [owned, setOwned] = useState(false)
   const machine = useMachineId()
 
   // 建 xterm、连 WebSocket；handle 或电脑变了整个重来
@@ -153,20 +126,19 @@ export function TerminalView({
       onFrame: (frame) => {
         if (frame.type === 'snapshot') {
           t.reset()
-          if (claimed.current) {
-            // 重连：之前接管过，照这个窗口的大小再报一次
-            socket.send({ type: 'resize', cols: t.cols, rows: t.rows })
-          } else {
-            // 只看：按引擎的大小显示，全屏界面（Claude Code 等）才不会错行；字号缩到装得下
-            if (frame.cols !== t.cols || frame.rows !== t.rows) {
-              t.resize(frame.cols, frame.rows)
-            }
-            requestAnimationFrame(() => fitByFont(t, el))
+          // 按引擎的行列回放，全屏界面（Claude Code、Kimi 等）才不会错行
+          replaying = true
+          if (frame.cols !== t.cols || frame.rows !== t.rows) {
+            t.resize(frame.cols, frame.rows)
           }
           // 快照里可能有旧的终端查询（问光标位置等），xterm 会自动回话；回放期间的回话一律不发
-          replaying = true
           t.write(frame.data, () => {
             replaying = false
+            // 回放完铺满窗口：尺寸变了 onResize 报给后台，Agent 按新大小重画
+            // 标签页切走时窗口没有大小，等切回来 ResizeObserver 再排
+            if (el.clientWidth && el.clientHeight) {
+              f.fit()
+            }
           })
           setError(null)
         } else if (frame.type === 'data') {
@@ -189,16 +161,15 @@ export function TerminalView({
           return
         }
         claimed.current = true
-        setOwned(true)
-        // 先恢复字号、按窗口排版（触发 onResize 发 resize），后台收到输入时按这个大小接管
-        t.options.fontSize = FONT
-        f.fit()
       }
       socket.send({ type: 'input', data })
     })
-    const resize = t.onResize(({ cols, rows }) =>
-      socket.send({ type: 'resize', cols, rows })
-    )
+    // 回放时按引擎大小 resize 的那一下不用报回去
+    const resize = t.onResize(({ cols, rows }) => {
+      if (!replaying) {
+        socket.send({ type: 'resize', cols, rows })
+      }
+    })
 
     // 跟着界面切换深浅色
     const themeWatch = new MutationObserver(() => {
@@ -236,11 +207,7 @@ export function TerminalView({
         if (el.clientWidth === 0 || el.clientHeight === 0) {
           return
         }
-        if (claimed.current) {
-          fit.current?.fit()
-        } else if (term.current) {
-          fitByFont(term.current, el)
-        }
+        fit.current?.fit()
       })
     })
     ro.observe(el)
@@ -258,12 +225,10 @@ export function TerminalView({
         className
       )}
     >
-      <div ref={box} className='absolute inset-0 overflow-auto ps-3 pt-2' />
-      {conn === 'live' && !owned && (
-        <div className='pointer-events-none absolute end-3 bottom-2 rounded-md border bg-panel/90 px-2 py-1 text-[11px] text-muted-foreground shadow-xs'>
-          查看中 · 按原来的大小显示，在这里打字就接管
-        </div>
-      )}
+      {/* 留白放外层：FitAddon 按 box 自己的高宽算行列，带内边距会多算一行 */}
+      <div className='absolute inset-0 ps-3 pt-2'>
+        <div ref={box} className='size-full overflow-hidden' />
+      </div>
       {conn !== 'live' && (
         <div className='pointer-events-none absolute end-3 top-2 flex items-center gap-1.5 rounded-md border bg-panel/90 px-2 py-1 text-[11px] text-muted-foreground shadow-xs'>
           {(conn === 'connecting' || conn === 'reconnecting') && (

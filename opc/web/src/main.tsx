@@ -43,9 +43,9 @@ if (!rootElement.innerHTML) {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
-            <DirectionProvider>
-              <RouterProvider router={router} />
-            </DirectionProvider>
+          <DirectionProvider>
+            <RouterProvider router={router} />
+          </DirectionProvider>
         </ThemeProvider>
       </QueryClientProvider>
     </StrictMode>

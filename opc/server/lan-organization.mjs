@@ -1,25 +1,25 @@
-import { invitationCode, nonceCommitment, publicInvitation as publicInvite } from './lan-invitation-verification.mjs'
+import {
+  clean,
+  invitationCode,
+  memberCredentials,
+  nonceCommitment,
+  publicInvitation as publicInvite,
+  validHelloMachine,
+  validInvitationBody,
+  validOrganizationSummary,
+  validPeer
+} from './lan-invitation-verification.mjs'
 import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { userInfo } from 'node:os'
-import {
-  socketFingerprint,
-  validFingerprint,
-  validTlsPort
-} from './lan-tls.mjs'
+import { socketFingerprint, validFingerprint, validTlsPort } from './lan-tls.mjs'
 
 const secret = () => randomBytes(32).toString('hex')
 const fail = (status, code, message) => Object.assign(new Error(message), { status, code })
-const clean = (value) => typeof value === 'string' && value.trim().length > 0 && value.length <= 200
-const validPeer = (p) =>
-  p &&
-  clean(p.id) &&
-  clean(p.name) &&
-  clean(p.address) &&
-  /^[a-f0-9]{64}$/.test(p.inboundToken) &&
-  /^[a-f0-9]{64}$/.test(p.outboundToken) &&
-  validFingerprint(p.fingerprint) &&
-  validTlsPort(p.tlsPort)
-
+const ensure = (condition, status, code, message) => {
+  if (!condition) {
+    throw fail(status, code, message)
+  }
+}
 export function createOrganization({
   machine,
   lanPort,
@@ -43,6 +43,7 @@ export function createOrganization({
   let busy = false
   let retrying = false
   const persist = () => save(file, state)
+  const defaultOrganization = () => ({ id: randomUUID(), name: `${machine.name}的组织` })
   if (!state.tlsVersion) {
     if (peers().some((p) => !validPeer(p))) {
       state.organization = null
@@ -52,14 +53,20 @@ export function createOrganization({
     state.tlsVersion = 1
     persist()
   }
-  const publicOrg = () =>
-    state.organization
-      ? {
-          id: state.organization.id,
-          name: state.organization.name,
-          members: [machine.id, ...peers().map((p) => p.id)]
-        }
-      : null
+  if (!state.organization) {
+    state.organization = defaultOrganization()
+    persist()
+  }
+  const publicOrg = () => ({
+    id: state.organization.id,
+    name: state.organization.name,
+    members: [
+      machine.id,
+      ...peers()
+        .filter(validPeer)
+        .map((p) => p.id)
+    ]
+  })
   const expire = () => {
     for (const [id, i] of invitations) {
       if (i.status === 'pending' && now() >= i.expires) {
@@ -71,9 +78,7 @@ export function createOrganization({
     }
   }
   const exclusive = async (work) => {
-    if (busy) {
-      throw fail(409, 'organization_busy', '组织正在更新，请重试')
-    }
+    ensure(!busy, 409, 'organization_busy', '组织正在更新，请重试')
     busy = true
     try {
       return await work()
@@ -103,16 +108,60 @@ export function createOrganization({
       retrying = false
     }
   }
+  async function acceptMember(i, token) {
+    ensure(state.organization?.id === i.organization.id, 409, 'organization_changed', '组织已变更')
+    const { added, result } = memberCredentials(
+      machine,
+      identity(),
+      i,
+      token,
+      new Date(now()).toISOString()
+    )
+    for (const p of peers().filter(validPeer)) {
+      const pair = { ...added, inboundToken: secret(), outboundToken: secret() }
+      const delivery = {
+        recipient: p.id,
+        address: p.address,
+        fingerprint: p.fingerprint,
+        tlsPort: p.tlsPort,
+        token: p.outboundToken,
+        path: '/lan/organization/member',
+        body: { organizationId: state.organization.id, peer: pair }
+      }
+      state.deliveries.push(delivery)
+      persist()
+      try {
+        await remote(p.address, delivery.path, {
+          ...p,
+          token: delivery.token,
+          body: delivery.body
+        })
+        state.deliveries = state.deliveries.filter((d) => d !== delivery)
+        persist()
+      } catch {}
+      result.push({
+        id: p.id,
+        name: p.name,
+        address: p.address,
+        fingerprint: p.fingerprint,
+        tlsPort: p.tlsPort,
+        inboundToken: pair.outboundToken,
+        outboundToken: pair.inboundToken,
+        pairedAt: added.pairedAt
+      })
+    }
+    replace([...peers().filter((p) => p.id !== added.id), added])
+    i.status = 'accepted'
+    result[0].address = 'observed:1'
+    i.result = { peers: result }
+    return i.result
+  }
   const timer = setInterval(() => {
     expire()
     void deliver()
   }, 1000)
   timer.unref()
-  async function remove(id) {
-    const list = peers()
-    if (id !== machine.id && !list.some((p) => p.id === id)) {
-      throw fail(404, 'machine_not_paired', '电脑不在组织内')
-    }
+  function detach(id) {
     for (const i of invitations.values()) {
       if (id === machine.id || i.machine.id === id) {
         i.result = undefined
@@ -129,31 +178,135 @@ export function createOrganization({
     state.deliveries = state.deliveries.filter(
       (d) => !d.path || (id !== machine.id && d.recipient !== id)
     )
+  }
+  async function remove(id) {
+    const list = peers()
+    if (id !== machine.id && !list.some((p) => p.id === id)) {
+      throw fail(404, 'machine_not_paired', '电脑不在组织内')
+    }
+    detach(id)
     const body = { id, organizationId: state.organization?.id }
     state.revoked.push({ key: `${body.organizationId}/${id}`, at: now() })
     state.deliveries.push(
-      ...list
-        .filter(validPeer)
-        .map((p) => ({
-          address: p.address,
-          fingerprint: p.fingerprint,
-          tlsPort: p.tlsPort,
-          token: p.outboundToken,
-          body
-        }))
+      ...list.filter(validPeer).map((p) => ({
+        address: p.address,
+        fingerprint: p.fingerprint,
+        tlsPort: p.tlsPort,
+        token: p.outboundToken,
+        body
+      }))
     )
     replace(id === machine.id ? [] : list.filter((p) => p.id !== id))
-    if (id === machine.id) {
-      state.organization = null
-    }
+    state.organization = id === machine.id ? defaultOrganization() : state.organization
     persist()
     await deliver()
     return { ok: true, pending: state.deliveries.filter((d) => !d.path).length }
   }
+  async function fetchHello(address, expectedId) {
+    const hello = await remote(address, '/lan/hello')
+    if (!validFingerprint(hello.fingerprint) || !validTlsPort(hello.tlsPort)) {
+      throw fail(409, 'tls_rejoin_required', '对方需要升级 TLS 后重新加入')
+    }
+    if (!validHelloMachine(hello, machine.id, expectedId)) {
+      throw fail(400, 'invalid_peer', '机器身份不符')
+    }
+    return hello
+  }
+  function pendingFor(id) {
+    const pending = [...invitations.values()].filter(
+      (item) => item.machine.id === id && item.status === 'pending'
+    )
+    const visible = pending.find((item) => item.verifyCode)
+    ensure(visible || !pending.length, 409, 'invite_pending', '已有待处理邀请')
+    return visible
+  }
+  async function start(address, expectedId, kind) {
+    ensure(lanPort, 409, 'lan_disabled', '局域网服务未开启')
+    expire()
+    const hello = await fetchHello(address, expectedId)
+    const request = kind === 'request'
+    const organization = hello.organization
+    if (request && !validOrganizationSummary(organization)) {
+      throw fail(409, 'organization_unavailable', '对方组织信息无效')
+    }
+    if (request && state.organization?.id === organization.id) {
+      throw fail(409, 'already_in_organization', '已在同一组织')
+    }
+    if (peers().some((p) => p.id === hello.id && validPeer(p))) {
+      throw fail(409, 'already_member', '已是组织成员')
+    }
+    const existing = pendingFor(hello.id)
+    if (existing) {
+      return publicInvite(existing)
+    }
+    const i = {
+      id: randomUUID(),
+      kind,
+      direction: 'sent',
+      status: 'pending',
+      machine: {
+        id: hello.id,
+        name: hello.name,
+        address,
+        fingerprint: hello.fingerprint,
+        tlsPort: hello.tlsPort
+      },
+      nonce: secret(),
+      organization: request ? { id: organization.id, name: organization.name } : publicOrg(),
+      expires: now() + ttl,
+      capability: secret(),
+      token: secret()
+    }
+    const response = await remote(address, '/lan/invitations', {
+      fingerprint: hello.fingerprint,
+      tlsPort: hello.tlsPort,
+      body: {
+        id: i.id,
+        machine: { ...machine, ...identity(), user: userInfo().username, port: lanPort },
+        commitment: nonceCommitment(i.nonce),
+        organization: i.organization,
+        expires: i.expires,
+        capability: i.capability,
+        ...(request ? { kind, token: i.token } : {})
+      }
+    })
+    ensure(validFingerprint(response.nonce), 400, 'invalid_nonce', '邀请随机数无效')
+    i.verifyCode = invitationCode(
+      request ? hello.fingerprint : identity().fingerprint,
+      request ? identity().fingerprint : hello.fingerprint,
+      i.id,
+      request ? response.nonce : i.nonce,
+      request ? i.nonce : response.nonce
+    )
+    await remote(address, `/lan/invitations/${i.id}/verify`, {
+      ...i.machine,
+      body: { capability: i.capability, nonce: i.nonce }
+    })
+    invitations.set(i.id, i)
+    return publicInvite(i)
+  }
+  const decide = (i, body) =>
+    remote(i.machine.address, `/lan/invitations/${i.id}/decision`, {
+      ...i.machine,
+      body,
+      timeout: 15000
+    })
+  async function install(i, list, leave = false) {
+    ensure(Array.isArray(list) && list.every(validPeer), 502, 'invalid_peer', '成员凭据无效')
+    const inviter = list.find((p) => p.id === i.machine.id)
+    if (!inviter || inviter.fingerprint !== i.machine.fingerprint) {
+      throw fail(403, 'tls_fingerprint_mismatch', '邀请方身份变化')
+    }
+    inviter.address = i.machine.address
+    if (leave) {
+      await remove(machine.id)
+    }
+    replace(list)
+    state.organization = { id: i.organization.id, name: i.organization.name }
+    persist()
+  }
   return {
-    close() {
-      clearInterval(timer)
-    },
+    close: () => clearInterval(timer),
     snapshot() {
       expire()
       return {
@@ -168,91 +321,24 @@ export function createOrganization({
         ).length
       }
     },
-    async invite(address, expectedId) {
-      return exclusive(async () => {
-        if (!lanPort) {
-          throw fail(409, 'lan_disabled', '局域网服务未开启')
-        }
-        expire()
-        const hello = await remote(address, '/lan/hello')
-        if (!validFingerprint(hello.fingerprint) || !validTlsPort(hello.tlsPort)) {
-          throw fail(409, 'tls_rejoin_required', '对方需要升级 TLS 后重新加入')
-        }
-        if (
-          !clean(hello.id) ||
-          !clean(hello.name) ||
-          hello.id === machine.id ||
-          (expectedId && hello.id !== expectedId)
-        ) {
-          throw fail(400, 'invalid_peer', '机器身份不符')
-        }
-        if (peers().some((p) => p.id === hello.id && validPeer(p))) {
-          throw fail(409, 'already_member', '已是组织成员')
-        }
-        if (
-          [...invitations.values()].some((i) => i.machine.id === hello.id && i.status === 'pending')
-        ) {
-          throw fail(409, 'invite_pending', '已有待处理邀请')
-        }
-        if (!state.organization) {
-          state.organization = { id: randomUUID(), name: `${machine.name}的组织` }
-          persist()
-        }
-        const i = {
-          id: randomUUID(),
-          direction: 'sent',
-          status: 'pending',
-          machine: {
-            id: hello.id,
-            name: hello.name,
-            address,
-            fingerprint: hello.fingerprint,
-            tlsPort: hello.tlsPort
-          },
-          nonce: secret(),
-          organization: publicOrg(),
-          expires: now() + ttl,
-          capability: secret(),
-          token: secret()
-        }
-        const response = await remote(address, '/lan/invitations', {
-          fingerprint: hello.fingerprint,
-          tlsPort: hello.tlsPort,
-          body: {
-            id: i.id,
-            machine: { ...machine, ...identity(), user: userInfo().username, port: lanPort },
-            commitment: nonceCommitment(i.nonce),
-            organization: i.organization,
-            expires: i.expires,
-            capability: i.capability
-          }
-        })
-        if (!validFingerprint(response.nonce)) {
-          throw fail(400, 'invalid_nonce', '邀请随机数无效')
-        }
-        i.verifyCode = invitationCode(
-          identity().fingerprint,
-          hello.fingerprint,
-          i.id,
-          i.nonce,
-          response.nonce
-        )
-        await remote(address, `/lan/invitations/${i.id}/verify`, {
-          ...i.machine,
-          body: { capability: i.capability, nonce: i.nonce }
-        })
-        invitations.set(i.id, i)
-        return publicInvite(i)
-      })
+    summary() {
+      const { id, name, members } = publicOrg()
+      return { id, name, members: members.length }
     },
+    invite: (address, expectedId) => exclusive(() => start(address, expectedId, 'invite')),
+    requestJoin: (address, expectedId) => exclusive(() => start(address, expectedId, 'request')),
     async action(id, action) {
       return exclusive(async () => {
         expire()
         const i = invitations.get(id)
-        if (!i) {
-          throw fail(404, 'invite_not_found', '邀请不存在')
-        }
-        if (i.status !== 'pending' || !i.verifyCode) {
+        ensure(i, 404, 'invite_not_found', '邀请不存在')
+        const retry =
+          i.kind === 'request' &&
+          i.direction === 'incoming' &&
+          action === 'accept' &&
+          i.status === 'accepted' &&
+          i.result
+        if ((i.status !== 'pending' && !retry) || !i.verifyCode) {
           throw fail(409, `invite_${i.status}`, `邀请状态：${i.status}`)
         }
         if (action === 'cancel' && i.direction === 'sent') {
@@ -262,27 +348,28 @@ export function createOrganization({
           })
           i.status = 'cancelled'
         } else if (['accept', 'reject'].includes(action) && i.direction === 'incoming') {
-          if (action === 'accept' && state.organization) {
-            throw fail(409, 'already_in_organization', '请先退出当前组织')
-          }
-          const token = secret()
-          const result = await remote(i.machine.address, `/lan/invitations/${id}/decision`, {
-            ...i.machine,
-            body: { capability: i.capability, accept: action === 'accept', token },
-            timeout: 15000
-          })
-          if (action === 'accept') {
-            if (!Array.isArray(result.peers) || !result.peers.every(validPeer)) {
-              throw fail(502, 'invalid_peer', '成员凭据无效')
+          if (i.kind === 'request') {
+            if (action === 'accept') {
+              i.result ??= await acceptMember(i, i.joinToken)
             }
-            const inviter = result.peers.find((p) => p.id === i.machine.id)
-            if (!inviter || inviter.fingerprint !== i.machine.fingerprint) {
-              throw fail(403, 'tls_fingerprint_mismatch', '邀请方身份变化')
+            await decide(i, {
+              capability: i.capability,
+              accept: action === 'accept',
+              ...(action === 'accept' ? { peers: i.result.peers } : {})
+            })
+          } else {
+            if (action === 'accept' && peers().some(validPeer)) {
+              throw fail(409, 'already_in_organization', '请先退出当前组织')
             }
-            inviter.address = i.machine.address
-            replace(result.peers)
-            state.organization = { id: i.organization.id, name: i.organization.name }
-            persist()
+            const token = secret()
+            const result = await decide(i, {
+              capability: i.capability,
+              accept: action === 'accept',
+              token
+            })
+            if (action === 'accept') {
+              await install(i, result.peers)
+            }
           }
           i.status = action === 'accept' ? 'accepted' : 'rejected'
         } else {
@@ -294,9 +381,7 @@ export function createOrganization({
     remove: (id) => exclusive(() => remove(id)),
     async rename(name) {
       return exclusive(async () => {
-        if (!state.organization || !clean(name)) {
-          throw fail(400, 'bad_request', '组织不存在或名字无效')
-        }
+        ensure(state.organization && clean(name), 400, 'bad_request', '组织不存在或名字无效')
         state.organization.name = name.trim()
         state.deliveries = state.deliveries.filter((d) => d.path !== '/lan/organization/rename')
         state.deliveries.push(
@@ -323,38 +408,26 @@ export function createOrganization({
         while (arrivals.length && arrivals[0] <= now() - 60000) {
           arrivals.shift()
         }
-        if (arrivals.length >= 5) {
-          throw fail(429, 'invite_rate_limited', '邀请过于频繁，请稍后重试')
-        }
+        ensure(arrivals.length < 5, 429, 'invite_rate_limited', '邀请过于频繁，请稍后重试')
         arrivals.push(now())
-        if (state.organization) {
-          throw fail(409, 'already_in_organization', '对方已加入组织')
-        }
-        if (
-          !validFingerprint(socketFingerprint(req.socket)) ||
-          !validFingerprint(body.commitment) ||
-          !validTlsPort(body.machine?.tlsPort) ||
-          !clean(body.id) ||
-          !clean(body.machine?.id) ||
-          !clean(body.machine?.name) ||
-          !clean(body.machine?.user) ||
-          !clean(body.organization?.id) ||
-          !clean(body.organization?.name) ||
-          !/^[a-f0-9]{64}$/.test(body.capability) ||
-          !Number.isInteger(body.machine.port) ||
-          body.machine.port < 1 ||
-          body.machine.port > 65535 ||
-          !Number.isFinite(body.expires) ||
-          body.expires <= now()
-        ) {
+        const kind = body.kind ?? 'invite'
+        if (!validInvitationBody(body, kind, socketFingerprint(req.socket), now())) {
           throw fail(400, 'bad_request', '无效邀请')
         }
-        if (invitations.has(body.id)) {
-          throw fail(409, 'invite_exists', '邀请已存在')
+        if (kind === 'invite' && peers().some(validPeer)) {
+          throw fail(409, 'already_in_organization', '对方已加入组织')
         }
+        if (kind === 'request' && state.organization?.id !== body.organization.id) {
+          throw fail(409, 'organization_changed', '组织身份不符')
+        }
+        if (kind === 'request' && peers().some((p) => p.id === body.machine.id && validPeer(p))) {
+          throw fail(409, 'already_member', '已是组织成员')
+        }
+        ensure(!invitations.has(body.id), 409, 'invite_exists', '邀请已存在')
         const ip = req.socket.remoteAddress.replace(/^::ffff:/, '')
         const i = {
           id: body.id,
+          kind,
           direction: 'incoming',
           status: 'pending',
           machine: {
@@ -365,10 +438,14 @@ export function createOrganization({
             tlsPort: body.machine.tlsPort,
             address: `${ip.includes(':') ? `[${ip}]` : ip}:${body.machine.port}`
           },
-          organization: { id: body.organization.id, name: body.organization.name },
+          organization:
+            kind === 'request'
+              ? { id: state.organization.id, name: state.organization.name }
+              : { id: body.organization.id, name: body.organization.name },
           capability: body.capability,
           commitment: body.commitment,
           nonce: secret(),
+          ...(kind === 'request' ? { joinToken: body.token, token: secret() } : {}),
           expires: Math.min(body.expires, now() + ttl)
         }
         invitations.set(i.id, i)
@@ -395,19 +472,17 @@ export function createOrganization({
             }
             if (!i.verifyCode) {
               i.verifyCode = invitationCode(
-                i.machine.fingerprint,
-                identity().fingerprint,
+                i.kind === 'request' ? identity().fingerprint : i.machine.fingerprint,
+                i.kind === 'request' ? i.machine.fingerprint : identity().fingerprint,
                 i.id,
-                body.nonce,
-                i.nonce
+                i.kind === 'request' ? i.nonce : body.nonce,
+                i.kind === 'request' ? body.nonce : i.nonce
               )
               onInvite(publicInvite(i))
             }
             return { ok: true }
           }
-          if (!i.verifyCode) {
-            throw fail(403, 'verification_required', '请先完成确认码核对')
-          }
+          ensure(i.verifyCode, 403, 'verification_required', '请先完成确认码核对')
           if (
             i.status === 'accepted' &&
             i.result &&
@@ -427,9 +502,7 @@ export function createOrganization({
           ) {
             return { ok: true }
           }
-          if (i.status !== 'pending') {
-            throw fail(409, `invite_${i.status}`, `邀请状态：${i.status}`)
-          }
+          ensure(i.status === 'pending', 409, `invite_${i.status}`, `邀请状态：${i.status}`)
           if (match[2] === 'cancel' && i.direction === 'incoming') {
             i.status = 'cancelled'
             return { ok: true }
@@ -441,67 +514,15 @@ export function createOrganization({
             i.status = 'rejected'
             return { ok: true }
           }
-          if (body.accept !== true || !/^[a-f0-9]{64}$/.test(body.token)) {
-            throw fail(400, 'bad_request', '无效决定')
+          ensure(body.accept === true, 400, 'bad_request', '无效决定')
+          if (i.kind === 'request') {
+            await install(i, body.peers, true)
+            i.status = 'accepted'
+            i.result = { ok: true }
+            return i.result
           }
-          if (state.organization?.id !== i.organization.id) {
-            throw fail(409, 'organization_changed', '组织已变更')
-          }
-          const added = {
-            ...i.machine,
-            inboundToken: i.token,
-            outboundToken: body.token,
-            pairedAt: new Date(now()).toISOString()
-          }
-          const result = [
-            {
-              ...machine,
-              ...identity(),
-              address: '',
-              inboundToken: body.token,
-              outboundToken: i.token,
-              pairedAt: added.pairedAt
-            }
-          ]
-          for (const p of peers().filter(validPeer)) {
-            const pair = { ...added, inboundToken: secret(), outboundToken: secret() }
-            const delivery = {
-              recipient: p.id,
-              address: p.address,
-              fingerprint: p.fingerprint,
-              tlsPort: p.tlsPort,
-              token: p.outboundToken,
-              path: '/lan/organization/member',
-              body: { organizationId: state.organization.id, peer: pair }
-            }
-            state.deliveries.push(delivery)
-            persist()
-            try {
-              await remote(p.address, delivery.path, {
-                ...p,
-                token: delivery.token,
-                body: delivery.body
-              })
-              state.deliveries = state.deliveries.filter((d) => d !== delivery)
-              persist()
-            } catch {}
-            result.push({
-              id: p.id,
-              name: p.name,
-              address: p.address,
-              fingerprint: p.fingerprint,
-              tlsPort: p.tlsPort,
-              inboundToken: pair.outboundToken,
-              outboundToken: pair.inboundToken,
-              pairedAt: added.pairedAt
-            })
-          }
-          replace([...peers().filter((p) => p.id !== added.id), added])
-          i.status = 'accepted'
-          // The recipient derives the inviter address from the observed invitation connection.
-          result[0].address = 'observed:1'
-          i.result = { peers: result }
-          return i.result
+          ensure(/^[a-f0-9]{64}$/.test(body.token), 400, 'bad_request', '无效决定')
+          return acceptMember(i, body.token)
         })
       }
       if (!path.startsWith('/lan/organization/')) {
@@ -515,9 +536,7 @@ export function createOrganization({
       if (path === '/lan/organization/remove' && state.receipts.includes(receipt)) {
         return { ok: true }
       }
-      if (!authenticated) {
-        throw fail(401, 'unauthorized', '需要组织成员令牌')
-      }
+      ensure(authenticated, 401, 'unauthorized', '需要组织成员令牌')
       return exclusive(async () => {
         if (body.organizationId !== state.organization?.id) {
           throw fail(409, 'organization_changed', '组织身份不符')
@@ -565,26 +584,9 @@ export function createOrganization({
           ]
           state.receipts = [...state.receipts.slice(-255), receipt]
           state.revoked.push({ key: `${body.organizationId}/${body.id}`, at: now() })
-          state.deliveries = state.deliveries.filter(
-            (d) =>
-              d.path !== '/lan/organization/member' ||
-              (body.id !== machine.id && d.body.peer.id !== body.id && d.recipient !== body.id)
-          )
-          state.deliveries = state.deliveries.filter(
-            (d) => !d.path || (body.id !== machine.id && d.recipient !== body.id)
-          )
-          for (const i of invitations.values()) {
-            if (body.id === machine.id || i.machine.id === body.id) {
-              i.result = undefined
-              if (i.status === 'pending') {
-                i.status = 'cancelled'
-              }
-            }
-          }
+          detach(body.id)
           replace(body.id === machine.id ? [] : peers().filter((p) => p.id !== body.id))
-          if (body.id === machine.id) {
-            state.organization = null
-          }
+          state.organization = body.id === machine.id ? defaultOrganization() : state.organization
           persist()
           return { ok: true }
         }

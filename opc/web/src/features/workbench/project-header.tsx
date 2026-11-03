@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
-import type { BusinessSummary } from '@shared/api'
+import type { BusinessSummary, Project } from '@shared/api'
 import { Ellipsis, Pause, Pencil, Play, Trash2 } from 'lucide-react'
 import { useRemoveBusiness, useUpdateBusiness } from '@/lib/opc-api'
 import { cn } from '@/lib/utils'
@@ -33,62 +33,85 @@ import { Input } from '@/components/ui/input'
 import { ProjectLogo } from '@/components/opc/project-logo'
 
 /**
- * 项目页顶部只放项目本身：logo、名字、目录、管理菜单，下面是标签。
+ * 业务 / 项目主页顶部：logo、名字、目录、管理菜单，下面是标签。
+ * 看项目时名字前面带上它属于哪块业务（点了回业务主页）。
  * 派活不在这里：点架构图里的 Leader Agent，在它的对话里说。
  */
-export type ProjectTab = 'overview' | 'terminal'
+export type ProjectTab = 'overview' | 'live' | 'timeline'
 
 const TABS: { value: ProjectTab; label: string }[] = [
   { value: 'overview', label: '概览' },
-  { value: 'terminal', label: '终端' },
+  { value: 'live', label: '现场' },
+  { value: 'timeline', label: '时间线' },
 ]
 
 export function ProjectHeader({
+  business,
   project,
   tab,
 }: {
-  project: BusinessSummary
+  business: BusinessSummary
+  /** 看的是业务里的某个项目 */
+  project?: Project
   tab: ProjectTab
 }) {
+  const path = project?.path ?? business.workspacePath
   return (
     <div className='space-y-4'>
       <div className='flex items-start gap-3'>
-        <ProjectLogo project={project} size={40} />
+        <ProjectLogo project={business} size={40} />
         <div className='min-w-0 flex-1'>
           <div className='flex items-center gap-2'>
-            <h1 className='truncate text-lg font-semibold'>{project.name}</h1>
-            {project.kind && (
+            {project && (
+              <>
+                <Link
+                  to='/b/$businessId'
+                  params={{ businessId: business.id }}
+                  className='shrink-0 text-lg text-muted-foreground hover:text-foreground'
+                >
+                  {business.name}
+                </Link>
+                <span className='text-lg text-muted-foreground/50'>/</span>
+              </>
+            )}
+            <h1 className='truncate text-lg font-semibold'>
+              {project?.name ?? business.name}
+            </h1>
+            {!project && business.kind && (
               <span className='rounded bg-muted px-1.5 text-[11px] leading-5 text-muted-foreground'>
-                {project.kind === 'git' ? 'git' : '文件夹'}
+                {business.kind === 'git' ? 'git' : '文件夹'}
               </span>
             )}
-            {project.missing && (
+            {business.missing && (
               <span className='rounded bg-danger/10 px-1.5 text-[11px] leading-5 text-danger'>
                 目录不在了
               </span>
             )}
-            {project.status === 'paused' && (
+            {business.status === 'paused' && (
               <span className='rounded bg-muted px-1.5 text-[11px] leading-5 text-muted-foreground'>
                 已暂停
               </span>
             )}
           </div>
           <p
-            title={project.workspacePath}
+            title={path}
             className='truncate font-mono text-xs text-muted-foreground'
           >
-            {project.workspacePath.replace(/^\/Users\/[^/]+/, '~')}
+            {path.replace(/^\/Users\/[^/]+/, '~')}
           </p>
         </div>
-        <ProjectMenu project={project} />
+        {!project && <ProjectMenu project={business} />}
       </div>
       <nav className='flex gap-1 border-b'>
         {TABS.map((t) => (
           <Link
             key={t.value}
             to='/b/$businessId'
-            params={{ businessId: project.id }}
-            search={{ tab: t.value === 'overview' ? undefined : t.value }}
+            params={{ businessId: business.id }}
+            search={{
+              project: project?.id,
+              tab: t.value === 'overview' ? undefined : t.value,
+            }}
             className={cn(
               '-mb-px border-b-2 px-3 pb-2 text-sm text-muted-foreground transition-colors hover:text-foreground',
               t.value === tab

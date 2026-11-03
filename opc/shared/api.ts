@@ -320,7 +320,8 @@ export interface Decision {
   /** ← orchestration.send 回执；gate 仅已转交时仍为 pending，待 Coordinator 真正 resolve。 */
   delivery?: 'enqueued'
   /** 派单 Agent 停下来问的（它的回话里带【需要确认】）← 派单记录；答复会直接发回这个终端 */
-  dispatch?: { handle: string; agent: AgentKind | null; by: string }
+  /** menu：Agent 停在终端选择菜单上，options 就是菜单项，选了直接替它按（不能自定义回复） */
+  dispatch?: { handle: string; agent: AgentKind | null; by: string; menu?: boolean }
   /** Agent 附的截图地址（/api/shots/…） ← 它回话里的 /tmp/opc-shot-*.png */
   screenshot?: string
   createdAt: IsoTime
@@ -477,7 +478,7 @@ export interface OrcaTerminal {
   handle: string
   /** 前台在跑的 Agent ← terminal.inspectProcess + 进程命令行；普通 shell 为 null */
   agent: 'codex' | 'claude' | 'kimi' | null
-  /** 跑着 Agent 时它的状态 ← terminal.agentStatus：working / idle / permission 等 */
+  /** 跑着 Agent 时它的状态 ← terminal.agentStatus：working / idle / permission 等；Kimi 停在选择菜单上为 waiting（认屏幕） */
   status?: string
   title?: string | null
   /** 终端所在项目路径 */
@@ -498,9 +499,22 @@ export interface OrcaScreen {
   capturedAt: IsoTime
   /** 终端进程还在 */
   running: boolean
-  /** 终端里跑着 Agent 时：working / idle 等；不是 Agent 时为 null */
+  /** 终端里跑着 Agent 时：working / idle 等；停在选择菜单上（Kimi 不报状态时认屏幕）为 waiting；不是 Agent 时为 null */
   agent: string | null
+  /** Agent 停在选择菜单上等人选（Kimi「Approve this plan」、Claude「Do you want to proceed?」）← 认屏幕 */
+  menu?: ScreenMenu
 }
+
+/** 终端里的选择菜单；cursor 是光标所在项的编号 */
+export type ScreenMenu = {
+  question: string
+  options: { n: number; label: string }[]
+  cursor: number
+}
+
+/** 选菜单第 n 项：桥会先确认菜单还在，再替 Agent 按键；菜单已经过去 → 409 menu_gone */
+export type ChooseMenuRequest = { n: number }
+export type ChooseMenuResponse = { option: { n: number; label: string } }
 
 /** 对话视图里的一条：来自 Agent 自己的对话记录（codex rollout / claude projects / kimi wire） */
 export type ChatItem =
@@ -761,6 +775,8 @@ export interface Machine {
   error?: { code: string; message: string }
   /** 系统：darwin / win32 / linux */
   platform?: string
+  /** 这台电脑所在的组织（本机、成员、以及局域网里发现的电脑都带，发现广播里的公开信息）；旧版本不带 */
+  organization?: { id: Id; name: string; members: number }
   /** 在线时顺带取的概况，离线或没配对时为空 */
   summary?: {
     orcaReachable: boolean
@@ -779,6 +795,11 @@ export type MachineOrganization = {
 
 export type MachineInvitation = {
   id: Id
+  /**
+   * invite：组织这边邀请对方加入（对方同意）；request：对方申请加入这边的组织（组织这边同意）。旧版本不带，按 invite。
+   * direction 是相对本机：sent 是本机发起的，incoming 是对方发起、等本机同意的。
+   */
+  kind?: 'invite' | 'request'
   direction: 'sent' | 'incoming'
   status: 'pending' | 'accepted' | 'rejected' | 'expired' | 'cancelled'
   /** user / name 是对方声明的身份，address 是接收端观察到的地址；UI 必须展示远控授权警告 */
@@ -805,6 +826,7 @@ export type MachineOrganizationNotice = {
  */
 export interface MachinesResponse {
   machines: Machine[]
+  /** 本机所在的组织：始终有一个，默认以本机建（名字「<电脑名>的组织」）；旧版本可能为 null */
   organization: MachineOrganization | null
   invitations: MachineInvitation[]
   /** 离线成员未收到撤销的数量；大于 0 时不得宣称全组织已解除控制 */
@@ -816,7 +838,9 @@ export interface MachinesResponse {
   organizationNotices: MachineOrganizationNotice[]
 }
 
-/** POST /api/machines/invite → MachineInvitation。machineId（发现列表）或 address（手动 host:port）。 */
+/** POST /api/machines/invite → MachineInvitation。machineId（发现列表）或 address（手动 host:port）。
+ * POST /api/machines/join 同形状 → MachineInvitation（kind: 'request'）：本机申请加入那台电脑所在的组织，
+ * 那台（或组织里任一在线成员）同意后本机加入，原来的组织自动退出；双方屏幕同样显示 verifyCode 核对。 */
 export type MachineInviteRequest = {
   machineId?: Id
   address?: string
@@ -905,6 +929,116 @@ export type FileShareSettings = {
   agentWrite: 'inbox' | 'roots' | 'none'
 }
 
+// ───────────── Grok Bot（只读本机 Grok Bot 桌面端的缓存） ─────────────
+
+/** Grok Bot 的 11 种颜色（和它的头像编辑器一致） */
+export type GrokBotColor =
+  | 'black'
+  | 'brown'
+  | 'red'
+  | 'orange'
+  | 'yellow'
+  | 'green'
+  | 'cyan'
+  | 'blue'
+  | 'violet'
+  | 'magenta'
+  | 'gray'
+
+/** 形状名照 Grok Bot 原样（blob / pebble / squircle / tablet / wedge / hex / cloud / teardrop / heart …），认不出的网页按 blob 画 */
+export type GrokBotShape = string
+
+export type GrokBot = {
+  id: string
+  name: string
+  description?: string
+  /** 已经按 Grok Bot 的规则算好：用户没选时按 Bot id 推出默认形状和颜色 */
+  shape: GrokBotShape
+  color: GrokBotColor
+  createdAt: IsoTime
+  lastActivityAt?: IsoTime
+  unreadCount: number
+  /** Bot 停下来等你回复 */
+  awaitingYou: boolean
+  /** 最后一条消息的纯文本预览（≤ 200 字） */
+  lastMessage?: string
+  /** 语音角色（liora 等），没设省略 */
+  voice?: string
+}
+
+export type GrokBotsResponse = {
+  /** 本机装了 Grok Bot */
+  installed: boolean
+  /** 桌面端正在运行 */
+  running: boolean
+  signedIn: boolean
+  /** 主 Bot（名字叫 Grok Bot 的那个）在前，其余按最近活动排 */
+  bots: GrokBot[]
+}
+
+export type GrokBotMessage = {
+  id: string
+  from: 'you' | 'bot'
+  /** text：文字；choice：让你选的卡片（text 是问题，options 是选项）；attachment：附件（text 是文件名）；call：语音通话（text 是通话摘要） */
+  kind: 'text' | 'choice' | 'attachment' | 'call'
+  text: string
+  options?: string[]
+  at: IsoTime
+}
+
+/** 最近的对话（Grok Bot 本地只缓存最近一段，最多 200 条），旧的在前 */
+export type GrokBotMessagesResponse = { messages: GrokBotMessage[] }
+
+// ───────────── 跨电脑 MCP 转接 ─────────────
+
+/**
+ * 这台电脑把本机的 MCP 服务器（stdio 命令或本机 HTTP 地址）共享给组织里的其他电脑。
+ * 别的电脑上的 Agent 把 `hiwd mcp <名字> --on <这台>` 配成自己的 MCP 命令，消息经加密通道转到这台，由这台起进程 / 连地址。
+ * 默认不共享；只能在本机改；消息内容不进日志和时间线，只记谁连上 / 断开。
+ */
+export type McpShare = {
+  /** 唯一，小写字母数字和 -（如 cutgo） */
+  name: string
+  description?: string
+  enabled: boolean
+  transport: 'stdio' | 'http'
+  /** stdio：可执行文件和参数（不经 shell）；Windows 上 .cmd / .bat 由后台处理 */
+  command?: string
+  args?: string[]
+  cwd?: string
+  /** 环境变量只返回名字，值不离开本机 */
+  envKeys?: string[]
+  /** http：本机地址（只允许 127.0.0.1 / localhost / [::1]） */
+  url?: string
+  /** 允许哪些电脑用（机器 id）；空 = 组织里所有电脑 */
+  allowMachines?: Id[]
+  /** 现在连着的会话数 */
+  sessions: number
+}
+
+/** POST /api/mcp/shares：新建或改一个共享（按 name）；env 不传 = 保留原来的值，传了整体替换 */
+export type SaveMcpShareRequest = Omit<McpShare, 'envKeys' | 'sessions'> & {
+  env?: Record<string, string>
+}
+
+/** GET /api/mcp/available：这台电脑共享给调用方的 MCP（经 /api/m/<机器>/ 调就是看那台的） */
+export type McpAvailable = {
+  name: string
+  description?: string
+  transport: McpShare['transport']
+}
+
+/**
+ * WebSocket /api/mcp/:name/connect：一条连接 = 一个 MCP 会话。
+ * 双方都发文本帧，每帧一条 JSON-RPC 消息原样转发；共享方收到连接时起进程（stdio）或连地址（http），连接断了就关掉。
+ * 连不上 / 被拒时服务端发一帧 McpConnectError 再关闭。
+ */
+export type McpConnectError = {
+  type: 'error'
+  code: 'not_shared' | 'disabled' | 'forbidden' | 'start_failed' | 'too_many_sessions'
+  message: string
+}
+
 // ───────────── 跨电脑剪贴板 ─────────────
 
 /**
@@ -988,6 +1122,7 @@ export const endpoints = {
   orcaScreen: { method: 'GET', path: '/api/orca/terminals/:handle/screen' },
   orcaChat: { method: 'GET', path: '/api/orca/terminals/:handle/chat' },
   orcaSend: { method: 'POST', path: '/api/orca/terminals/:handle/send' },
+  orcaChoose: { method: 'POST', path: '/api/orca/terminals/:handle/choose' }, // ChooseMenuRequest → ChooseMenuResponse
   orcaCreate: { method: 'POST', path: '/api/orca/terminals' },
   orcaClose: { method: 'POST', path: '/api/orca/terminals/:handle/close' },
   registerBusiness: { method: 'POST', path: '/api/businesses' }, // RegisterBusinessRequest → { business }
@@ -1018,6 +1153,7 @@ export const endpoints = {
   exitRegionPolicy: { method: 'GET', path: '/api/exit-region/policy' },
   setExitRegionPolicy: { method: 'POST', path: '/api/exit-region/policy' },
   inviteMachine: { method: 'POST', path: '/api/machines/invite' },
+  requestJoin: { method: 'POST', path: '/api/machines/join' }, // MachineInviteRequest → MachineInvitation（kind: 'request'）
   acceptMachineInvite: { method: 'POST', path: '/api/machines/invitations/:id/accept' },
   rejectMachineInvite: { method: 'POST', path: '/api/machines/invitations/:id/reject' },
   cancelMachineInvite: { method: 'POST', path: '/api/machines/invitations/:id/cancel' },
@@ -1031,6 +1167,13 @@ export const endpoints = {
   fileWrite: { method: 'POST', path: '/api/files/write' }, // ?path=&overwrite= 原始字节 → FileWriteResponse
   fileMkdir: { method: 'POST', path: '/api/files/mkdir' }, // { path } → { path }
   fileSettings: { method: 'GET', path: '/api/files/settings' }, // → FileShareSettings（POST 同形状改，只限本机）
+  mcpShares: { method: 'GET', path: '/api/mcp/shares' }, // → McpShare[]（只限本机）
+  saveMcpShare: { method: 'POST', path: '/api/mcp/shares' }, // SaveMcpShareRequest → McpShare（只限本机）
+  removeMcpShare: { method: 'POST', path: '/api/mcp/shares/:name/remove' }, // → { ok: true }（只限本机）
+  mcpAvailable: { method: 'GET', path: '/api/mcp/available' }, // → McpAvailable[]（组织成员可调）
+  mcpConnect: { method: 'GET', path: '/api/mcp/:name/connect' }, // WebSocket，见 McpConnectError
+  grokBots: { method: 'GET', path: '/api/grok/bots' }, // → GrokBotsResponse（只限本机）
+  grokBotMessages: { method: 'GET', path: '/api/grok/bots/:id/messages' }, // ?limit=50 → GrokBotMessagesResponse（只限本机）
   clipboard: { method: 'GET', path: '/api/clipboard' }, // → ClipboardStatus
   clipboardSettings: { method: 'POST', path: '/api/clipboard/settings' }, // ClipboardSettings → ClipboardStatus（只限本机）
   clipboardPush: { method: 'POST', path: '/api/clipboard/push' }, // 成员间：ClipboardPush

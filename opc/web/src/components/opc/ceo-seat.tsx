@@ -7,7 +7,7 @@ import { useSettledStatus } from '@/hooks/use-settled-status'
 import { AgentLogo } from './agent-logo'
 
 /**
- * 这块业务的 CEO 位：画在 Personal Agent 下面，和它并联。座位常驻、人不常驻——
+ * 这块业务的 CEO 位：坐在业务到项目的直线上，Personal Agent 从上面绕过它。座位常驻、人不常驻——
  * 空着时是虚线圈，点开选一家 Agent 坐上去；坐着时画那家的 logo，干活时发光。
  */
 export function CeoSeat({
@@ -41,7 +41,7 @@ export function CeoSeat({
         : undefined
   return (
     <>
-      <span className='absolute start-1/2 bottom-[34px] -translate-x-1/2 text-center text-[10px] leading-3 whitespace-nowrap text-muted-foreground'>
+      <span className='absolute start-1/2 top-[calc(50%+24px)] -translate-x-1/2 text-center text-[10px] leading-3 whitespace-nowrap text-muted-foreground'>
         CEO Agent{note && <> · {note}</>}
       </span>
       <button
@@ -54,7 +54,7 @@ export function CeoSeat({
         }
         onClick={() => onOpen?.(ceo)}
         className={cn(
-          'absolute start-1/2 bottom-3 flex size-10 -translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full border-2 bg-panel transition-shadow hover:scale-105',
+          'absolute start-1/2 top-1/2 flex size-10 -translate-1/2 items-center justify-center rounded-full border-2 bg-panel transition-shadow hover:scale-105',
           !seated && 'border-dashed text-muted-foreground',
           working
             ? 'border-brand shadow-[0_0_16px] shadow-brand/60'

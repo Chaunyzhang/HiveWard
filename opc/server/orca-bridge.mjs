@@ -11,10 +11,14 @@ import {
   exitRegionGuard
 } from './agent-exit-region.mjs'
 import { installTerminalWebSockets } from './terminal-websocket.mjs'
+import { createMcpService } from './mcp-shares.mjs'
+import { createStallDismisser } from './agent-stall.mjs'
+import { createMcpWebSocketHandler } from './mcp-websocket.mjs'
 // OPC ↔ Orca 桥：本机端口 + 需要配对令牌的局域网端口。
 // 这是后端的第一块（终端现场）；业务 / 任务 / 待办等接口由后端正式实现时并入。
-// 启动：node server/orca-bridge.mjs   （默认 127.0.0.1:8787，网页 dev 服务器把 /api 代理到这里）
+// 启动：node server/orca-bridge.mjs   （默认 127.0.0.1:47615，网页 dev 服务器把 /api 代理到这里）
 import { businessRoutes } from './business-routes.mjs'
+import { checkGrokBotForward, grokBotRoutes } from './grok-bots.mjs'
 import { agentCommand, terminalChat } from './business-terminals.mjs'
 import { ensureRepo, iso } from './api-runtime.mjs'
 import { existsSync } from 'node:fs'
@@ -25,8 +29,10 @@ import { extname, join, normalize } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { call, OrcaUnavailable } from './orca-client.mjs'
 import { agentOfPid } from './transcripts.mjs'
+import { chooseMenu, screenMenu } from './screen-menu.mjs'
 
-const PORT = Number(process.env.OPC_PORT ?? 8787)
+// 冷门端口：8787 和 Grok Bot 的 MCP 登录回调（localhost:8787/callback）撞了
+const PORT = Number(process.env.OPC_PORT ?? 47615)
 const AGENTS = new Set(['claude', 'codex', 'kimi'])
 
 // 终端画面里的 ANSI 控制符去掉，网页按纯文本等宽显示
@@ -62,11 +68,26 @@ const routes = [
             : null
         )
       )
+      // Kimi 不报状态（一直是 null）：干活时屏幕最后几行有转圈（⠼ Thinking…）；
+      // 没转圈的再读一次整屏，停在选择菜单上（计划要批准、要你选）算在等你
+      const shown = await Promise.all(
+        r.terminals.map(async (t, i) => {
+          if (!agents[i] || statuses[i]) {
+            return statuses[i]
+          }
+          if (spinning(t.preview)) {
+            return 'working'
+          }
+          const read = await call('terminal.read', { terminal: t.handle, screen: true }).catch(
+            () => null
+          )
+          return read && screenMenu(read.terminal.tail.join('\n')) ? 'waiting' : undefined
+        })
+      )
       return {
         terminals: r.terminals.map((t, i) => ({
           agent: agents[i],
-          // Kimi 不报状态（一直是 null）：干活时屏幕最后几行有转圈（⠼ Thinking…），空闲时最后是输入框
-          status: statuses[i] ?? (agents[i] && spinning(t.preview) ? 'working' : undefined),
+          status: shown[i] ?? undefined,
           handle: t.handle,
           title: t.title,
           project: t.worktreePath,
@@ -109,6 +130,7 @@ const routes = [
         call('terminal.inspectProcess', { terminal: handle }).catch(() => null)
       ])
       const a = status?.agentStatus
+      const menu = screenMenu(read.terminal.tail.join('\n'))
       const exitedToShell =
         processState?.process?.hasChildProcesses === false &&
         processState?.process?.foregroundProcess === null
@@ -119,8 +141,10 @@ const routes = [
         // Kimi 不报状态：和列表一样看屏幕上有没有转圈（它的转圈行在底栏上面，多看几行）
         agent:
           !exitedToShell && a?.isRunningAgent
-            ? (a.status ?? (spinningOnScreen(read.terminal.tail) ? 'working' : 'unknown'))
-            : null
+            ? (a.status ??
+              (spinningOnScreen(read.terminal.tail) ? 'working' : menu ? 'waiting' : 'unknown'))
+            : null,
+        menu: menu ?? undefined
       }
     }
   ],
@@ -148,6 +172,20 @@ const routes = [
         enter: body.enter !== false,
         agentPrompt: body.agentPrompt === true ? true : undefined
       })
+    }
+  ],
+  // Agent 停在选择菜单上（计划要批准等）：选第 n 项。先确认菜单还在再按键
+  [
+    'POST',
+    /^\/api\/orca\/terminals\/([^/]+)\/choose$/,
+    async (req, [handle]) => {
+      const body = await readJson(req)
+      if (!Number.isInteger(body.n) || body.n < 1) {
+        throw badRequest('n 必须是从 1 开始的选项编号')
+      }
+      const option = await chooseMenu(call, handle, body.n)
+      invalidate()
+      return { option }
     }
   ],
   // 在某个项目里开一个终端并启动 Agent
@@ -213,11 +251,16 @@ const routes = [
   ]
 ]
 
-/** 整屏最后 15 行有没有「转圈 + 文字」（⠼ Thinking…）；codex 开场的点阵动画是转圈连空格，不算 */
-const spinningOnScreen = (lines) =>
-  /[\u2801-\u28ff] [A-Za-z\u4e00-\u9fff]/u.test(stripAnsi(lines.slice(-15).join('\n')))
+// Kimi 执行批准后的计划时，转圈是单独一行的月相（🌑🌒…🌘）
+const MOON = /^\s*[\u{1F311}-\u{1F318}]\s*$/mu
+/** 整屏最后 15 行有没有「转圈 + 文字」（⠼ Thinking…）或月相转圈；codex 开场的点阵动画是转圈连空格，不算 */
+const spinningOnScreen = (lines) => {
+  const tail = stripAnsi(lines.slice(-15).join('\n'))
+  return /[\u2801-\u28ff] [A-Za-z\u4e00-\u9fff]/u.test(tail) || MOON.test(tail)
+}
 /** 屏幕最后几行有没有 Agent 的转圈字符 */
 const spinning = (preview) =>
+  MOON.test(stripAnsi(preview ?? '')) ||
   /[\u2801-\u28ff] \S/u.test(
     stripAnsi(preview ?? '')
       .trim()
@@ -282,6 +325,7 @@ async function readJson(req) {
 }
 
 routes.push(...businessRoutes(readJson))
+routes.push(...grokBotRoutes)
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -343,6 +387,7 @@ export async function startBridge({
     onInvite: onMachineInvite,
     exitRegion: async () => ({ ...(await guard.status()), warnings: guard.warnings() })
   })
+  const stalls = createStallDismisser({ call })
   let observing = false
   const observe = async () => {
     if (observing) {
@@ -357,7 +402,8 @@ export async function startBridge({
           agent: knownAgent(t.agentIdentity) ?? (await foregroundAgent(t.handle))
         }))
       )
-      await guard.observe(terminals)
+      // 出口地区巡检和卡住的界面互不影响，一个出错另一个照做
+      await Promise.allSettled([guard.observe(terminals), stalls.observe(terminals)])
     } catch {
       // The runtime can be unavailable during startup.
     } finally {
@@ -376,6 +422,7 @@ export async function startBridge({
     notify: onClipboardNotice
   })
   clipboard.start()
+  const mcp = createMcpService({ machine: lan.localMachine() })
   const all = [...routes, ...extraRoutes]
   const handle = async (req, res, isLan = false) => {
     const reply = (status, body) => {
@@ -386,6 +433,8 @@ export async function startBridge({
       const url = new URL(req.url, 'http://x')
       files.checkForward(req, url)
       clipboard.checkForward(req, url)
+      mcp.checkForward(req, url)
+      checkGrokBotForward(req, url)
       if (!isLan && !fromThisMachine(req, port)) {
         throw Object.assign(new Error('只接受本机 HiveWard 页面和 hiwd 命令的请求'), {
           status: 403,
@@ -402,6 +451,9 @@ export async function startBridge({
         return
       }
       if (await clipboard.handle(req, res, url, { remote: isLan, peer })) {
+        return
+      }
+      if (await mcp.handle(req, res, url, { remote: isLan, peer })) {
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/exit-region') {
@@ -465,12 +517,19 @@ export async function startBridge({
   lanServer?.on('upgrade', (_req, socket) =>
     socket.end('HTTP/1.1 403 TLS Required\r\nConnection: close\r\n\r\n')
   )
+  const mcpSockets = createMcpWebSocketHandler({
+    server,
+    lan,
+    fromThisMachine,
+    service: mcp
+  })
   const closeStreams = installTerminalWebSockets({
     server,
     lanServer: tlsServer,
     lan,
     fromThisMachine,
-    streaming: terminalStreaming
+    streaming: terminalStreaming,
+    mcp: mcpSockets
   })
   const listen = (s, port, host) =>
     new Promise((resolve, reject) => {
@@ -484,7 +543,9 @@ export async function startBridge({
   server.close = (callback) => {
     files.close()
     const clipboardClosed = clipboard.close()
+    const mcpClosed = mcp.close()
     clearInterval(warningTimer)
+    mcpSockets.close()
     closeStreams()
     const discoveryClosed = lan.close()
     const lanClosed = new Promise((resolve) => {
@@ -504,8 +565,8 @@ export async function startBridge({
     })
     tlsServer?.closeAllConnections()
     return closeLocal((error) => {
-      void Promise.all([discoveryClosed, lanClosed, tlsClosed, clipboardClosed]).then(() =>
-        callback?.(error)
+      void Promise.all([discoveryClosed, lanClosed, tlsClosed, clipboardClosed, mcpClosed]).then(
+        () => callback?.(error)
       )
     })
   }

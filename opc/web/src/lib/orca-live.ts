@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
+  ChooseMenuRequest,
+  ChooseMenuResponse,
   OrcaChat,
   OrcaCreateTerminalRequest,
   OrcaProject,
@@ -111,6 +113,25 @@ export function useOrcaSend(handle: string | null) {
       qc.invalidateQueries({ queryKey: ['orca', 'screen', handle, m] })
       qc.invalidateQueries({ queryKey: ['orca', 'chat', handle, m] })
     },
+  })
+}
+
+/** 选终端菜单的第 n 项（桥先确认菜单还在再按键） */
+export function useOrcaChoose(handle: string) {
+  const qc = useQueryClient()
+  const m = useMachineId()
+  return useMutation({
+    mutationFn: (n: number) =>
+      live<ChooseMenuResponse>(
+        `/api/orca/terminals/${enc(handle)}/choose`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ n } satisfies ChooseMenuRequest),
+        },
+        m
+      ),
+    // 终端画面、架构图、待办都跟着变
+    onSuccess: () => qc.invalidateQueries(),
   })
 }
 

@@ -25,6 +25,7 @@ import {
   sendFirst as sendFirstPrompt
 } from './agent-first-prompt.mjs'
 import { runFiles } from './files-cli.mjs'
+import { runMcp } from './mcp-cli.mjs'
 import { within } from './business-projects.mjs'
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -33,7 +34,11 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 const browserGuide = fileURLToPath(new URL('../docs/agent-browser.md', import.meta.url))
 
-const BASE = process.env.OPC_BRIDGE ?? 'http://127.0.0.1:8787'
+// 本机端口从 8787 换成了 47615；换端口前开的终端环境里还是旧地址，照新地址连
+const BASE =
+  !process.env.OPC_BRIDGE || process.env.OPC_BRIDGE === 'http://127.0.0.1:8787'
+    ? 'http://127.0.0.1:47615'
+    : process.env.OPC_BRIDGE
 const enc = encodeURIComponent
 let machinePrefix = ''
 const endpoint = (path) => BASE + (machinePrefix ? machinePrefix + path.slice(4) : path)
@@ -547,6 +552,19 @@ if (on) {
 }
 
 switch (cmd) {
+  case 'mcp': {
+    try {
+      await runMcp(args, {
+        endpoint,
+        localEndpoint: (path) => BASE + path,
+        machine: selectedMachine,
+        on
+      })
+    } catch (e) {
+      fail(e.message)
+    }
+    break
+  }
   case 'files': {
     try {
       await runFiles(args, {
@@ -563,6 +581,30 @@ switch (cmd) {
     const [action, ...values] = args
     if (action === 'invite') {
       console.log(JSON.stringify(await api('/api/machines/invite', { address: values[0] })))
+    } else if (action === 'join') {
+      const target = values[0]
+      if (!target) {
+        fail('用法：hiwd machines join <电脑名或地址>')
+      }
+      const { machines } = await api('/api/machines')
+      const q = target.toLowerCase()
+      const exact = machines.filter((m) => m.id.toLowerCase() === q || m.name.toLowerCase() === q)
+      const hits = exact.length
+        ? exact
+        : machines.filter(
+            (m) => m.id.toLowerCase().startsWith(q) || m.name.toLowerCase().startsWith(q)
+          )
+      if (hits.length > 1) {
+        fail(`机器名不唯一，请用 id：${hits.map((m) => `${m.name} (${m.id})`).join('、')}`)
+      }
+      console.log(
+        JSON.stringify(
+          await api(
+            '/api/machines/join',
+            hits.length ? { machineId: hits[0].id } : { address: target }
+          )
+        )
+      )
     } else if (['accept', 'reject', 'cancel'].includes(action)) {
       console.log(
         JSON.stringify(await api(`/api/machines/invitations/${enc(values[0])}/${action}`, {}))
@@ -577,7 +619,7 @@ switch (cmd) {
         machines
           .map(
             (m) =>
-              `${m.name}${m.self ? ' (本机)' : ''}  ${m.id}  ${m.status}  ${m.address ?? '-'}  Agent ${m.summary?.agents ?? '-'}${m.paired ? '' : '  未配对'}`
+              `${m.name}${m.self ? ' (本机)' : ''}  ${m.id}  ${m.status}  ${m.address ?? '-'}  组织 ${m.organization?.name ?? '-'}  Agent ${m.summary?.agents ?? '-'}${m.paired ? '' : '  未配对'}`
           )
           .join('\n')
       )
@@ -1033,7 +1075,9 @@ switch (cmd) {
   default:
     console.log(
       [
-        'hiwd machines | machines invite <host:port> | machines accept/reject/cancel <inviteId> | machines remove <id> | machines leave',
+        'hiwd machines | machines invite <host:port> | machines join <电脑名或地址> | machines accept/reject/cancel <inviteId> | machines remove <id> | machines leave',
+        'hiwd mcp <名字> [--on 电脑] | mcp ls [--on 电脑] | mcp add/rm/on/off | mcp config <名字> --on <电脑>',
+        '    例：hiwd mcp add cutgo -- npx cutgo-mcp；hiwd mcp add local --url http://127.0.0.1:3000/mcp',
         'hiwd files roots | ls <路径> | cat <路径> [--max <字节>] | get <远程路径> [本地路径] | put <本地文件> [远程目录]',
         '    例：hiwd files put ./报告.pdf --on Windows；不填远程目录时进入对方收件箱',
         '所有子命令支持 --on <机器名或 id>（唯一前缀，不区分大小写）',

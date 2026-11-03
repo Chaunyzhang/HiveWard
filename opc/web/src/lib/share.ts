@@ -3,6 +3,8 @@ import type {
   ClipboardSettings,
   ClipboardStatus,
   FileShareSettings,
+  McpShare,
+  SaveMcpShareRequest,
 } from '@shared/api'
 
 /** 这台电脑共享什么（剪贴板同步、共享目录）：只读写本机，不跟着「正在看的电脑」走 */
@@ -60,5 +62,36 @@ export function useSetFileShare() {
       qc.setQueryData(['share', 'files'], data)
       void qc.invalidateQueries({ queryKey: ['files'] })
     },
+  })
+}
+
+/** 这台电脑共享出去的 MCP：只读写本机 */
+export function useMcpShares() {
+  return useQuery({
+    queryKey: ['share', 'mcp'],
+    queryFn: () => self<McpShare[]>('/api/mcp/shares'),
+    refetchInterval: 5_000,
+    retry: false,
+  })
+}
+
+export function useSaveMcpShare() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (share: SaveMcpShareRequest) =>
+      self<McpShare>('/api/mcp/shares', share),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['share', 'mcp'] }),
+  })
+}
+
+export function useRemoveMcpShare() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      self<{ ok: true }>(
+        `/api/mcp/shares/${encodeURIComponent(name)}/remove`,
+        {}
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['share', 'mcp'] }),
   })
 }

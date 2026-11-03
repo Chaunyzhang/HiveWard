@@ -7,9 +7,10 @@ import { DecisionsDrawer } from '@/features/decisions/decisions-drawer'
 import { DecisionsDrawerProvider } from '@/features/decisions/drawer-context'
 import { InvitePrompt } from '@/features/machines/invite-prompt'
 import { Rail } from './rail'
+import { SidePanel } from './side-panel'
 import { TopBar } from './top-bar'
 
-/** 外壳：顶栏面包屑 + 图标侧栏 + 内容区，布局同 Supabase 控制台。 */
+/** 外壳：顶栏 + 三栏——左栏导航（集团 / 业务）、中间栏主页、右栏文件 / 浏览器。 */
 export function AppShell() {
   useDesktopNavigation()
   return (
@@ -21,9 +22,13 @@ export function AppShell() {
             <TopBar />
             <div className='flex min-h-0 flex-1'>
               <Rail />
-              <main id='content' className='min-w-0 flex-1 overflow-y-auto'>
+              <main
+                id='content'
+                className='@container min-w-0 flex-1 overflow-y-auto'
+              >
                 <Outlet />
               </main>
+              <SidePanel />
             </div>
           </div>
           <DecisionsDrawer />

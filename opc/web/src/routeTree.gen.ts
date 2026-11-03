@@ -21,10 +21,9 @@ import { Route as AuthenticatedSettingsRouteRouteImport } from './routes/_authen
 import { Route as AuthenticatedTimelineIndexRouteImport } from './routes/_authenticated/timeline/index'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
 import { Route as AuthenticatedMachinesIndexRouteImport } from './routes/_authenticated/machines/index'
-import { Route as AuthenticatedLiveIndexRouteImport } from './routes/_authenticated/live/index'
-import { Route as AuthenticatedFilesIndexRouteImport } from './routes/_authenticated/files/index'
-import { Route as AuthenticatedBrowserIndexRouteImport } from './routes/_authenticated/browser/index'
-import { Route as AuthenticatedSettingsAppearanceRouteImport } from './routes/_authenticated/settings/appearance'
+import { Route as AuthenticatedSettingsSharingRouteImport } from './routes/_authenticated/settings/sharing'
+import { Route as AuthenticatedSettingsMachineRouteImport } from './routes/_authenticated/settings/machine'
+import { Route as AuthenticatedSettingsGeneralRouteImport } from './routes/_authenticated/settings/general'
 import { Route as AuthenticatedBBusinessIdRouteImport } from './routes/_authenticated/b/$businessId'
 
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
@@ -90,26 +89,22 @@ const AuthenticatedMachinesIndexRoute =
     path: '/machines/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedLiveIndexRoute = AuthenticatedLiveIndexRouteImport.update({
-  id: '/live/',
-  path: '/live/',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedFilesIndexRoute = AuthenticatedFilesIndexRouteImport.update({
-  id: '/files/',
-  path: '/files/',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedBrowserIndexRoute =
-  AuthenticatedBrowserIndexRouteImport.update({
-    id: '/browser/',
-    path: '/browser/',
-    getParentRoute: () => AuthenticatedRouteRoute,
+const AuthenticatedSettingsSharingRoute =
+  AuthenticatedSettingsSharingRouteImport.update({
+    id: '/sharing',
+    path: '/sharing',
+    getParentRoute: () => AuthenticatedSettingsRouteRoute,
   } as any)
-const AuthenticatedSettingsAppearanceRoute =
-  AuthenticatedSettingsAppearanceRouteImport.update({
-    id: '/appearance',
-    path: '/appearance',
+const AuthenticatedSettingsMachineRoute =
+  AuthenticatedSettingsMachineRouteImport.update({
+    id: '/machine',
+    path: '/machine',
+    getParentRoute: () => AuthenticatedSettingsRouteRoute,
+  } as any)
+const AuthenticatedSettingsGeneralRoute =
+  AuthenticatedSettingsGeneralRouteImport.update({
+    id: '/general',
+    path: '/general',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
   } as any)
 const AuthenticatedBBusinessIdRoute =
@@ -129,10 +124,9 @@ export interface FileRoutesByFullPath {
   '/503': typeof errors503Route
   '/go': typeof AuthenticatedGoRoute
   '/b/$businessId': typeof AuthenticatedBBusinessIdRoute
-  '/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
-  '/browser/': typeof AuthenticatedBrowserIndexRoute
-  '/files/': typeof AuthenticatedFilesIndexRoute
-  '/live/': typeof AuthenticatedLiveIndexRoute
+  '/settings/general': typeof AuthenticatedSettingsGeneralRoute
+  '/settings/machine': typeof AuthenticatedSettingsMachineRoute
+  '/settings/sharing': typeof AuthenticatedSettingsSharingRoute
   '/machines/': typeof AuthenticatedMachinesIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
   '/timeline/': typeof AuthenticatedTimelineIndexRoute
@@ -146,10 +140,9 @@ export interface FileRoutesByTo {
   '/go': typeof AuthenticatedGoRoute
   '/': typeof AuthenticatedIndexRoute
   '/b/$businessId': typeof AuthenticatedBBusinessIdRoute
-  '/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
-  '/browser': typeof AuthenticatedBrowserIndexRoute
-  '/files': typeof AuthenticatedFilesIndexRoute
-  '/live': typeof AuthenticatedLiveIndexRoute
+  '/settings/general': typeof AuthenticatedSettingsGeneralRoute
+  '/settings/machine': typeof AuthenticatedSettingsMachineRoute
+  '/settings/sharing': typeof AuthenticatedSettingsSharingRoute
   '/machines': typeof AuthenticatedMachinesIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
   '/timeline': typeof AuthenticatedTimelineIndexRoute
@@ -166,10 +159,9 @@ export interface FileRoutesById {
   '/_authenticated/go': typeof AuthenticatedGoRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/b/$businessId': typeof AuthenticatedBBusinessIdRoute
-  '/_authenticated/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
-  '/_authenticated/browser/': typeof AuthenticatedBrowserIndexRoute
-  '/_authenticated/files/': typeof AuthenticatedFilesIndexRoute
-  '/_authenticated/live/': typeof AuthenticatedLiveIndexRoute
+  '/_authenticated/settings/general': typeof AuthenticatedSettingsGeneralRoute
+  '/_authenticated/settings/machine': typeof AuthenticatedSettingsMachineRoute
+  '/_authenticated/settings/sharing': typeof AuthenticatedSettingsSharingRoute
   '/_authenticated/machines/': typeof AuthenticatedMachinesIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
   '/_authenticated/timeline/': typeof AuthenticatedTimelineIndexRoute
@@ -186,10 +178,9 @@ export interface FileRouteTypes {
     | '/503'
     | '/go'
     | '/b/$businessId'
-    | '/settings/appearance'
-    | '/browser/'
-    | '/files/'
-    | '/live/'
+    | '/settings/general'
+    | '/settings/machine'
+    | '/settings/sharing'
     | '/machines/'
     | '/settings/'
     | '/timeline/'
@@ -203,10 +194,9 @@ export interface FileRouteTypes {
     | '/go'
     | '/'
     | '/b/$businessId'
-    | '/settings/appearance'
-    | '/browser'
-    | '/files'
-    | '/live'
+    | '/settings/general'
+    | '/settings/machine'
+    | '/settings/sharing'
     | '/machines'
     | '/settings'
     | '/timeline'
@@ -222,10 +212,9 @@ export interface FileRouteTypes {
     | '/_authenticated/go'
     | '/_authenticated/'
     | '/_authenticated/b/$businessId'
-    | '/_authenticated/settings/appearance'
-    | '/_authenticated/browser/'
-    | '/_authenticated/files/'
-    | '/_authenticated/live/'
+    | '/_authenticated/settings/general'
+    | '/_authenticated/settings/machine'
+    | '/_authenticated/settings/sharing'
     | '/_authenticated/machines/'
     | '/_authenticated/settings/'
     | '/_authenticated/timeline/'
@@ -326,32 +315,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedMachinesIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/live/': {
-      id: '/_authenticated/live/'
-      path: '/live'
-      fullPath: '/live/'
-      preLoaderRoute: typeof AuthenticatedLiveIndexRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
+    '/_authenticated/settings/sharing': {
+      id: '/_authenticated/settings/sharing'
+      path: '/sharing'
+      fullPath: '/settings/sharing'
+      preLoaderRoute: typeof AuthenticatedSettingsSharingRouteImport
+      parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
-    '/_authenticated/files/': {
-      id: '/_authenticated/files/'
-      path: '/files'
-      fullPath: '/files/'
-      preLoaderRoute: typeof AuthenticatedFilesIndexRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
+    '/_authenticated/settings/machine': {
+      id: '/_authenticated/settings/machine'
+      path: '/machine'
+      fullPath: '/settings/machine'
+      preLoaderRoute: typeof AuthenticatedSettingsMachineRouteImport
+      parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
-    '/_authenticated/browser/': {
-      id: '/_authenticated/browser/'
-      path: '/browser'
-      fullPath: '/browser/'
-      preLoaderRoute: typeof AuthenticatedBrowserIndexRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/settings/appearance': {
-      id: '/_authenticated/settings/appearance'
-      path: '/appearance'
-      fullPath: '/settings/appearance'
-      preLoaderRoute: typeof AuthenticatedSettingsAppearanceRouteImport
+    '/_authenticated/settings/general': {
+      id: '/_authenticated/settings/general'
+      path: '/general'
+      fullPath: '/settings/general'
+      preLoaderRoute: typeof AuthenticatedSettingsGeneralRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
     '/_authenticated/b/$businessId': {
@@ -365,13 +347,17 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthenticatedSettingsRouteRouteChildren {
-  AuthenticatedSettingsAppearanceRoute: typeof AuthenticatedSettingsAppearanceRoute
+  AuthenticatedSettingsGeneralRoute: typeof AuthenticatedSettingsGeneralRoute
+  AuthenticatedSettingsMachineRoute: typeof AuthenticatedSettingsMachineRoute
+  AuthenticatedSettingsSharingRoute: typeof AuthenticatedSettingsSharingRoute
   AuthenticatedSettingsIndexRoute: typeof AuthenticatedSettingsIndexRoute
 }
 
 const AuthenticatedSettingsRouteRouteChildren: AuthenticatedSettingsRouteRouteChildren =
   {
-    AuthenticatedSettingsAppearanceRoute: AuthenticatedSettingsAppearanceRoute,
+    AuthenticatedSettingsGeneralRoute: AuthenticatedSettingsGeneralRoute,
+    AuthenticatedSettingsMachineRoute: AuthenticatedSettingsMachineRoute,
+    AuthenticatedSettingsSharingRoute: AuthenticatedSettingsSharingRoute,
     AuthenticatedSettingsIndexRoute: AuthenticatedSettingsIndexRoute,
   }
 
@@ -385,9 +371,6 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedGoRoute: typeof AuthenticatedGoRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedBBusinessIdRoute: typeof AuthenticatedBBusinessIdRoute
-  AuthenticatedBrowserIndexRoute: typeof AuthenticatedBrowserIndexRoute
-  AuthenticatedFilesIndexRoute: typeof AuthenticatedFilesIndexRoute
-  AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
   AuthenticatedMachinesIndexRoute: typeof AuthenticatedMachinesIndexRoute
   AuthenticatedTimelineIndexRoute: typeof AuthenticatedTimelineIndexRoute
 }
@@ -397,9 +380,6 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedGoRoute: AuthenticatedGoRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedBBusinessIdRoute: AuthenticatedBBusinessIdRoute,
-  AuthenticatedBrowserIndexRoute: AuthenticatedBrowserIndexRoute,
-  AuthenticatedFilesIndexRoute: AuthenticatedFilesIndexRoute,
-  AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
   AuthenticatedMachinesIndexRoute: AuthenticatedMachinesIndexRoute,
   AuthenticatedTimelineIndexRoute: AuthenticatedTimelineIndexRoute,
 }

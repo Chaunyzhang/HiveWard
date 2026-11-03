@@ -11,6 +11,7 @@ import { apiError, badRequest } from './business.mjs'
 import { observeTerminal } from './business-terminals.mjs'
 import { locate, readChat, readTurnState } from './transcripts.mjs'
 import { issueConfirmation } from './confirmations.mjs'
+import { chooseMenu, screenMenu } from './screen-menu.mjs'
 
 const dir = dataDir()
 const file = join(dir, 'dispatches.json')
@@ -152,6 +153,22 @@ function judge(d, items, working, bounded = false, canFinish = true) {
 
 /** 受阻的派单 → 待办。选项取【需要确认】后面以「1. / - 」开头的行；含「建议」的那行当建议 */
 export function dispatchDecision(d, businessId) {
+  // 停在终端选择菜单上的：选项就是菜单那几项，老板选了直接替它按
+  if (d.menu) {
+    return {
+      id: d.id,
+      businessId: businessId ?? '',
+      projectId: d.projectId,
+      source: 'question',
+      question: d.blockedReason ?? d.menu.question,
+      body: '终端里的 Agent 停在选择菜单上，选一项就替它按下去。要细看先打开它的终端。',
+      options: d.menu.options,
+      urgency: 'normal',
+      state: 'pending',
+      createdAt: d.updatedAt ?? d.at,
+      dispatch: { handle: d.handle, agent: d.agent, by: d.by.label, menu: true }
+    }
+  }
   const text =
     /【需要确认】\s*([\s\S]*)/.exec(d.report?.summary ?? '')?.[1] ?? d.blockedReason ?? ''
   const lines = text.split('\n').map((l) => l.trim())
@@ -321,11 +338,14 @@ export async function observeDispatches(listed) {
           update(d, { status: 'failed', blockedReason: '终端已关闭，没有汇报' })
         }
       } else {
-        const [observed, status] = await Promise.all([
+        const [observed, status, screen] = await Promise.all([
           observeTerminal(t),
-          optionalRpc('terminal.agentStatus', { terminal: d.handle })
+          optionalRpc('terminal.agentStatus', { terminal: d.handle }),
+          optionalRpc('terminal.read', { terminal: d.handle, screen: true })
         ])
         const a = status?.agentStatus
+        // Kimi 不报状态：停在选择菜单上（计划要批准、要你选）只能看屏幕认
+        const menu = a?.status ? null : screenMenu(screen?.terminal?.tail?.join('\n'))
         let working = !!a?.isRunningAgent && a.status === 'working'
         let turn = null
         let items = []
@@ -352,6 +372,26 @@ export async function observeDispatches(listed) {
         working ||= turn === 'working'
         if (a?.status === 'permission') {
           update(d, { status: 'blocked', blockedReason: 'Agent 正在等待权限确认' })
+        } else if (menu) {
+          const next = { question: menu.question, options: menu.options.map((o) => o.label) }
+          if (d.status !== 'blocked' || JSON.stringify(d.menu) !== JSON.stringify(next)) {
+            Object.assign(d, {
+              status: 'blocked',
+              blockedReason: `Agent 在等你选：${menu.question}`,
+              menu: next,
+              updatedAt: new Date().toISOString()
+            })
+            changed = true
+          }
+        } else if (d.menu) {
+          // 菜单过去了（老板在终端里自己选了）：回到干活中，接着看对话
+          Object.assign(d, {
+            status: 'dispatched',
+            blockedReason: undefined,
+            menu: undefined,
+            updatedAt: new Date().toISOString()
+          })
+          changed = true
         } else if (observed.exitedToShell && d.agentObserved && OPEN.has(d.status)) {
           update(d, { status: 'failed', blockedReason: 'Agent 已退出，没有汇报' })
         } else if (items.length || working) {
@@ -365,12 +405,14 @@ export async function observeDispatches(listed) {
         root &&
         (root.status !== d.status ||
           root.report?.summary !== d.report?.summary ||
+          JSON.stringify(root.menu) !== JSON.stringify(d.menu) ||
           JSON.stringify(root.review) !== JSON.stringify(rootReview))
       ) {
         Object.assign(root, {
           status: d.status,
           report: d.report,
           blockedReason: d.blockedReason,
+          menu: d.menu,
           review: rootReview,
           updatedAt: d.updatedAt
         })
@@ -408,4 +450,29 @@ export function dispatchTask(d, businessId, followUps = []) {
     followUps: followUps.length ? followUps.map((f) => clip(norm(f.prompt), 200)) : undefined,
     review: d.review
   }
+}
+
+/** 老板在待办里选了终端菜单的一项：替 Agent 按下去，派单回到干活中（不算汇报，也不另记一条派单） */
+export async function chooseDispatchMenu(id, choice, rpc) {
+  const rows = dispatches()
+  const d = rows.find((x) => x.id === id)
+  if (!d?.menu) {
+    throw apiError(409, 'menu_gone', 'Agent 已经不在等你选了')
+  }
+  if (!d.menu.options.includes(choice)) {
+    throw badRequest('这一步只能选菜单上的选项；要细说先打开它的终端')
+  }
+  // 追加的话挂在原任务下面：真正停在菜单上的是同一终端最新那条
+  const latest = rows.findLast((x) => x.handle === d.handle)
+  const option = await chooseMenu(rpc, d.handle, choice)
+  for (const x of new Set([d, latest])) {
+    Object.assign(x, {
+      status: 'dispatched',
+      blockedReason: undefined,
+      menu: undefined,
+      updatedAt: new Date().toISOString()
+    })
+  }
+  save(rows.map(({ alive: _alive, liveAgent: _liveAgent, ...rest }) => rest))
+  return option
 }

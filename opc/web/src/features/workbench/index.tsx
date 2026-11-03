@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
-import type { OrcaTerminal, Project, TopologyNode } from '@shared/api'
-import { Laptop } from 'lucide-react'
+import type { Decision, OrcaTerminal, Project, TopologyNode } from '@shared/api'
+import { ArrowLeft, Laptop } from 'lucide-react'
 import { MachineScope, useCurrentMachineId, useFleet } from '@/lib/machine'
 import {
   decisionsQuery,
@@ -10,7 +10,8 @@ import {
   topologyQuery,
 } from '@/lib/opc-api'
 import { agentStatusStyle } from '@/lib/opc-format'
-import { terminalsQuery } from '@/lib/orca-live'
+import { terminalsQuery, useOrcaTerminals } from '@/lib/orca-live'
+import { insidePath } from '@/lib/project-for-path'
 import { cn } from '@/lib/utils'
 import { Page } from '@/components/layout/page'
 import {
@@ -19,28 +20,33 @@ import {
 } from '@/components/opc/topology-canvas'
 import { DecisionList } from '@/features/decisions/decision-list'
 import { ProjectTerminals } from '@/features/terminal/project-terminals'
-import { AgentSheet } from './agent-sheet'
+import { Timeline } from '@/features/timeline'
+import { AgentPane } from './agent-pane'
 import { ProjectHeader, type ProjectTab } from './project-header'
 import { NewProjectButton, ProjectList } from './projects-panel'
 import { TaskFeed } from './task-feed'
 import { countTab, taskTabs, type TaskTab } from './task-status'
 
 /**
- * 工作台（驾驶舱 / 业务页共用）：业务页顶部多一块业务信息（logo、名字、目录）和它的项目列表。为"集中处理"服务，只放三样东西——
- * Agent 架构图（谁在做什么）· 待办（要我决定的事）· 任务与汇报（做了什么）。
+ * 主页（集团总览 / 业务主页 / 项目主页共用）。概览只放三样东西——
+ * Agent 架构图（谁在做什么）· 待办（要我决定的事）· 任务与汇报（做了什么）；业务主页多一块项目列表。
+ * 业务、项目主页另有「现场」（这个目录里的终端）和「时间线」两个标签；项目主页的内容都只算这个项目的。
  * 每块功能一个大框，大框里不再套小框：小块都是"隐藏的框"，悬停才变灰显出来。
- * 点架构图节点打开该 Agent 的详情。
- * 首页把局域网里配对过、在线的电脑合在一起看：架构图里每台电脑一列，任务和待办标明来自哪台。
+ * 点架构图节点，在中间栏打开这个 Agent（它开的网页在右栏）；「← 返回」回到主页。
+ * 集团总览把局域网里配对过、在线的电脑合在一起看：架构图里每台电脑一列，任务和待办标明来自哪台。
  */
 export function Workbench({
   businessId,
+  projectId,
   tab = 'overview',
   terminal,
 }: {
   businessId?: string
-  /** 业务页的标签 */
+  /** 看的是业务里的某个项目 */
+  projectId?: string
+  /** 业务 / 项目主页的标签 */
   tab?: ProjectTab
-  /** 终端标签里选中的终端 */
+  /** 现场标签里选中的终端 */
   terminal?: string
 }) {
   const [open, setOpen] = useState<Opened | null>(null)
@@ -65,12 +71,29 @@ export function Workbench({
     queries: ids.map((m) => ({ ...terminalsQuery(m), enabled: !businessId })),
   })
 
+  const business = businessId
+    ? overviews[0]?.data?.businesses.find((b) => b.id === businessId)
+    : undefined
+  const project = projectId
+    ? business?.projects?.find((p) => p.id === projectId)
+    : undefined
+  // 项目主页的待办：问话的 Agent 开在这个项目目录里
+  const { data: liveTerminals } = useOrcaTerminals()
+  const inProject = (d: Decision) => {
+    if (!project) {
+      return true
+    }
+    const t = liveTerminals?.find((x) => x.handle === d.dispatch?.handle)
+    return !!t && insidePath(t.project, project.path)
+  }
+
   const groups: MachineGroup[] = fleet.map((f, i) => {
     // 不属于任何业务的 Agent 单独成支；已经挂在业务下的不重复画
     // 旧版后台还会带一个老板节点，不画
-    const rest = (topologies[i].data?.nodes ?? []).filter(
+    const all = (topologies[i].data?.nodes ?? []).filter(
       (n) => n.kind !== 'owner'
     )
+    const rest = projectId ? projectNodes(all, projectId) : all
     const placed = new Set(rest.map((n) => n.terminal).filter(Boolean))
     const rows = rest.filter((n) => n.kind === 'leader')
     return {
@@ -99,7 +122,9 @@ export function Workbench({
 
   // 任务合成一张列表；多台电脑时标明来自哪台，业务名到各自那台电脑上找
   const tasks = taskLists.flatMap((q, i) =>
-    (q.data ?? []).map((task) => ({ task, i }))
+    (q.data ?? [])
+      .filter((task) => !projectId || task.projectId === projectId)
+      .map((task) => ({ task, i }))
   )
   const origin = new Map(tasks.map(({ task, i }) => [task, i]))
   const businessesOf = (i: number) => overviews[i]?.data?.businesses ?? []
@@ -107,15 +132,14 @@ export function Workbench({
   const pendingOf = (i: number) =>
     (decisionLists[i].data ?? []).filter(
       (d) =>
-        d.state === 'pending' && (!businessId || d.businessId === businessId)
+        d.state === 'pending' &&
+        (!businessId || d.businessId === businessId) &&
+        inProject(d)
     ).length
   const pending = fleet.reduce((sum, _, i) => sum + pendingOf(i), 0)
   const withPending = fleet.flatMap((f, i) => (pendingOf(i) ? [{ f, i }] : []))
 
   const openIndex = open ? ids.indexOf(open.machine) : -1
-  const project = businessId
-    ? businessesOf(0).find((b) => b.id === businessId)
-    : undefined
   // 点项目：打开它的 Leader Agent（架构图里的那个节点；后台还没给节点时按项目现拼一个）
   const openProject = (p: Project) => {
     const node =
@@ -138,24 +162,62 @@ export function Workbench({
     setOpen({ node, machine: ids[0] })
   }
 
-  if (project && tab === 'terminal') {
+  // 点开的 Agent 占满中间栏
+  if (open) {
+    return (
+      <Page className='flex h-full flex-col gap-3 py-5'>
+        <button
+          type='button'
+          onClick={() => setOpen(null)}
+          className='flex w-fit items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground'
+        >
+          <ArrowLeft className='size-3.5' />
+          返回{project?.name ?? business?.name ?? '总览'}
+        </button>
+        <MachineScope id={open.machine ?? viewing}>
+          <AgentPane
+            node={open.node}
+            tasks={openIndex >= 0 ? (taskLists[openIndex].data ?? []) : []}
+            businesses={openIndex >= 0 ? businessesOf(openIndex) : []}
+            // 业务页链接只对正在看的那台电脑有效
+            showBusinessLink={!businessId && open.machine === viewing}
+            onClose={() => setOpen(null)}
+          />
+        </MachineScope>
+      </Page>
+    )
+  }
+
+  if (business && tab === 'live') {
     // 终端填满窗口剩下的高度
     return (
       <Page className='flex h-full flex-col gap-5'>
-        <ProjectHeader project={project} tab={tab} />
+        <ProjectHeader business={business} project={project} tab={tab} />
         <ProjectTerminals
-          businessId={project.id}
-          workspacePath={project.workspacePath}
+          businessId={business.id}
+          projectId={project?.id}
+          workspacePath={project?.path ?? business.workspacePath}
           selected={terminal}
         />
       </Page>
     )
   }
 
+  if (business && tab === 'timeline') {
+    return (
+      <Page className='mx-auto max-w-4xl space-y-5'>
+        <ProjectHeader business={business} project={project} tab={tab} />
+        <Timeline scope={{ businessId: business.id, projectId: project?.id }} />
+      </Page>
+    )
+  }
+
   return (
     <Page className='space-y-5'>
-      {project && <ProjectHeader project={project} tab={tab} />}
-      <div className='grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]'>
+      {business && (
+        <ProjectHeader business={business} project={project} tab={tab} />
+      )}
+      <div className='grid gap-5 @5xl:grid-cols-[minmax(0,1fr)_340px]'>
         <Panel
           title='Agent 架构'
           meta={`${multi ? `${fleet.length} 台电脑 · ` : ''}${liveWorkers}/${workers.length} 个下属在线`}
@@ -176,20 +238,20 @@ export function Workbench({
         </Panel>
 
         <div className='flex min-w-0 flex-col gap-5'>
-          {project && (
+          {business && !project && (
             <Panel
               title='项目'
               meta={
-                project.projects?.length
+                business.projects?.length
                   ? String(
-                      project.projects.filter((p) => p.status === 'active')
+                      business.projects.filter((p) => p.status === 'active')
                         .length
                     )
                   : undefined
               }
-              actions={<NewProjectButton business={project} />}
+              actions={<NewProjectButton business={business} />}
             >
-              <ProjectList business={project} onOpen={openProject} />
+              <ProjectList business={business} onOpen={openProject} />
             </Panel>
           )}
           <Panel
@@ -206,7 +268,10 @@ export function Workbench({
               ))}
               {withPending.length === 0 ? (
                 <MachineScope id={ids[0]}>
-                  <DecisionList businessId={businessId} />
+                  <DecisionList
+                    businessId={businessId}
+                    match={project ? inProject : undefined}
+                  />
                 </MachineScope>
               ) : (
                 withPending.map(({ f, i }) => (
@@ -217,7 +282,10 @@ export function Workbench({
                         {machineName(i)}
                       </h3>
                     )}
-                    <DecisionList businessId={businessId} />
+                    <DecisionList
+                      businessId={businessId}
+                      match={project ? inProject : undefined}
+                    />
                   </MachineScope>
                 ))
               )}
@@ -265,22 +333,38 @@ export function Workbench({
           />
         </div>
       </Panel>
-
-      <MachineScope id={open?.machine ?? viewing}>
-        <AgentSheet
-          node={open?.node ?? null}
-          tasks={openIndex >= 0 ? (taskLists[openIndex].data ?? []) : []}
-          businesses={openIndex >= 0 ? businessesOf(openIndex) : []}
-          // 业务页链接只对正在看的那台电脑有效
-          showBusinessLink={!businessId && open?.machine === viewing}
-          onClose={() => setOpen(null)}
-        />
-      </MachineScope>
     </Page>
   )
 }
 
 type Opened = { node: TopologyNode; machine: string | null }
+
+/** 项目主页的架构图：业务根节点 + 这个项目的 Leader Agent 和它下面的下属（连带并联的 Grok Bot） */
+function projectNodes(nodes: TopologyNode[], projectId: string) {
+  const keep = new Set(
+    nodes
+      .filter((n) => n.kind === 'leader' && n.projectId === projectId)
+      .map((n) => n.id)
+  )
+  // 下属挂在 Leader Agent 下面，可能隔几层：一直往下找
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const n of nodes) {
+      if (n.parentId && keep.has(n.parentId) && !keep.has(n.id)) {
+        keep.add(n.id)
+        grew = true
+      }
+    }
+  }
+  const via = new Set(nodes.filter((n) => keep.has(n.id)).map((n) => n.via))
+  return nodes.filter(
+    (n) =>
+      keep.has(n.id) ||
+      n.kind === 'business' ||
+      n.kind === 'project' ||
+      (n.kind === 'grok' && via.has(n.id))
+  )
+}
 
 /** 读失败要说出来，不能默默显示成"没有" */
 function LoadError({
@@ -427,7 +511,7 @@ function Segmented<T extends string>({
 
 function Legend() {
   return (
-    <span className='hidden items-center gap-3 text-[11px] text-muted-foreground md:flex'>
+    <span className='hidden items-center gap-3 text-[11px] text-muted-foreground @3xl:flex'>
       {Object.values(agentStatusStyle).map((l) => (
         <span key={l.label} className='flex items-center gap-1.5'>
           <span className={cn('size-1.5 rounded-full', l.dot)} />

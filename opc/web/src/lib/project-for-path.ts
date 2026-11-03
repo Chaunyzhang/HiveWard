@@ -13,3 +13,7 @@ export function projectForPath(
     )
     .sort((a, b) => b.workspacePath.length - a.workspacePath.length)[0]
 }
+
+/** path 是 root 本身或在 root 里面 */
+export const insidePath = (path: string, root: string) =>
+  path === root || path.startsWith(`${root}/`)
