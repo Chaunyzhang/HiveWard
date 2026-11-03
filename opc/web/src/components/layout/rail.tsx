@@ -26,7 +26,7 @@ import { NewProjectDialog } from '@/features/workbench/projects-panel'
  * 左栏（常驻 232px）分两块：
  * - 集团：总览、待办、时间线、局域网——看整个集团的；
  * - 业务：标题点了整块收起 / 展开，右边 + 加业务。每块业务名后面的小三角展开它的项目，
- *   项目缩进挂在下面（左边一条线连着）；悬停业务时最右边出 +，新建项目。
+ *   项目缩进挂在下面；悬停业务时最右边出 +，新建项目。选中只用底色，不画框。
  *   点业务看整块业务的主页，点项目看这个项目的主页；有 Agent 在干活亮蓝点，等你确认亮橙点。
  */
 export function Rail() {
@@ -208,7 +208,7 @@ function BusinessItem({
       {/* 整行是链接（垫在下面），小三角和 + 是浮在上面的按钮 */}
       <div
         className={cn(
-          'group relative mx-2 flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+          'group relative mx-2 flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground has-[a:focus-visible]:bg-accent',
           active && 'bg-accent text-foreground',
           (b.status === 'paused' || b.missing) && 'opacity-60'
         )}
@@ -218,7 +218,7 @@ function BusinessItem({
           params={{ businessId: b.id }}
           title={b.missing ? `目录不在了：${b.workspacePath}` : b.workspacePath}
           aria-label={b.name}
-          className='absolute inset-0 rounded-md'
+          className='absolute inset-0 rounded-md outline-none'
         />
         <span className='pointer-events-none flex size-[18px] shrink-0 items-center justify-center'>
           <ProjectLogo project={b} />
@@ -259,12 +259,11 @@ function BusinessItem({
         </button>
       </div>
       {open && lines.length > 0 && (
-        <ul className='ms-[27px] me-2'>
-          {lines.map((p, i) => (
+        <ul>
+          {lines.map((p) => (
             <ProjectItem
               key={p.id}
               project={p}
-              last={i === lines.length - 1}
               status={liveDot(agents.filter((a) => insidePath(a.path, p.path)))}
               active={current && project === p.id}
             />
@@ -275,34 +274,25 @@ function BusinessItem({
   )
 }
 
-/** 业务下的一个项目：左边一条竖线把同一块业务的项目连起来，最后一个拐个弯收尾 */
+/** 业务下的一个项目：缩进到和业务名对齐，不画连线 */
 function ProjectItem({
   project: p,
-  last,
   status,
   active,
 }: {
   project: Project
-  last: boolean
   status?: AgentStatus
   active: boolean
 }) {
   return (
-    <li className='relative ps-3'>
-      <span
-        aria-hidden
-        className={cn(
-          'pointer-events-none absolute start-0 top-0 w-2 border-s border-border',
-          last ? 'h-1/2 rounded-es-md border-b' : 'h-full'
-        )}
-      />
+    <li>
       <Link
         to='/b/$businessId'
         params={{ businessId: p.businessId }}
         search={{ project: p.id }}
         title={p.path}
         className={cn(
-          'flex h-7 items-center gap-2 rounded-md px-2 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+          'mx-2 flex h-8 items-center gap-2 rounded-md ps-[38px] pe-2.5 text-[13px] text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent',
           active && 'bg-accent text-foreground'
         )}
       >
@@ -337,7 +327,7 @@ function Item({
   trailing?: string
 }) {
   const cls = cn(
-    'mx-2 flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-4 [&_svg]:shrink-0',
+    'mx-2 flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent [&_svg]:size-4 [&_svg]:shrink-0',
     active && 'bg-accent text-foreground',
     muted && 'opacity-60'
   )
