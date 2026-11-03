@@ -20,6 +20,7 @@ import {
 import { TaskList } from './dispatched-tasks'
 import { GrokProfile } from './grok-profile'
 import { NoCeo } from './no-ceo'
+import { CopySeatPrompt } from './seat-prompt'
 
 /**
  * 点架构图节点，在中间栏打开（不套框，整个中间栏都给它）：这个 Agent 的实时输出（对话 / 终端）；
@@ -71,6 +72,7 @@ export function AgentPane({
       ) : node.kind === 'leader' ? (
         <Bare leading={back} title={node.label}>
           <NoLeader
+            business={business}
             project={business?.projects?.find((p) => p.id === node.projectId)}
             exited={node.liveness === 'exited'}
           />
@@ -209,7 +211,15 @@ function Dispatcher({
 }
 
 /** 项目还没开 Leader Agent（或 Leader Agent 退出了）：选一家开一个；「未归项目」没有 Leader Agent 可开 */
-function NoLeader({ project, exited }: { project?: Project; exited: boolean }) {
+function NoLeader({
+  business,
+  project,
+  exited,
+}: {
+  business?: BusinessSummary
+  project?: Project
+  exited: boolean
+}) {
   const launch = useLaunchProjectLeader()
   if (!project) {
     return (
@@ -224,6 +234,16 @@ function NoLeader({ project, exited }: { project?: Project; exited: boolean }) {
         「{project.name}」
         {exited ? '的 Leader Agent 已经退出了。' : '还没开 Leader Agent。'}
       </p>
+      {business && (
+        <>
+          <p className='max-w-md text-center text-xs leading-5'>
+            复制提示词，贴给你正在用的 Agent（Claude Code / Codex
+            会话），它会照着坐上来。
+          </p>
+          <CopySeatPrompt business={business} project={project} />
+          <p className='mt-3 text-xs'>或者在这里开一个终端坐上去：</p>
+        </>
+      )}
       <div className='flex gap-2'>
         {LEADERS.map((a) => (
           <button

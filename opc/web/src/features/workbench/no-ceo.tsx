@@ -3,10 +3,11 @@ import { toast } from 'sonner'
 import { useLaunchCeo } from '@/lib/opc-api'
 import { LEADER_LABEL, LEADERS } from '@/lib/opc-format'
 import { AgentLogo } from '@/components/opc/agent-logo'
+import { CopySeatPrompt } from './seat-prompt'
 
 /**
- * CEO 位空着（或坐着的终端退出了）：选一家开终端坐上去；
- * 也可以在 Claude 桌面端的会话里让它自己坐（hiwd seat ceo），那是主要用法。
+ * CEO 位空着（或坐着的终端退出了）：主要用法是「复制提示词」，贴给老板正在用的 Agent，
+ * 它照着执行 hiwd seat ceo 坐上来；也可以在这里选一家开终端坐上去。
  */
 export function NoCeo({
   business,
@@ -30,10 +31,11 @@ export function NoCeo({
         {exited ? '上的 Agent 已经退出了。' : '空着。'}
       </p>
       <p className='max-w-md text-xs leading-5'>
-        在 Claude 桌面端的会话里说「去坐{business.name}的 CEO 位」，它会执行{' '}
-        <code className='font-mono'>hiwd seat ceo</code> 坐上来；
-        也可以在这里开一个终端坐上去：
+        复制提示词，贴给你正在用的 Agent（Claude Code / Codex 会话），
+        它会照着坐上来——哪台电脑、哪块业务、怎么坐，提示词里都写清楚了。
       </p>
+      <CopySeatPrompt business={business} />
+      <p className='mt-3 text-xs'>或者在这里开一个终端坐上去：</p>
       <div className='flex gap-2'>
         {LEADERS.map((a) => (
           <button
