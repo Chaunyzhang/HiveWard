@@ -240,6 +240,7 @@ export function Workbench({
           {errors(topologies)}
           <TopologyCanvas
             groups={groups}
+            project={!!project}
             onOpen={(node, machine) => setOpen({ node, machine })}
           />
         </Panel>
@@ -291,11 +292,7 @@ export function Workbench({
           </div>
         </Panel>
       ) : business && tab === 'timeline' ? (
-        <div className='max-w-4xl'>
-          <Timeline
-            scope={{ businessId: business.id, projectId: project?.id }}
-          />
-        </div>
+        <Timeline scope={{ businessId: business.id, projectId: project?.id }} />
       ) : (
         <Overview
           business={business}
@@ -439,11 +436,7 @@ function Overview({
             preview
           />
         </Panel>
-        {projects && (
-          <Panel title='项目'>
-            {projects}
-          </Panel>
-        )}
+        {projects && <Panel title='项目'>{projects}</Panel>}
       </div>
     </div>
   )
@@ -468,13 +461,9 @@ function projectNodes(nodes: TopologyNode[], projectId: string) {
       }
     }
   }
-  const via = new Set(nodes.filter((n) => keep.has(n.id)).map((n) => n.via))
+  // 业务根留着，只用来算项目子目录；画的时候从项目卡开始
   return nodes.filter(
-    (n) =>
-      keep.has(n.id) ||
-      n.kind === 'business' ||
-      n.kind === 'project' ||
-      (n.kind === 'grok' && via.has(n.id))
+    (n) => keep.has(n.id) || n.kind === 'business' || n.kind === 'project'
   )
 }
 

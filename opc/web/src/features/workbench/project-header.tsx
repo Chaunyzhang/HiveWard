@@ -132,7 +132,7 @@ export function HomeHeader({
       <nav className='flex gap-1 overflow-x-auto border-b whitespace-nowrap'>
         {tabs.map((t) => {
           const cls = cn(
-            '-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 pb-2 text-sm text-muted-foreground transition-colors hover:text-foreground',
+            '-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 pb-2 text-sm text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:text-foreground',
             t === tab
               ? 'border-foreground text-foreground'
               : 'border-transparent'

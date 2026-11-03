@@ -206,7 +206,7 @@ export function Timeline({
           </>
         }
       />
-      <div className='max-w-4xl'>{list}</div>
+      {list}
     </Page>
   )
 }

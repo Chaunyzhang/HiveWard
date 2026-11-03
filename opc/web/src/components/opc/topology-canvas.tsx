@@ -52,20 +52,29 @@ export function TopologyCanvas({
   groups,
   open,
   onOpen,
+  project,
 }: {
   groups: MachineGroup[]
   open?: { node: TopologyNode; machine: string | null }
   onOpen?: (node: TopologyNode, machine: string | null) => void
+  /** 在项目里看：从项目卡开始画，前面的电脑、业务、CEO、Personal Agent 都不画 */
+  project?: boolean
 }) {
-  const rowCount = groups
+  // 在项目里看时，别的电脑上没这个项目的 Agent，就不占一列
+  const own = project
+    ? groups.filter((g) => g.nodes.some((n) => n.kind === 'leader'))
+    : groups
+  const shown = own.length > 0 ? own : groups.slice(0, 1)
+  const rowCount = shown
     .map((g) => g.nodes.filter((n) => n.kind === 'leader').length)
     .join(',')
   return (
     <Viewport fitKey={rowCount}>
       <div className='flex items-start gap-24'>
-        {groups.map((g) => (
+        {shown.map((g) => (
           <MachineScope key={g.id ?? 'self'} id={g.id}>
             <MachineColumn
+              project={project}
               group={g}
               openId={open?.machine === g.id ? open.node.id : undefined}
               onOpen={(node) => onOpen?.(node, g.id)}
@@ -79,14 +88,42 @@ export function TopologyCanvas({
 
 function MachineColumn({
   group: { id: machineId, machine, nodes },
+  project,
   ...open
-}: NodeProps & { group: MachineGroup }) {
+}: NodeProps & { group: MachineGroup; project?: boolean }) {
   const childrenOf = (id: string) => nodes.filter((n) => n.parentId === id)
   const byId = (id?: string) => nodes.find((n) => n.id === id)
   // 每块业务一组：根是业务节点（旧版后台叫 project），下面并排它的各个项目
   const roots = nodes.filter(
     (n) => (n.kind === 'business' || n.kind === 'project') && !n.parentId
   )
+  if (project) {
+    const branches = roots.flatMap((root) =>
+      childrenOf(root.id)
+        .filter((n) => n.kind === 'leader')
+        .map((n) => (
+          <ProjectBranch
+            key={n.id}
+            leader={n}
+            root={root}
+            childrenOf={childrenOf}
+            {...open}
+          />
+        ))
+    )
+    // 项目卡是最前面那一格，左边不接线
+    return branches.length > 0 ? (
+      <div className='htree'>
+        <ul className='ms-0 [&>li]:ps-0 [&>li]:before:hidden [&>li]:after:hidden'>
+          {branches}
+        </ul>
+      </div>
+    ) : (
+      <p className='pt-6 text-[13px] text-muted-foreground'>
+        这个项目还没有 Agent。
+      </p>
+    )
+  }
   return (
     <div>
       <ComputerCard machine={machine} />
@@ -108,6 +145,7 @@ function MachineColumn({
                 <Wire
                   grok={byId(leaders.find((n) => n.via)?.via)}
                   ceo={ceo}
+                  tail={leaders.length > 0 || ceoWorkers.length > 0}
                   {...open}
                 />
                 <div className='htree'>
@@ -442,13 +480,15 @@ const recent = (iso: string) => Date.now() - new Date(iso).getTime() < LIT_FOR
  * 业务到它的项目们是一条直线，CEO 位就坐在这条直线上（业务 → CEO → 项目）；
  * Personal Agent（现在是 Grok Bot）是并联的另一条路，从 CEO 前面分出去、绕过 CEO 再接回来。
  * 最近 30 分钟派过活的 Personal Agent 是亮的。没登记的目录两样都没有，只有直线。
+ * CEO 后面什么都没接（还没有项目）时，线到 CEO 就断，Personal Agent 那条也不再接回来。
  */
 function Wire({
   grok,
   ceo,
+  tail = true,
   openId,
   onOpen,
-}: NodeProps & { grok?: TopologyNode; ceo?: TopologyNode }) {
+}: NodeProps & { grok?: TopologyNode; ceo?: TopologyNode; tail?: boolean }) {
   const lit = !!grok?.lastSeenAt && recent(grok.lastSeenAt)
   // 画这台电脑上的主 Grok Bot 的真实形象和表情；读不到 Grok Bot 时按业务推一个
   const main = useGrokBots().data?.bots[0]
@@ -461,13 +501,24 @@ function Wire({
         : 'idle'
   return (
     <div className={cn('relative w-44 shrink-0', ceo ? 'h-44' : 'h-28')}>
-      <span className='absolute inset-x-0 top-1/2 border-t border-muted-foreground/50' />
+      <span
+        className={cn(
+          'absolute start-0 top-1/2 border-t border-muted-foreground/50',
+          tail || !ceo ? 'end-0' : 'end-1/2'
+        )}
+      />
       {ceo && <CeoSeat ceo={ceo} open={ceo.id === openId} onOpen={onOpen} />}
       {grok && (
         <>
-          <span className='absolute inset-x-5 top-3 bottom-1/2 rounded-t-xl border-x border-t border-muted-foreground/50' />
+          {tail ? (
+            <span className='absolute inset-x-5 top-3 bottom-1/2 rounded-t-xl border-x border-t border-muted-foreground/50' />
+          ) : (
+            <span className='absolute start-5 end-1/2 top-3 bottom-1/2 rounded-ss-xl border-s border-t border-muted-foreground/50' />
+          )}
           <span className='absolute start-5 top-1/2 size-1.5 -translate-1/2 rounded-full bg-muted-foreground' />
-          <span className='absolute end-5 top-1/2 size-1.5 translate-x-1/2 -translate-y-1/2 rounded-full bg-muted-foreground' />
+          {tail && (
+            <span className='absolute end-5 top-1/2 size-1.5 translate-x-1/2 -translate-y-1/2 rounded-full bg-muted-foreground' />
+          )}
           <button
             type='button'
             data-open={grok.id === openId}

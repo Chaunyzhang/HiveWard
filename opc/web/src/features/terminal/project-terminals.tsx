@@ -41,7 +41,7 @@ const tabTitle = (t: OrcaTerminal) =>
   t.title?.replace(/^[⠀-⣿✳✻✽✶✢·*]+\s*/u, '').trim() || (t.agent ?? '终端')
 
 /**
- * 业务 / 项目主页的「现场」：这个目录里的所有终端，一个终端一个标签，下面是真终端（能看能打字）。
+ * 业务 / 项目主页的「现场」：这个目录里的所有终端竖着排在左边（像桌面端的会话列表），右边是真终端（能看能打字）。
  * + 新开 Agent 或普通终端（看项目时开在项目里）；× 关掉终端（Agent 也会一起退出，先确认）。
  * 选中哪个记在网址里（?t=handle）；选中的 Agent 开的网页显示在右栏浏览器里。
  */
@@ -96,89 +96,99 @@ export function ProjectTerminals({
     )
 
   return (
-    <div className='flex min-h-[360px] flex-1 flex-col overflow-hidden rounded-xl border bg-panel'>
-      <div className='flex h-10 shrink-0 items-center gap-0.5 overflow-x-auto border-b px-1.5'>
-        {terminals.map((t) => (
-          <div
-            key={t.handle}
-            className={cn(
-              'group flex h-7 max-w-56 shrink-0 items-center gap-1.5 rounded-md ps-2 pe-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
-              t.handle === handle && 'bg-accent text-foreground'
-            )}
-          >
-            <button
-              type='button'
-              onClick={() => void select(t.handle)}
-              className='flex min-w-0 items-center gap-1.5'
-            >
-              {t.agent ? (
-                <AgentLogo agent={t.agent} className='size-3.5' />
-              ) : (
-                <SquareTerminal className='size-3.5 shrink-0' />
-              )}
-              <span className='truncate'>{tabTitle(t)}</span>
-              {t.agent && <StatusDot status={terminalStatus(t.status)} />}
-            </button>
-            <button
-              type='button'
-              title='关掉这个终端'
-              aria-label='关掉这个终端'
-              onClick={() => setClosing(t)}
-              className='grid size-5 place-items-center rounded opacity-0 group-hover:opacity-100 hover:bg-background'
-            >
-              <X className='size-3' />
-            </button>
-          </div>
-        ))}
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            title='新开终端'
-            aria-label='新开终端'
-            disabled={create.isPending}
-            className='grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground'
-          >
-            {create.isPending ? (
-              <LoaderCircle className='size-3.5 animate-spin' />
-            ) : (
-              <Plus className='size-3.5' />
-            )}
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align='start' className='w-44'>
-            {NEW_AGENTS.map((a) => {
-              const blocked = exitBlockReason(region, a.agent)
-              return (
-                <DropdownMenuItem
-                  key={a.agent}
-                  disabled={!!blocked}
-                  title={blocked ?? undefined}
-                  onClick={() => open(a.agent)}
-                >
-                  <AgentLogo agent={a.agent} className='size-4' />
-                  {a.label}
-                  {blocked && (
-                    <span className='ms-auto text-[11px] text-danger'>
-                      出口不合规
-                    </span>
-                  )}
-                </DropdownMenuItem>
-              )
-            })}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => open()}>
-              <SquareTerminal />
-              普通终端
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {(create.error ?? error) && (
-          <span className='ms-2 truncate text-xs text-danger'>
-            {(create.error ?? error)?.message}
+    <div className='flex min-h-[360px] flex-1 overflow-hidden rounded-xl border bg-panel'>
+      <div className='flex w-56 shrink-0 flex-col border-e'>
+        <div className='flex h-10 shrink-0 items-center gap-1 border-b ps-3 pe-1.5'>
+          <span className='flex-1 text-xs font-medium text-muted-foreground'>
+            终端 {terminals.length > 0 && terminals.length}
           </span>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              title='新开终端'
+              aria-label='新开终端'
+              disabled={create.isPending}
+              className='grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground'
+            >
+              {create.isPending ? (
+                <LoaderCircle className='size-3.5 animate-spin' />
+              ) : (
+                <Plus className='size-3.5' />
+              )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='start' className='w-44'>
+              {NEW_AGENTS.map((a) => {
+                const blocked = exitBlockReason(region, a.agent)
+                return (
+                  <DropdownMenuItem
+                    key={a.agent}
+                    disabled={!!blocked}
+                    title={blocked ?? undefined}
+                    onClick={() => open(a.agent)}
+                  >
+                    <AgentLogo agent={a.agent} className='size-4' />
+                    {a.label}
+                    {blocked && (
+                      <span className='ms-auto text-[11px] text-danger'>
+                        出口不合规
+                      </span>
+                    )}
+                  </DropdownMenuItem>
+                )
+              })}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => open()}>
+                <SquareTerminal />
+                普通终端
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        {(create.error ?? error) && (
+          <p className='border-b px-3 py-1.5 text-xs text-danger'>
+            {(create.error ?? error)?.message}
+          </p>
         )}
+        <ul className='min-h-0 flex-1 space-y-0.5 overflow-y-auto p-1.5'>
+          {terminals.map((t) => (
+            <li
+              key={t.handle}
+              className={cn(
+                'group relative flex h-8 items-center rounded-md text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+                t.handle === handle && 'bg-accent text-foreground'
+              )}
+            >
+              <button
+                type='button'
+                title={tabTitle(t)}
+                onClick={() => void select(t.handle)}
+                className='flex h-full min-w-0 flex-1 items-center gap-2 ps-2 pe-7 outline-none'
+              >
+                {t.agent ? (
+                  <AgentLogo agent={t.agent} className='size-3.5' />
+                ) : (
+                  <SquareTerminal className='size-3.5 shrink-0' />
+                )}
+                <span className='min-w-0 flex-1 truncate text-start'>
+                  {tabTitle(t)}
+                </span>
+                {t.agent && <StatusDot status={terminalStatus(t.status)} />}
+              </button>
+              <button
+                type='button'
+                title='关掉这个终端'
+                aria-label='关掉这个终端'
+                onClick={() => setClosing(t)}
+                className='absolute end-1 grid size-6 place-items-center rounded bg-accent opacity-0 group-hover:opacity-100 hover:bg-background'
+              >
+                <X className='size-3' />
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
 
       {handle ? (
-        <TerminalView key={handle} handle={handle} className='flex-1' />
+        <TerminalView key={handle} handle={handle} className='min-w-0 flex-1' />
       ) : (
         <div className='grid flex-1 place-items-center text-center text-sm text-muted-foreground'>
           <div>

@@ -88,7 +88,7 @@ export function SidePanel() {
             type='button'
             onClick={() => setTab(t.value)}
             className={cn(
-              'h-7 rounded-md px-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground',
+              'h-7 rounded-md px-2.5 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:bg-accent',
               tab === t.value && 'bg-accent text-foreground'
             )}
           >
