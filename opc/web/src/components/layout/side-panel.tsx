@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
 import { useLocation, useSearch } from '@tanstack/react-router'
-import { PanelRightClose } from 'lucide-react'
 import { useWorkspace, type SideTab } from '@/stores/workspace'
 import { useBrowser } from '@/lib/desktop'
 import { useOverview } from '@/lib/opc-api'
@@ -48,7 +47,7 @@ export function useSideScope() {
  * 右栏：跟着中间栏走。
  * - 文件：看业务主页时是业务目录，看项目主页时是项目目录。
  * - 浏览器：中间栏点开的那个 Agent 开的网页。点开的 Agent 一打开网页就自动切过来（右栏收着也会打开）。
- * 集团页面没东西可看时不出现；左边缘拖动改宽度；顶栏右边的按钮开关。
+ * 集团页面没东西可看时不出现；左边缘拖动改宽度；开关只在顶栏右边。
  */
 export function SidePanel() {
   const open = useWorkspace((s) => s.sideOpen)
@@ -96,15 +95,6 @@ export function SidePanel() {
             {t.label}
           </button>
         ))}
-        <button
-          type='button'
-          title='收起右栏'
-          aria-label='收起右栏'
-          onClick={() => setOpen(false)}
-          className='ms-auto grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground'
-        >
-          <PanelRightClose className='size-4' />
-        </button>
       </header>
       {tab === 'browser' ? (
         <AgentBrowser handle={agent} />

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import type { Decision, OrcaTerminal, Project, TopologyNode } from '@shared/api'
-import { ArrowLeft, Laptop } from 'lucide-react'
+import { Laptop } from 'lucide-react'
 import { MachineScope, useCurrentMachineId, useFleet } from '@/lib/machine'
 import {
   decisionsQuery,
@@ -162,29 +162,19 @@ export function Workbench({
     setOpen({ node, machine: ids[0] })
   }
 
-  // 点开的 Agent 占满中间栏
+  // 点开的 Agent 占满中间栏，不套框；标题行最前面的箭头回到这个主页
   if (open) {
     return (
-      <Page className='flex h-full flex-col gap-3 py-5'>
-        <button
-          type='button'
-          onClick={() => setOpen(null)}
-          className='flex w-fit items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground'
-        >
-          <ArrowLeft className='size-3.5' />
-          返回{project?.name ?? business?.name ?? '总览'}
-        </button>
-        <MachineScope id={open.machine ?? viewing}>
-          <AgentPane
-            node={open.node}
-            tasks={openIndex >= 0 ? (taskLists[openIndex].data ?? []) : []}
-            businesses={openIndex >= 0 ? businessesOf(openIndex) : []}
-            // 业务页链接只对正在看的那台电脑有效
-            showBusinessLink={!businessId && open.machine === viewing}
-            onClose={() => setOpen(null)}
-          />
-        </MachineScope>
-      </Page>
+      <MachineScope id={open.machine ?? viewing}>
+        <AgentPane
+          node={open.node}
+          tasks={openIndex >= 0 ? (taskLists[openIndex].data ?? []) : []}
+          businesses={openIndex >= 0 ? businessesOf(openIndex) : []}
+          // 业务页链接只对正在看的那台电脑有效
+          showBusinessLink={!businessId && open.machine === viewing}
+          onClose={() => setOpen(null)}
+        />
+      </MachineScope>
     )
   }
 

@@ -12,14 +12,19 @@ import {
 import { useOrcaTerminals } from '@/lib/orca-live'
 import { AgentLogo } from '@/components/opc/agent-logo'
 import { ProjectLogo } from '@/components/opc/project-logo'
-import { AgentConsole, ConsoleView } from '@/features/live/agent-console'
+import {
+  AgentConsole,
+  BackButton,
+  ConsoleView,
+} from '@/features/live/agent-console'
 import { TaskList } from './dispatched-tasks'
 import { GrokProfile } from './grok-profile'
 import { NoCeo } from './no-ceo'
 
 /**
- * 点架构图节点，在中间栏打开：这个 Agent 的实时输出（对话 / 终端），和「现场」同一个控制台；
+ * 点架构图节点，在中间栏打开（不套框，整个中间栏都给它）：这个 Agent 的实时输出（对话 / 终端）；
  * 它开的网页在右栏浏览器里。接了终端的直接连真终端；其余的读负责人 / 下属的终端画面。
+ * 标题行最前面是返回箭头，回到打开它的那个主页。
  */
 export function AgentPane({
   node,
@@ -37,10 +42,12 @@ export function AgentPane({
   const business = businesses.find((b) => b.id === node.businessId)
   const task =
     node.kind === 'worker' ? tasks.find((t) => t.id === node.taskId) : undefined
+  const back = <BackButton onClick={onClose} />
   return (
-    <div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl panel'>
+    <div className='flex h-full min-h-0 flex-col'>
       {node.kind === 'grok' ? (
         <GrokProfile
+          leading={back}
           tasks={tasks.filter(
             (t) =>
               t.dispatchedBy?.kind === 'grok' &&
@@ -50,23 +57,29 @@ export function AgentPane({
       ) : node.dispatcher || node.sessionId ? (
         <Dispatcher
           node={node}
+          leading={back}
           tasks={tasks.filter(
             (t) => t.dispatchedBy?.id === (node.sessionId ?? node.dispatcher)
           )}
         />
       ) : node.terminal ? (
-        <LiveAgent key={node.id} node={node} />
+        <LiveAgent key={node.id} node={node} leading={back} />
       ) : node.kind === 'ceo' ? (
-        <NoCeo business={business} exited={node.liveness === 'exited'} />
+        <Bare leading={back} title={node.label}>
+          <NoCeo business={business} exited={node.liveness === 'exited'} />
+        </Bare>
       ) : node.kind === 'leader' ? (
-        <NoLeader
-          project={business?.projects?.find((p) => p.id === node.projectId)}
-          exited={node.liveness === 'exited'}
-        />
+        <Bare leading={back} title={node.label}>
+          <NoLeader
+            project={business?.projects?.find((p) => p.id === node.projectId)}
+            exited={node.liveness === 'exited'}
+          />
+        </Bare>
       ) : (
         <ScreenAgent
           key={node.id}
           node={node}
+          leading={back}
           context={
             <Context
               node={node}
@@ -82,25 +95,56 @@ export function AgentPane({
   )
 }
 
+/** 没有控制台的节点（空位等）：标题行只有返回箭头和名字 */
+function Bare({
+  leading,
+  title,
+  children,
+}: {
+  leading: React.ReactNode
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <>
+      <header className='flex h-12 shrink-0 items-center gap-2.5 border-b px-4'>
+        {leading}
+        <h2 className='truncate text-[13px] font-medium'>{title}</h2>
+      </header>
+      <div className='min-h-0 flex-1'>{children}</div>
+    </>
+  )
+}
+
 /** 接了 Orca 终端的节点：真终端，能看能说 */
-function LiveAgent({ node }: { node: TopologyNode }) {
+function LiveAgent({
+  node,
+  leading,
+}: {
+  node: TopologyNode
+  leading: React.ReactNode
+}) {
   const terminals = useOrcaTerminals()
   const terminal = terminals.data?.find((t) => t.handle === node.terminal)
   return terminal ? (
-    <AgentConsole terminal={terminal} className='h-full' />
+    <AgentConsole terminal={terminal} leading={leading} className='h-full' />
   ) : (
-    <p className='p-6 text-[13px] text-muted-foreground'>
-      {terminals.isLoading ? '连接引擎…' : '这个终端已经关掉了。'}
-    </p>
+    <Bare leading={leading} title={node.label}>
+      <p className='p-6 text-[13px] text-muted-foreground'>
+        {terminals.isLoading ? '连接引擎…' : '这个终端已经关掉了。'}
+      </p>
+    </Bare>
   )
 }
 
 /** 没有直连终端的节点：读负责人 / 下属的终端画面和对话记录 */
 function ScreenAgent({
   node: n,
+  leading,
   context,
 }: {
   node: TopologyNode
+  leading: React.ReactNode
   context: React.ReactNode
 }) {
   const screen = useWorkerScreen(n.dispatchId ?? null)
@@ -108,6 +152,7 @@ function ScreenAgent({
   const status = agentStatus({ state: n.state, liveness: n.liveness }) ?? 'idle'
   return (
     <ConsoleView
+      leading={leading}
       agent={n.agent}
       title={n.label}
       subtitle={n.sublabel}
@@ -132,10 +177,19 @@ function ScreenAgent({
 }
 
 /** 派单方（开在项目目录里的 Claude Code 会话）：对话在它自己那边，这里只列它派出去的活和结果 */
-function Dispatcher({ node: n, tasks }: { node: TopologyNode; tasks: Task[] }) {
+function Dispatcher({
+  node: n,
+  leading,
+  tasks,
+}: {
+  node: TopologyNode
+  leading: React.ReactNode
+  tasks: Task[]
+}) {
   return (
     <div className='flex h-full flex-col'>
-      <header className='flex h-12 shrink-0 items-center gap-3 px-4'>
+      <header className='flex h-12 shrink-0 items-center gap-3 border-b px-4'>
+        {leading}
         <AgentLogo agent={n.agent} className='size-4' />
         <h2 className='text-[13px] font-medium'>{n.label}</h2>
         {n.sublabel && (

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatItem, OrcaTerminal, ScreenMenu } from '@shared/api'
-import { ArrowUp, Square } from 'lucide-react'
+import { ArrowLeft, ArrowUp, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { useWorkspace } from '@/stores/workspace'
 import {
@@ -27,6 +27,7 @@ import { ChatView } from './chat-view'
  * 「对话」一档的输入框像原生 Agent：干活中发送键变成停止，Esc 也是停止。
  */
 export function ConsoleView({
+  leading,
   agent,
   title,
   subtitle,
@@ -45,6 +46,8 @@ export function ConsoleView({
   className,
   headerClassName,
 }: {
+  /** 标题最前面的东西（中间栏打开时是返回箭头） */
+  leading?: React.ReactNode
   /** 是哪家的 Agent：标题前画它的 logo */
   agent?: string | null
   title: string
@@ -98,11 +101,12 @@ export function ConsoleView({
     >
       <header
         className={cn(
-          'flex h-12 shrink-0 items-center gap-3 px-4',
+          'flex h-12 shrink-0 items-center gap-3 border-b px-4',
           headerClassName
         )}
       >
         <div className='flex min-w-0 flex-1 items-center gap-2.5'>
+          {leading}
           <AgentLogo agent={agent} className='size-4 shrink-0' />
           <h2 className='min-w-0 shrink truncate text-[13px] font-medium'>
             {title}
@@ -143,7 +147,7 @@ export function ConsoleView({
       </header>
 
       {context && (
-        <div className='flex shrink-0 items-center gap-2 border-y bg-muted/30 px-4 py-2 text-xs text-muted-foreground'>
+        <div className='flex shrink-0 items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground'>
           {context}
         </div>
       )}
@@ -220,11 +224,13 @@ export function ConsoleView({
  */
 export function AgentConsole({
   terminal: t,
+  leading,
   context,
   className,
   headerClassName,
 }: {
   terminal: OrcaTerminal
+  leading?: React.ReactNode
   context?: React.ReactNode
   className?: string
   headerClassName?: string
@@ -244,9 +250,9 @@ export function AgentConsole({
 
   return (
     <ConsoleView
+      leading={leading}
       agent={t.agent}
       title={t.title || '终端'}
-      subtitle={t.project}
       tone={status}
       status={
         !agent
@@ -332,4 +338,19 @@ export function useFocusAgent(handle: string | undefined) {
     setAgent(handle)
     return () => setAgent(null)
   }, [handle, setAgent])
+}
+
+/** 中间栏标题行最前面的返回箭头：回到结构上的上一级（打开它的那个主页） */
+export function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type='button'
+      title='返回上一级'
+      aria-label='返回上一级'
+      onClick={onClick}
+      className='-ms-1.5 grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground'
+    >
+      <ArrowLeft className='size-4' />
+    </button>
+  )
 }

@@ -20,67 +20,79 @@ const dateFmt = new Intl.DateTimeFormat('zh-CN', {
 })
 
 /**
- * Grok Bot 的「个人主页」：点架构图上的 Grok Bot 头像在右侧打开。
- * 上面一排是这台电脑上的所有 Bot，下面是选中那个的大头像、资料、最近对话（只读）和它派给 Agent 的活。
+ * Grok Bot 的「个人主页」：点架构图上的 Grok Bot 头像，在中间栏打开。
+ * 标题行是返回箭头和这台电脑上的所有 Bot，下面是选中那个的大头像、资料、最近对话（只读）和它派给 Agent 的活。
  * 要跟它说话回 Grok Bot 里——它没有公开接口，HiveWard 只读它在本机的缓存。
  */
-export function GrokProfile({ tasks }: { tasks: Task[] }) {
+export function GrokProfile({
+  tasks,
+  leading,
+}: {
+  tasks: Task[]
+  /** 标题行最前面的返回箭头 */
+  leading?: React.ReactNode
+}) {
   const { data, error, isLoading } = useGrokBots()
   const bots = data?.bots ?? []
   const [picked, setPicked] = useState<string | null>(null)
   const bot = bots.find((b) => b.id === picked) ?? bots[0]
 
-  if (isLoading) {
-    return (
-      <p className='p-8 text-[13px] text-muted-foreground'>读取 Grok Bot…</p>
-    )
-  }
-  if (error) {
-    return (
-      <p className='p-8 text-[13px] text-danger'>
-        读不到 Grok Bot：{error.message}
-      </p>
-    )
-  }
-  if (!data?.installed) {
-    return (
-      <p className='p-8 text-[13px] text-muted-foreground'>
-        这台电脑没装 Grok Bot。
-      </p>
-    )
-  }
-  if (!bot) {
-    return (
-      <p className='p-8 text-[13px] text-muted-foreground'>
-        Grok Bot 里还没有 Bot{data.signedIn ? '' : '（还没登录）'}。
-      </p>
-    )
-  }
+  const note = (text: string, danger = false) => (
+    <p
+      className={cn(
+        'p-8 text-[13px]',
+        danger ? 'text-danger' : 'text-muted-foreground'
+      )}
+    >
+      {text}
+    </p>
+  )
 
   return (
-    <div className='flex h-full min-h-0 flex-col overflow-y-auto'>
-      {bots.length > 1 && (
-        <nav className='flex shrink-0 items-center gap-1 overflow-x-auto px-6 pt-4'>
-          {bots.map((b) => (
-            <button
-              key={b.id}
-              type='button'
-              title={b.name}
-              onClick={() => setPicked(b.id)}
-              className={cn(
-                'relative grid size-9 shrink-0 place-items-center rounded-full hover:bg-accent',
-                b.id === bot.id && 'bg-accent ring-1 ring-border'
-              )}
-            >
-              <GrokBotAvatar seed={b.id} look={b} className='size-6' />
-              {(b.unreadCount > 0 || b.awaitingYou) && (
-                <span className='absolute end-1 top-1 size-2 rounded-full bg-attention ring-2 ring-background' />
-              )}
-            </button>
-          ))}
-        </nav>
-      )}
-      <Profile key={bot.id} bot={bot} running={data.running} tasks={tasks} />
+    <div className='flex h-full min-h-0 flex-col'>
+      {/* 标题行：返回箭头 + 这台电脑上的所有 Bot，点哪个看哪个 */}
+      <header className='flex h-12 shrink-0 items-center gap-1 border-b px-4'>
+        {leading}
+        {bots.length > 1 && (
+          <nav className='flex min-w-0 items-center gap-1 overflow-x-auto'>
+            {bots.map((b) => (
+              <button
+                key={b.id}
+                type='button'
+                title={b.name}
+                onClick={() => setPicked(b.id)}
+                className={cn(
+                  'relative grid size-8 shrink-0 place-items-center rounded-full hover:bg-accent',
+                  b.id === bot?.id && 'bg-accent ring-1 ring-border'
+                )}
+              >
+                <GrokBotAvatar seed={b.id} look={b} className='size-5' />
+                {(b.unreadCount > 0 || b.awaitingYou) && (
+                  <span className='absolute end-0.5 top-0.5 size-2 rounded-full bg-attention ring-2 ring-background' />
+                )}
+              </button>
+            ))}
+          </nav>
+        )}
+      </header>
+      <div className='min-h-0 flex-1 overflow-y-auto'>
+        {isLoading ? (
+          note('读取 Grok Bot…')
+        ) : error ? (
+          note(`读不到 Grok Bot：${error.message}`, true)
+        ) : !data?.installed ? (
+          note('这台电脑没装 Grok Bot。')
+        ) : !bot ? (
+          note(`Grok Bot 里还没有 Bot${data.signedIn ? '' : '（还没登录）'}。`)
+        ) : (
+          <Profile
+            key={bot.id}
+            bot={bot}
+            running={data.running}
+            tasks={tasks}
+          />
+        )}
+      </div>
     </div>
   )
 }
