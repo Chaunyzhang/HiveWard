@@ -13,7 +13,7 @@ import { scoped, useMachineId } from '@/lib/machine'
 import { useOverview, useResumeRecord } from '@/lib/opc-api'
 import { timelineKindLabel } from '@/lib/opc-format'
 import { cn } from '@/lib/utils'
-import { Page } from '@/components/layout/page'
+import { Page, PageTitle } from '@/components/layout/page'
 import { AgentLogo } from '@/components/opc/agent-logo'
 import { ProjectLogo } from '@/components/opc/project-logo'
 
@@ -57,8 +57,11 @@ function dayLabel(iso: string) {
  */
 export function Timeline({
   scope,
+  preview,
 }: {
   scope?: { businessId: string; projectId?: string }
+  /** 概览里用：只列最近几条，不能往前翻 */
+  preview?: boolean
 }) {
   const machine = useMachineId()
   const { data: overview } = useOverview()
@@ -71,9 +74,9 @@ export function Timeline({
   const projectId = scope ? (scope.projectId ?? '') : pickedProject
   const lines = byIdOf(projects).get(businessId)?.projects ?? []
   const events = useInfiniteQuery({
-    queryKey: ['timeline', machine, businessId, projectId],
+    queryKey: ['timeline', machine, businessId, projectId, !!preview],
     queryFn: async ({ pageParam }) => {
-      const qs = new URLSearchParams({ limit: '50' })
+      const qs = new URLSearchParams({ limit: preview ? '8' : '50' })
       if (businessId) {
         qs.set('businessId', businessId)
       }
@@ -93,7 +96,8 @@ export function Timeline({
       return body
     },
     initialPageParam: '',
-    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    getNextPageParam: (last) =>
+      preview ? undefined : (last.nextCursor ?? undefined),
     refetchInterval: 5_000,
   })
   const items = events.data?.pages.flatMap((p) => p.items) ?? []
@@ -111,23 +115,23 @@ export function Timeline({
     }
   }
 
+  // 概览里已经在大框里了，预览不再套框
+  const box = preview ? '' : 'rounded-xl panel'
   const list = (
     <>
       {events.isError ? (
-        <p className='rounded-xl panel p-6 text-xs text-danger'>
+        <p className={cn(box, 'p-6 text-xs text-danger')}>
           读取失败：{events.error.message}
         </p>
       ) : events.isLoading ? (
-        <p className='rounded-xl panel p-6 text-xs text-muted-foreground'>
-          读取中…
-        </p>
+        <p className={cn(box, 'p-6 text-xs text-muted-foreground')}>读取中…</p>
       ) : items.length === 0 ? (
-        <p className='rounded-xl panel p-6 text-[13px] text-muted-foreground'>
+        <p className={cn(box, 'p-6 text-[13px] text-muted-foreground')}>
           还没有事件。派活、Agent 干完一轮、待办出现和处理，都会记在这里。
         </p>
       ) : (
         days.map((day) => (
-          <section key={day.label} className='rounded-xl panel'>
+          <section key={day.label} className={box}>
             <h2 className='flex h-10 items-center px-4 text-xs text-muted-foreground'>
               {day.label}
             </h2>
@@ -160,45 +164,49 @@ export function Timeline({
       )}
     </>
   )
-  if (scope) {
+  if (scope || preview) {
     return <div className='space-y-5'>{list}</div>
   }
   return (
-    <Page className='mx-auto max-w-4xl space-y-5'>
-      <div className='flex items-center gap-3'>
-        <h1 className='text-xl font-medium'>时间线</h1>
-        <select
-          value={businessId}
-          onChange={(e) => {
-            setBusinessId(e.target.value)
-            setProjectId('')
-          }}
-          className='ms-auto h-8 max-w-56 rounded-md border bg-transparent px-2 text-[13px]'
-        >
-          <option value=''>全部业务</option>
-          {projects.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
-        {lines.length > 0 && (
-          <select
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className='h-8 max-w-44 rounded-md border bg-transparent px-2 text-[13px]'
-          >
-            <option value=''>全部项目</option>
-            {lines.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-
-      {list}
+    <Page className='space-y-5'>
+      <PageTitle
+        title='时间线'
+        subtitle='派活、汇报、待办、开关终端、项目变动，新的在上面'
+        actions={
+          <>
+            <select
+              value={businessId}
+              onChange={(e) => {
+                setBusinessId(e.target.value)
+                setProjectId('')
+              }}
+              className='h-8 max-w-56 rounded-md border bg-transparent px-2 text-[13px]'
+            >
+              <option value=''>全部业务</option>
+              {projects.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            {lines.length > 0 && (
+              <select
+                value={projectId}
+                onChange={(e) => setProjectId(e.target.value)}
+                className='h-8 max-w-44 rounded-md border bg-transparent px-2 text-[13px]'
+              >
+                <option value=''>全部项目</option>
+                {lines.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </>
+        }
+      />
+      <div className='max-w-4xl'>{list}</div>
     </Page>
   )
 }

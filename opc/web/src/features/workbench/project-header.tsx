@@ -33,36 +33,61 @@ import { Input } from '@/components/ui/input'
 import { ProjectLogo } from '@/components/opc/project-logo'
 
 /**
- * 业务 / 项目主页顶部：logo、名字、目录、管理菜单，下面是标签。
- * 看项目时名字前面带上它属于哪块业务（点了回业务主页）。
+ * 主页顶部：标题 + 一排标签。集团总览、业务主页、项目主页都用它，换标签时标题和标签不动、不位移。
+ * 业务 / 项目：logo、名字、目录、管理菜单；看项目时名字前面带上它属于哪块业务（点了回业务主页）。
  * 派活不在这里：点架构图里的 Leader Agent，在它的对话里说。
  */
-export type ProjectTab = 'overview' | 'live' | 'timeline'
+export type HomeTab =
+  | 'overview'
+  | 'topology'
+  | 'tasks'
+  | 'decisions'
+  | 'live'
+  | 'timeline'
 
-const TABS: { value: ProjectTab; label: string }[] = [
-  { value: 'overview', label: '概览' },
-  { value: 'live', label: '现场' },
-  { value: 'timeline', label: '时间线' },
+const LABELS: Record<HomeTab, string> = {
+  overview: '概览',
+  topology: '架构图',
+  tasks: '任务',
+  decisions: '待办',
+  live: '现场',
+  timeline: '时间线',
+}
+
+/** 集团总览只有前三个；待办、时间线在左栏「集团」下面 */
+export const GROUP_TABS: HomeTab[] = ['overview', 'topology', 'tasks']
+export const HOME_TABS: HomeTab[] = [
+  'overview',
+  'topology',
+  'tasks',
+  'decisions',
+  'live',
+  'timeline',
 ]
 
-export function ProjectHeader({
+export function HomeHeader({
   business,
   project,
   tab,
+  counts,
 }: {
-  business: BusinessSummary
+  /** 不传是集团总览 */
+  business?: BusinessSummary
   /** 看的是业务里的某个项目 */
   project?: Project
-  tab: ProjectTab
+  tab: HomeTab
+  /** 标签后面的数字（待办几件、任务几条） */
+  counts?: Partial<Record<HomeTab, number>>
 }) {
-  const path = project?.path ?? business.workspacePath
+  const tabs = business ? HOME_TABS : GROUP_TABS
+  const path = project?.path ?? business?.workspacePath
   return (
     <div className='space-y-4'>
-      <div className='flex items-start gap-3'>
-        <ProjectLogo project={business} size={40} />
+      <div className='flex min-h-10 items-start gap-3'>
+        {business && <ProjectLogo project={business} size={40} />}
         <div className='min-w-0 flex-1'>
           <div className='flex items-center gap-2'>
-            {project && (
+            {business && project && (
               <>
                 <Link
                   to='/b/$businessId'
@@ -75,19 +100,19 @@ export function ProjectHeader({
               </>
             )}
             <h1 className='truncate text-lg font-semibold'>
-              {project?.name ?? business.name}
+              {project?.name ?? business?.name ?? '集团总览'}
             </h1>
-            {!project && business.kind && (
-              <span className='rounded bg-muted px-1.5 text-[11px] leading-5 text-muted-foreground'>
+            {business && !project && business.kind && (
+              <span className='shrink-0 rounded bg-muted px-1.5 text-[11px] leading-5 whitespace-nowrap text-muted-foreground'>
                 {business.kind === 'git' ? 'git' : '文件夹'}
               </span>
             )}
-            {business.missing && (
+            {business?.missing && (
               <span className='rounded bg-danger/10 px-1.5 text-[11px] leading-5 text-danger'>
                 目录不在了
               </span>
             )}
-            {business.status === 'paused' && (
+            {business?.status === 'paused' && (
               <span className='rounded bg-muted px-1.5 text-[11px] leading-5 text-muted-foreground'>
                 已暂停
               </span>
@@ -97,31 +122,57 @@ export function ProjectHeader({
             title={path}
             className='truncate font-mono text-xs text-muted-foreground'
           >
-            {path.replace(/^\/Users\/[^/]+/, '~')}
+            {path
+              ? path.replace(/^\/Users\/[^/]+/, '~')
+              : '所有业务、所有电脑合在一起看'}
           </p>
         </div>
-        {!project && <ProjectMenu project={business} />}
+        {business && !project && <ProjectMenu project={business} />}
       </div>
-      <nav className='flex gap-1 border-b'>
-        {TABS.map((t) => (
-          <Link
-            key={t.value}
-            to='/b/$businessId'
-            params={{ businessId: business.id }}
-            search={{
-              project: project?.id,
-              tab: t.value === 'overview' ? undefined : t.value,
-            }}
-            className={cn(
-              '-mb-px border-b-2 px-3 pb-2 text-sm text-muted-foreground transition-colors hover:text-foreground',
-              t.value === tab
-                ? 'border-foreground text-foreground'
-                : 'border-transparent'
-            )}
-          >
-            {t.label}
-          </Link>
-        ))}
+      <nav className='flex gap-1 overflow-x-auto border-b whitespace-nowrap'>
+        {tabs.map((t) => {
+          const cls = cn(
+            '-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 pb-2 text-sm text-muted-foreground transition-colors hover:text-foreground',
+            t === tab
+              ? 'border-foreground text-foreground'
+              : 'border-transparent'
+          )
+          const count = counts?.[t] ? (
+            <span
+              className={cn(
+                'font-mono text-[11px]',
+                t === 'decisions' ? 'text-attention' : 'text-muted-foreground'
+              )}
+            >
+              {counts[t]}
+            </span>
+          ) : null
+          const search = t === 'overview' ? undefined : t
+          return business ? (
+            <Link
+              key={t}
+              to='/b/$businessId'
+              params={{ businessId: business.id }}
+              search={{ project: project?.id, tab: search }}
+              className={cls}
+            >
+              {LABELS[t]}
+              {count}
+            </Link>
+          ) : (
+            <Link
+              key={t}
+              to='/'
+              search={{
+                tab: t === 'topology' || t === 'tasks' ? t : undefined,
+              }}
+              className={cls}
+            >
+              {LABELS[t]}
+              {count}
+            </Link>
+          )
+        })}
       </nav>
     </div>
   )

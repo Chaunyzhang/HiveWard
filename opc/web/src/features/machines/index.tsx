@@ -45,7 +45,7 @@ export function Machines() {
   const [manual, setManual] = useState(false)
 
   return (
-    <Page className='max-w-5xl'>
+    <Page>
       <OrgHeader
         name={
           lan.data?.organization?.name ??
@@ -166,9 +166,9 @@ function OrgHeader({
   return (
     <div>
       <DropdownMenu>
-        <DropdownMenuTrigger className='-ms-2 flex max-w-full items-center gap-1.5 rounded-lg px-2 py-1 outline-none hover:bg-accent'>
-          <h1 className='truncate text-2xl font-semibold'>{name}</h1>
-          <ChevronDown className='size-5 shrink-0 text-muted-foreground' />
+        <DropdownMenuTrigger className='-ms-2 flex max-w-full items-center gap-1.5 rounded-md px-2 outline-none hover:bg-accent'>
+          <h1 className='truncate text-lg font-semibold'>{name}</h1>
+          <ChevronDown className='size-4 shrink-0 text-muted-foreground' />
         </DropdownMenuTrigger>
         <DropdownMenuContent align='start' className='w-72'>
           <DropdownMenuLabel className='text-xs font-normal text-muted-foreground'>

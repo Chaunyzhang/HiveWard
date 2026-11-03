@@ -251,7 +251,7 @@ function Viewport({
     <div
       ref={box}
       className={cn(
-        'relative h-[560px] overflow-hidden dot-canvas select-none',
+        'relative min-h-[480px] flex-1 overflow-hidden dot-canvas select-none',
         dragging ? 'cursor-grabbing' : 'cursor-grab'
       )}
       style={{

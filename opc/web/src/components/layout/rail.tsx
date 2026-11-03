@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useLocation, useSearch } from '@tanstack/react-router'
 import type { BusinessSummary, Project } from '@shared/api'
 import {
-  ChevronRight,
+  ChevronDown,
   History,
   Inbox,
   Laptop,
@@ -20,12 +20,14 @@ import { ProjectLogo } from '@/components/opc/project-logo'
 import { StatusDot } from '@/components/opc/status-dot'
 import { AddBusinessDialog } from '@/features/businesses/add-business-dialog'
 import { useDecisionsDrawer } from '@/features/decisions/drawer-context'
+import { NewProjectDialog } from '@/features/workbench/projects-panel'
 
 /**
  * 左栏（常驻 232px）分两块：
  * - 集团：总览、待办、时间线、局域网——看整个集团的；
- * - 业务：每块业务能展开看它的项目。点业务看整块业务的主页，点项目看这个项目的主页；
- *   有 Agent 在干活的业务 / 项目亮蓝点，有 Agent 等你确认亮橙点。
+ * - 业务：标题点了整块收起 / 展开，右边 + 加业务。每块业务名后面的小三角展开它的项目，
+ *   项目缩进挂在下面（左边一条线连着）；悬停业务时最右边出 +，新建项目。
+ *   点业务看整块业务的主页，点项目看这个项目的主页；有 Agent 在干活亮蓝点，等你确认亮橙点。
  */
 export function Rail() {
   const pathname = useLocation({ select: (l) => l.pathname })
@@ -33,6 +35,9 @@ export function Rail() {
   const { setOpen } = useDecisionsDrawer()
   const { data } = useOverview()
   const [adding, setAdding] = useState(false)
+  const [newProjectIn, setNewProjectIn] = useState<BusinessSummary | null>(null)
+  const closed = useWorkspace((s) => s.businessesClosed)
+  const toggleBusinesses = useWorkspace((s) => s.toggleBusinesses)
   const pending = data?.decisionsPending ?? 0
   const businesses = (data?.businesses ?? []).filter(
     (b) => b.status !== 'archived'
@@ -80,7 +85,20 @@ export function Rail() {
       />
 
       <Heading>
-        业务
+        <button
+          type='button'
+          aria-expanded={!closed}
+          onClick={toggleBusinesses}
+          className='flex items-center gap-1 hover:text-foreground'
+        >
+          业务
+          <ChevronDown
+            className={cn(
+              'size-3 transition-transform',
+              closed && '-rotate-90'
+            )}
+          />
+        </button>
         <button
           type='button'
           title='加业务'
@@ -92,16 +110,18 @@ export function Rail() {
         </button>
       </Heading>
       <div className='min-h-0 flex-1 overflow-y-auto'>
-        {businesses.map((b) => (
-          <BusinessItem
-            key={b.id}
-            business={b}
-            agents={live.get(b.id) ?? []}
-            current={current === b.id}
-            project={current === b.id ? search.project : undefined}
-          />
-        ))}
-        {data && businesses.length === 0 && (
+        {!closed &&
+          businesses.map((b) => (
+            <BusinessItem
+              key={b.id}
+              business={b}
+              agents={live.get(b.id) ?? []}
+              current={current === b.id}
+              project={current === b.id ? search.project : undefined}
+              onNewProject={() => setNewProjectIn(b)}
+            />
+          ))}
+        {!closed && data && businesses.length === 0 && (
           <button
             type='button'
             onClick={() => setAdding(true)}
@@ -120,6 +140,13 @@ export function Rail() {
         active={pathname.startsWith('/settings')}
       />
       <AddBusinessDialog open={adding} onOpenChange={setAdding} />
+      {newProjectIn && (
+        <NewProjectDialog
+          open
+          business={newProjectIn}
+          onClose={() => setNewProjectIn(null)}
+        />
+      )}
     </nav>
   )
 }
@@ -147,6 +174,7 @@ function BusinessItem({
   agents,
   current,
   project,
+  onNewProject,
 }: {
   business: BusinessSummary
   /** 这块业务里各个 Agent 终端的目录和实况 */
@@ -155,6 +183,7 @@ function BusinessItem({
   current: boolean
   /** 正在看的项目 */
   project?: string
+  onNewProject: () => void
 }) {
   const open = useWorkspace((s) => !!s.expanded[b.id])
   const toggle = useWorkspace((s) => s.toggleExpanded)
@@ -173,72 +202,114 @@ function BusinessItem({
       : waiting > 0
         ? 'waiting'
         : liveDot(agents)
+  const active = current && !project
   return (
     <div>
-      <div className='group relative'>
-        <Item
-          to={`/b/${b.id}`}
-          icon={<ProjectLogo project={b} />}
-          label={b.name}
+      {/* 整行是链接（垫在下面），小三角和 + 是浮在上面的按钮 */}
+      <div
+        className={cn(
+          'group relative mx-2 flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+          active && 'bg-accent text-foreground',
+          (b.status === 'paused' || b.missing) && 'opacity-60'
+        )}
+      >
+        <Link
+          to='/b/$businessId'
+          params={{ businessId: b.id }}
           title={b.missing ? `目录不在了：${b.workspacePath}` : b.workspacePath}
-          active={current && !project}
-          muted={b.status === 'paused' || b.missing}
-          trailing={waiting > 0 ? String(waiting) : undefined}
-          dot={status}
+          aria-label={b.name}
+          className='absolute inset-0 rounded-md'
         />
+        <span className='pointer-events-none flex size-[18px] shrink-0 items-center justify-center'>
+          <ProjectLogo project={b} />
+        </span>
+        <span className='pointer-events-none min-w-0 truncate'>{b.name}</span>
         {lines.length > 0 && (
           <button
             type='button'
             aria-label={open ? '收起项目' : '展开项目'}
             aria-expanded={open}
             onClick={() => toggle(b.id)}
-            className='absolute start-2.5 top-1/2 grid size-[18px] -translate-y-1/2 place-items-center rounded bg-accent text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100'
+            className='relative -ms-1.5 grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground'
           >
-            <ChevronRight
+            <ChevronDown
               className={cn(
-                'size-3.5 transition-transform',
-                open && 'rotate-90'
+                'size-3 transition-transform',
+                !open && '-rotate-90'
               )}
             />
           </button>
         )}
+        {status && (
+          <StatusDot status={status} className='pointer-events-none' />
+        )}
+        {waiting > 0 && (
+          <span className='pointer-events-none ms-auto font-mono text-[11px] text-attention group-hover:hidden'>
+            {waiting}
+          </span>
+        )}
+        <button
+          type='button'
+          title='新建项目'
+          aria-label={`在「${b.name}」里新建项目`}
+          onClick={onNewProject}
+          className='relative ms-auto hidden size-6 shrink-0 place-items-center rounded-md text-muted-foreground group-hover:grid hover:bg-background hover:text-foreground'
+        >
+          <Plus className='size-3.5' />
+        </button>
       </div>
-      {open &&
-        lines.map((p) => (
-          <ProjectItem
-            key={p.id}
-            project={p}
-            status={liveDot(agents.filter((a) => insidePath(a.path, p.path)))}
-            active={current && project === p.id}
-          />
-        ))}
+      {open && lines.length > 0 && (
+        <ul className='ms-[27px] me-2'>
+          {lines.map((p, i) => (
+            <ProjectItem
+              key={p.id}
+              project={p}
+              last={i === lines.length - 1}
+              status={liveDot(agents.filter((a) => insidePath(a.path, p.path)))}
+              active={current && project === p.id}
+            />
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
 
+/** 业务下的一个项目：左边一条竖线把同一块业务的项目连起来，最后一个拐个弯收尾 */
 function ProjectItem({
   project: p,
+  last,
   status,
   active,
 }: {
   project: Project
+  last: boolean
   status?: AgentStatus
   active: boolean
 }) {
   return (
-    <Link
-      to='/b/$businessId'
-      params={{ businessId: p.businessId }}
-      search={{ project: p.id }}
-      title={p.path}
-      className={cn(
-        'mx-2 flex h-7 items-center gap-2 rounded-md ps-[38px] pe-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
-        active && 'bg-accent text-foreground'
-      )}
-    >
-      <span className='min-w-0 truncate'>{p.name}</span>
-      {status && <StatusDot status={status} />}
-    </Link>
+    <li className='relative ps-3'>
+      <span
+        aria-hidden
+        className={cn(
+          'pointer-events-none absolute start-0 top-0 w-2 border-s border-border',
+          last ? 'h-1/2 rounded-es-md border-b' : 'h-full'
+        )}
+      />
+      <Link
+        to='/b/$businessId'
+        params={{ businessId: p.businessId }}
+        search={{ project: p.id }}
+        title={p.path}
+        className={cn(
+          'flex h-7 items-center gap-2 rounded-md px-2 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+          active && 'bg-accent text-foreground'
+        )}
+      >
+        <span className='min-w-0 truncate'>{p.name}</span>
+        {status && <StatusDot status={status} />}
+      </Link>
+    </li>
   )
 }
 

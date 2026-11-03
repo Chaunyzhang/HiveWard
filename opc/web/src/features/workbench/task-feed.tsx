@@ -10,29 +10,23 @@ import {
 } from '@/components/opc/agent-logo'
 import { Markdown } from '@/features/live/chat-view'
 import { ReviewBar, ReviewChip } from './review-bar'
-import {
-  statusIcon,
-  statusOrder,
-  taskGroups,
-  type TaskTab,
-} from './task-status'
+import { statusIcon } from './task-status'
 
-const DONE_PREVIEW = 6
+// 先列这么多，再多点「显示更多」
+const PAGE = 30
 
 /**
- * 任务与汇报：一张列表同时承载"在做什么"和"做完汇报了什么"。
- * 「全部」按 受阻 → 待复核 → 进行中 → 已完成 分组；切到某一栏只列该状态。行是隐藏的框，悬停变灰。
- * 已完成 / 失败的任务直接展示下属的汇报摘要（worker_done），点开看全文和改动文件；待复核的点开后能通过或打回。
+ * 任务与汇报：所有任务按最近动静的时间倒序排成一列，不按状态分组（状态看每行前面的图标）。
+ * 行是隐藏的框，悬停变灰。已完成 / 失败的任务直接展示下属的汇报摘要（worker_done），
+ * 点开看全文和改动文件；待复核的点开后能通过或打回。
  */
 export function TaskFeed({
   tasks,
-  tab,
   showBusiness,
   businessOf,
   machineOf,
 }: {
   tasks: Task[]
-  tab: TaskTab
   showBusiness: boolean
   /** 任务属于哪块业务（几台电脑合在一起时，业务要到任务所在那台电脑上找） */
   businessOf: (t: Task) => BusinessSummary | undefined
@@ -40,69 +34,40 @@ export function TaskFeed({
   machineOf?: (t: Task) => string | undefined
 }) {
   const [openId, setOpenId] = useState<string | null>(null)
-  const [showAllDone, setShowAllDone] = useState(false)
+  const [shown, setShown] = useState(PAGE)
 
-  const groups =
-    tab === 'all' ? taskGroups : taskGroups.filter((g) => g.key === tab)
-  if (!tasks.some((t) => groups.some((g) => g.match(t))))
+  if (tasks.length === 0) {
     return (
       <p className='px-2 py-6 text-[13px] text-muted-foreground'>
-        这一栏没有任务。
+        还没有任务。
       </p>
     )
-
+  }
+  const all = [...tasks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   return (
-    <div className='space-y-5'>
-      {groups.map((g) => {
-        const all = tasks
-          .filter((t) => g.match(t))
-          .sort(
-            (a, b) =>
-              statusOrder[a.status] - statusOrder[b.status] ||
-              b.updatedAt.localeCompare(a.updatedAt)
-          )
-        if (all.length === 0) return null
-        const rows =
-          tab === 'all' && g.key === 'done' && !showAllDone
-            ? all.slice(0, DONE_PREVIEW)
-            : all
-        return (
-          <div key={g.key}>
-            {tab === 'all' && (
-              <h3 className='mb-1 flex items-baseline gap-2 px-2 text-xs text-muted-foreground'>
-                <span className={cn(g.key === 'attention' && 'text-attention')}>
-                  {g.label}
-                </span>
-                <span className='font-mono text-[11px]'>{all.length}</span>
-              </h3>
-            )}
-            <ul>
-              {rows.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  business={showBusiness ? businessOf(task) : undefined}
-                  machine={machineOf?.(task)}
-                  showProject={showBusiness}
-                  open={task.id === openId}
-                  onToggle={() =>
-                    setOpenId(task.id === openId ? null : task.id)
-                  }
-                />
-              ))}
-            </ul>
-            {rows.length < all.length && (
-              <button
-                type='button'
-                onClick={() => setShowAllDone(true)}
-                className='mt-1 px-2 text-xs text-muted-foreground hover:text-foreground'
-              >
-                显示全部 {all.length} 条
-              </button>
-            )}
-          </div>
-        )
-      })}
+    <div>
+      <ul>
+        {all.slice(0, shown).map((task) => (
+          <TaskRow
+            key={task.id}
+            task={task}
+            business={showBusiness ? businessOf(task) : undefined}
+            machine={machineOf?.(task)}
+            showProject={showBusiness}
+            open={task.id === openId}
+            onToggle={() => setOpenId(task.id === openId ? null : task.id)}
+          />
+        ))}
+      </ul>
+      {shown < all.length && (
+        <button
+          type='button'
+          onClick={() => setShown(shown + PAGE)}
+          className='mt-1 px-2 text-xs text-muted-foreground hover:text-foreground'
+        >
+          显示更多（还有 {all.length - shown} 条）
+        </button>
+      )}
     </div>
   )
 }

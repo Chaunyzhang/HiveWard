@@ -1,6 +1,13 @@
 import { useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
-import type { Decision, OrcaTerminal, Project, TopologyNode } from '@shared/api'
+import { Link, useNavigate } from '@tanstack/react-router'
+import type {
+  BusinessSummary,
+  Decision,
+  OrcaTerminal,
+  Project,
+  TopologyNode,
+} from '@shared/api'
 import { Laptop } from 'lucide-react'
 import { MachineScope, useCurrentMachineId, useFleet } from '@/lib/machine'
 import {
@@ -19,20 +26,21 @@ import {
   type MachineGroup,
 } from '@/components/opc/topology-canvas'
 import { DecisionList } from '@/features/decisions/decision-list'
+import { useDecisionsDrawer } from '@/features/decisions/drawer-context'
 import { ProjectTerminals } from '@/features/terminal/project-terminals'
 import { Timeline } from '@/features/timeline'
 import { AgentPane } from './agent-pane'
-import { ProjectHeader, type ProjectTab } from './project-header'
-import { NewProjectButton, ProjectList } from './projects-panel'
+import { HomeHeader, type HomeTab } from './project-header'
+import { ProjectList } from './projects-panel'
 import { TaskFeed } from './task-feed'
-import { countTab, taskTabs, type TaskTab } from './task-status'
+import { awaitingReview } from './task-status'
 
 /**
- * 主页（集团总览 / 业务主页 / 项目主页共用）。概览只放三样东西——
- * Agent 架构图（谁在做什么）· 待办（要我决定的事）· 任务与汇报（做了什么）；业务主页多一块项目列表。
- * 业务、项目主页另有「现场」（这个目录里的终端）和「时间线」两个标签；项目主页的内容都只算这个项目的。
+ * 主页（集团总览 / 业务主页 / 项目主页共用）：顶上标题 + 一排标签，一个标签一样东西——
+ * 概览（几个数字、最近动静、项目）· 架构图 · 任务 · 待办 · 现场（这个目录里的终端）· 时间线。
+ * 集团总览只有概览、架构图、任务（待办、时间线在左栏）。项目主页的内容都只算这个项目的。
  * 每块功能一个大框，大框里不再套小框：小块都是"隐藏的框"，悬停才变灰显出来。
- * 点架构图节点，在中间栏打开这个 Agent（它开的网页在右栏）；「← 返回」回到主页。
+ * 点架构图节点，在中间栏打开这个 Agent（它开的网页在右栏）；标题行的返回箭头回到主页。
  * 集团总览把局域网里配对过、在线的电脑合在一起看：架构图里每台电脑一列，任务和待办标明来自哪台。
  */
 export function Workbench({
@@ -44,13 +52,12 @@ export function Workbench({
   businessId?: string
   /** 看的是业务里的某个项目 */
   projectId?: string
-  /** 业务 / 项目主页的标签 */
-  tab?: ProjectTab
+  /** 主页的标签 */
+  tab?: HomeTab
   /** 现场标签里选中的终端 */
   terminal?: string
 }) {
   const [open, setOpen] = useState<Opened | null>(null)
-  const [taskTab, setTaskTab] = useState<TaskTab>('all')
   const viewing = useCurrentMachineId()
   const allFleet = useFleet()
   // 业务页只看正在看的那台电脑
@@ -178,11 +185,38 @@ export function Workbench({
     )
   }
 
+  const header = (
+    <HomeHeader
+      business={business}
+      project={project}
+      tab={tab}
+      counts={{ tasks: tasks.length, decisions: pending }}
+    />
+  )
+  const taskFeed = (
+    <TaskFeed
+      tasks={tasks.map((x) => x.task)}
+      showBusiness={!businessId}
+      businessOf={(t) =>
+        businessesOf(origin.get(t) ?? 0).find((b) => b.id === t.businessId)
+      }
+      machineOf={multi ? (t) => machineName(origin.get(t) ?? 0) : undefined}
+    />
+  )
+  const errors = (queries: { error: Error | null }[]) =>
+    queries.map((q, i) => (
+      <LoadError
+        key={i}
+        query={q}
+        prefix={multi ? machineName(i) : undefined}
+      />
+    ))
+
+  // 现场、架构图填满窗口剩下的高度
   if (business && tab === 'live') {
-    // 终端填满窗口剩下的高度
     return (
       <Page className='flex h-full flex-col gap-5'>
-        <ProjectHeader business={business} project={project} tab={tab} />
+        {header}
         <ProjectTerminals
           businessId={business.id}
           projectId={project?.id}
@@ -193,137 +227,225 @@ export function Workbench({
     )
   }
 
-  if (business && tab === 'timeline') {
+  if (tab === 'topology') {
     return (
-      <Page className='mx-auto max-w-4xl space-y-5'>
-        <ProjectHeader business={business} project={project} tab={tab} />
-        <Timeline scope={{ businessId: business.id, projectId: project?.id }} />
+      <Page className='flex h-full flex-col gap-5'>
+        {header}
+        <Panel
+          title='Agent 架构'
+          meta={`${multi ? `${fleet.length} 台电脑 · ` : ''}${liveWorkers}/${workers.length} 个下属在线`}
+          actions={<Legend />}
+          className='min-h-0 flex-1'
+        >
+          {errors(topologies)}
+          <TopologyCanvas
+            groups={groups}
+            onOpen={(node, machine) => setOpen({ node, machine })}
+          />
+        </Panel>
       </Page>
     )
   }
 
   return (
     <Page className='space-y-5'>
-      {business && (
-        <ProjectHeader business={business} project={project} tab={tab} />
-      )}
-      <div className='grid gap-5 @5xl:grid-cols-[minmax(0,1fr)_340px]'>
-        <Panel
-          title='Agent 架构'
-          meta={`${multi ? `${fleet.length} 台电脑 · ` : ''}${liveWorkers}/${workers.length} 个下属在线`}
-          actions={<Legend />}
-        >
-          {topologies.map((q, i) => (
-            <LoadError
-              key={i}
-              query={q}
-              prefix={multi ? machineName(i) : undefined}
-            />
-          ))}
-          <TopologyCanvas
-            groups={groups}
-            open={open ?? undefined}
-            onOpen={(node, machine) => setOpen({ node, machine })}
-          />
-        </Panel>
+      {header}
 
-        <div className='flex min-w-0 flex-col gap-5'>
-          {business && !project && (
-            <Panel
-              title='项目'
-              meta={
-                business.projects?.length
-                  ? String(
-                      business.projects.filter((p) => p.status === 'active')
-                        .length
-                    )
-                  : undefined
-              }
-              actions={<NewProjectButton business={business} />}
-            >
-              <ProjectList business={business} onOpen={openProject} />
-            </Panel>
-          )}
-          <Panel
-            title='待办'
-            meta={pending ? `${pending} 件要你决定` : undefined}
-          >
-            <div className='max-h-[560px] overflow-y-auto px-2 pb-3'>
-              {decisionLists.map((q, i) => (
-                <LoadError
-                  key={i}
-                  query={q}
-                  prefix={multi ? machineName(i) : undefined}
+      {tab === 'tasks' ? (
+        <Panel title='任务与汇报' meta='最近有动静的在上面'>
+          <div className='px-2 pb-3'>
+            {errors(taskLists)}
+            {taskFeed}
+          </div>
+        </Panel>
+      ) : business && tab === 'decisions' ? (
+        <Panel
+          title='待办'
+          meta={pending ? `${pending} 件要你决定` : undefined}
+        >
+          <div className='px-2 pb-3'>
+            {errors(decisionLists)}
+            {withPending.length === 0 ? (
+              <MachineScope id={ids[0]}>
+                <DecisionList
+                  businessId={businessId}
+                  match={project ? inProject : undefined}
                 />
-              ))}
-              {withPending.length === 0 ? (
-                <MachineScope id={ids[0]}>
+              </MachineScope>
+            ) : (
+              withPending.map(({ f, i }) => (
+                <MachineScope key={f.id ?? 'self'} id={f.id}>
+                  {multi && (
+                    <h3 className='mt-2 flex items-center gap-1.5 px-2 text-xs text-muted-foreground'>
+                      <Laptop className='size-3' />
+                      {machineName(i)}
+                    </h3>
+                  )}
                   <DecisionList
                     businessId={businessId}
                     match={project ? inProject : undefined}
                   />
                 </MachineScope>
-              ) : (
-                withPending.map(({ f, i }) => (
-                  <MachineScope key={f.id ?? 'self'} id={f.id}>
-                    {multi && (
-                      <h3 className='mt-2 flex items-center gap-1.5 px-2 text-xs text-muted-foreground'>
-                        <Laptop className='size-3' />
-                        {machineName(i)}
-                      </h3>
-                    )}
-                    <DecisionList
-                      businessId={businessId}
-                      match={project ? inProject : undefined}
-                    />
-                  </MachineScope>
-                ))
-              )}
-            </div>
-          </Panel>
-        </div>
-      </div>
-
-      <Panel
-        title='任务与汇报'
-        actions={
-          <Segmented
-            value={taskTab}
-            onChange={setTaskTab}
-            options={taskTabs.map((t) => ({
-              ...t,
-              count: countTab(
-                t.value,
-                tasks.map((x) => x.task)
-              ),
-            }))}
-          />
-        }
-      >
-        <div className='px-2 pb-3'>
-          {taskLists.map((q, i) => (
-            <LoadError
-              key={i}
-              query={q}
-              prefix={multi ? machineName(i) : undefined}
-            />
-          ))}
-          <TaskFeed
-            tasks={tasks.map((x) => x.task)}
-            tab={taskTab}
-            showBusiness={!businessId}
-            businessOf={(t) =>
-              businessesOf(origin.get(t) ?? 0).find(
-                (b) => b.id === t.businessId
-              )
-            }
-            machineOf={
-              multi ? (t) => machineName(origin.get(t) ?? 0) : undefined
-            }
+              ))
+            )}
+          </div>
+        </Panel>
+      ) : business && tab === 'timeline' ? (
+        <div className='max-w-4xl'>
+          <Timeline
+            scope={{ businessId: business.id, projectId: project?.id }}
           />
         </div>
-      </Panel>
+      ) : (
+        <Overview
+          business={business}
+          project={project}
+          stats={[
+            {
+              label: '在线下属',
+              value: `${liveWorkers}/${workers.length}`,
+              tab: 'topology',
+            },
+            {
+              label: '进行中的任务',
+              value: tasks.filter(({ task }) =>
+                ['dispatched', 'ready', 'pending'].includes(task.status)
+              ).length,
+              tab: 'tasks',
+            },
+            {
+              label: '待复核',
+              value: tasks.filter(({ task }) => awaitingReview(task)).length,
+              tab: 'tasks',
+            },
+            {
+              label: '要你决定',
+              value: pending,
+              tab: 'decisions',
+              attention: pending > 0,
+            },
+          ]}
+          projects={
+            business && !project ? (
+              <ProjectList business={business} onOpen={openProject} />
+            ) : undefined
+          }
+        />
+      )}
     </Page>
+  )
+}
+
+/**
+ * 概览：几个数字（点了跳到对应标签）+ 最近动静；业务主页旁边列出它的项目。
+ * 集团总览的「要你决定」打开待办抽屉（集团没有待办标签）。
+ */
+function Overview({
+  business,
+  project,
+  stats,
+  projects,
+}: {
+  business?: BusinessSummary
+  project?: Project
+  stats: {
+    label: string
+    value: number | string
+    tab: HomeTab
+    attention?: boolean
+  }[]
+  projects?: React.ReactNode
+}) {
+  const navigate = useNavigate()
+  const drawer = useDecisionsDrawer()
+  const go = (tab: HomeTab) => {
+    if (!business) {
+      if (tab === 'decisions') {
+        drawer.setOpen(true)
+        return
+      }
+      void navigate({
+        to: '/',
+        search: {
+          tab: tab === 'topology' || tab === 'tasks' ? tab : undefined,
+        },
+      })
+      return
+    }
+    void navigate({
+      to: '/b/$businessId',
+      params: { businessId: business.id },
+      search: { project: project?.id, tab },
+    })
+  }
+  return (
+    <div className='space-y-5'>
+      <div className='grid grid-cols-2 gap-3 @3xl:grid-cols-4'>
+        {stats.map((s) => (
+          <button
+            key={s.label}
+            type='button'
+            onClick={() => go(s.tab)}
+            className='rounded-xl panel px-4 py-3 text-start transition-colors hover:bg-accent/50'
+          >
+            <span className='block text-xs text-muted-foreground'>
+              {s.label}
+            </span>
+            <span
+              className={cn(
+                'mt-1 block font-mono text-xl',
+                s.attention && 'text-attention'
+              )}
+            >
+              {s.value}
+            </span>
+          </button>
+        ))}
+      </div>
+      <div
+        className={cn(
+          'grid gap-5',
+          projects && '@5xl:grid-cols-[minmax(0,1fr)_340px]'
+        )}
+      >
+        <Panel
+          title='最近动静'
+          actions={
+            business ? (
+              <Link
+                to='/b/$businessId'
+                params={{ businessId: business.id }}
+                search={{ project: project?.id, tab: 'timeline' }}
+                className='text-xs text-muted-foreground hover:text-foreground'
+              >
+                全部 →
+              </Link>
+            ) : (
+              <Link
+                to='/timeline'
+                className='text-xs text-muted-foreground hover:text-foreground'
+              >
+                全部 →
+              </Link>
+            )
+          }
+        >
+          <Timeline
+            scope={
+              business
+                ? { businessId: business.id, projectId: project?.id }
+                : undefined
+            }
+            preview
+          />
+        </Panel>
+        {projects && (
+          <Panel title='项目'>
+            {projects}
+          </Panel>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -464,38 +586,6 @@ function Panel({
       </header>
       {children}
     </section>
-  )
-}
-
-/** 分段切换：几个状态就几栏，当前栏是实心的。 */
-function Segmented<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T
-  onChange: (v: T) => void
-  options: { value: T; label: string; count: number }[]
-}) {
-  return (
-    <div className='flex rounded-md bg-muted p-0.5'>
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type='button'
-          onClick={() => onChange(o.value)}
-          className={cn(
-            'flex h-6 items-center gap-1.5 rounded-[5px] px-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground',
-            o.value === value && 'bg-panel text-foreground shadow-sm'
-          )}
-        >
-          {o.label}
-          <span className='font-mono text-[10px] text-muted-foreground'>
-            {o.count}
-          </span>
-        </button>
-      ))}
-    </div>
   )
 }
 

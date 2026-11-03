@@ -78,7 +78,7 @@ export function SidePanel() {
   return (
     <aside
       style={{ width }}
-      className='relative flex shrink-0 flex-col border-s bg-background'
+      className='relative flex max-w-[45%] shrink-0 flex-col border-s bg-background'
     >
       <ResizeHandle />
       <header className='flex h-10 shrink-0 items-center gap-1 border-b px-2'>

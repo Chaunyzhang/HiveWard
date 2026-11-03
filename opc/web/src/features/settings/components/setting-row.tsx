@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils'
 
 /** 设置页的大标题（一页一个），下面是一行行设置 */
 export function SettingsTitle({ children }: { children: React.ReactNode }) {
-  return <h1 className='mb-4 text-xl font-semibold'>{children}</h1>
+  return <h1 className='mb-4 text-lg font-semibold'>{children}</h1>
 }
 
 /** 一页里再分组时的小标题 */

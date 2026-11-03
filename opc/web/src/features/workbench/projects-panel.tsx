@@ -6,7 +6,6 @@ import {
   Ellipsis,
   LoaderCircle,
   Pencil,
-  Plus,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { exitBlockReason } from '@/lib/exit-region'
@@ -231,29 +230,8 @@ function RenameDialog({
 }
 
 /** 面板右上角的「新建项目」 */
-export function NewProjectButton({ business }: { business: BusinessSummary }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <button
-        type='button'
-        onClick={() => setOpen(true)}
-        className='flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground'
-      >
-        <Plus className='size-3.5' />
-        新建项目
-      </button>
-      <NewProjectDialog
-        key={String(open)}
-        open={open}
-        business={business}
-        onClose={() => setOpen(false)}
-      />
-    </>
-  )
-}
-
-function NewProjectDialog({
+/** 新建项目：左栏业务名后面悬停出来的 + 打开 */
+export function NewProjectDialog({
   open,
   business,
   onClose,

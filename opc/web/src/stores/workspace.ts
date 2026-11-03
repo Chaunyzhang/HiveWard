@@ -12,6 +12,9 @@ export type SideTab = 'files' | 'browser'
 type WorkspaceState = {
   expanded: Record<string, boolean>
   toggleExpanded: (businessId: string, open?: boolean) => void
+  /** 左栏「业务」整块收起 */
+  businessesClosed: boolean
+  toggleBusinesses: () => void
   sideOpen: boolean
   setSideOpen: (open: boolean) => void
   sideTab: SideTab
@@ -31,6 +34,9 @@ export const useWorkspace = create<WorkspaceState>()(
         set((s) => ({
           expanded: { ...s.expanded, [id]: open ?? !s.expanded[id] },
         })),
+      businessesClosed: false,
+      toggleBusinesses: () =>
+        set((s) => ({ businessesClosed: !s.businessesClosed })),
       sideOpen: true,
       setSideOpen: (sideOpen) => set({ sideOpen }),
       sideTab: 'files',
@@ -45,6 +51,7 @@ export const useWorkspace = create<WorkspaceState>()(
       name: 'hiveward.workspace',
       partialize: (s) => ({
         expanded: s.expanded,
+        businessesClosed: s.businessesClosed,
         sideOpen: s.sideOpen,
         sideTab: s.sideTab,
         sideWidth: s.sideWidth,
