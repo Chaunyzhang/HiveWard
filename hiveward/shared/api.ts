@@ -1087,6 +1087,20 @@ export type MachinesResponse = {
   /** 组织改名尚未同步到的成员数量 */
   pendingOrganizationUpdates: number
   organizationNotices: MachineOrganizationNotice[]
+  /** 本机局域网发现的状态；没开局域网时为 null */
+  discovery?: MachineDiscoveryStatus | null
+}
+
+/** 发现端口占没占上、上一轮广播发出去几个包。端口没占上或有包被系统拒发时界面提示（Mac 多半是没给「本地网络」权限） */
+export type MachineDiscoveryStatus = {
+  listening: boolean
+  bindError: string | null
+  lastAnnounceAt: IsoTime | null
+  delivered: number
+  failed: number
+  /** 上一轮有包被系统拒发（不是网络不通）：Mac 没给「本地网络」权限、防火墙拦了 */
+  blocked: boolean
+  sendError: string | null
 }
 
 /** POST /api/machines/invite → MachineInvitation。machineId（发现列表）或 address（手动 host:port）。

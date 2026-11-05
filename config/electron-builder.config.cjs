@@ -60,6 +60,7 @@ const {
 } = require('./scripts/packaged-hivewardd-template.cjs')
 const { verifySkillsCliRuntime } = require('./scripts/verify-skills-cli-runtime.cjs')
 const { scrubBuildMachinePaths } = require('./scripts/scrub-build-machine-paths.cjs')
+const { giveMacExecutableUniqueUuid } = require('./scripts/mac-unique-executable-uuid.cjs')
 const { assertNotDarkBuild } = require('./dark-build-switches.cjs')
 const { verifyStaticAppImagePackage } = require('./scripts/static-appimage-package-contract.cjs')
 const {
@@ -397,6 +398,17 @@ module.exports = {
       writeFileSync(join(resourcesDir, 'package-type'), 'AppImage')
     }
     if (context.electronPlatformName === 'darwin') {
+      // 「本地网络」权限按主程序 UUID 认：不换的话和开发版、别的 Electron 程序串在一起
+      giveMacExecutableUniqueUuid(
+        join(
+          context.appOutDir,
+          `${context.packager.appInfo.productFilename}.app`,
+          'Contents',
+          'MacOS',
+          context.packager.appInfo.productFilename
+        ),
+        context.packager.appInfo.id
+      )
       applyMacHelperFolderUsageDescriptions(
         join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`),
         context.packager.appInfo.productFilename

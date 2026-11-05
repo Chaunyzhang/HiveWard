@@ -441,7 +441,7 @@ export function createLan({
           snapshot.invitations.find((i) => i.machine.id === m.id && i.status === 'pending')
             ?.direction ?? null
       }))
-      send(res, 200, { ...snapshot, machines })
+      send(res, 200, { ...snapshot, machines, discovery: stopUdp.status?.() ?? null })
       return true
     }
     if (req.method !== 'POST') {

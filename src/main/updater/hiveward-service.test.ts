@@ -71,8 +71,12 @@ it('并发检查合并，网络失败不会变成已是最新', async () => {
   const updater = await import('../updater')
   fixtures.fetch.mockRejectedValue(new Error('offline'))
   await Promise.all([updater.checkForUpdatesFromMenu(), updater.checkForUpdatesFromMenu()])
-  expect(fixtures.fetch).toHaveBeenCalledTimes(1)
-  expect(updater.getUpdateStatus()).toMatchObject({ state: 'error', message: 'offline' })
+  // 一次检查：先问接口，连不上再问 github.com 的 latest 跳转
+  expect(fixtures.fetch).toHaveBeenCalledTimes(2)
+  expect(updater.getUpdateStatus()).toMatchObject({
+    state: 'error',
+    message: expect.stringContaining('连不上 GitHub（offline）')
+  })
 })
 
 it('Windows 仅从 HiveWard 下载 NSIS，安装必须确认当前版本和 Agent 数量', async () => {

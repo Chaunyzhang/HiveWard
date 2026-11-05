@@ -227,3 +227,50 @@ test('UDP accepts machine organizations and legacy packets but rejects invalid p
     assert.equal(found.has(id), false, id)
   }
 })
+
+test('broadcasts on every real LAN subnet, skipping loopback, link-local and point-to-point', async () => {
+  const { lanBroadcastAddresses } = await import('./lan-discovery.mjs')
+  const entry = (address, netmask, extra = {}) => ({
+    family: 'IPv4',
+    address,
+    netmask,
+    internal: false,
+    ...extra
+  })
+  assert.deepEqual(
+    lanBroadcastAddresses({
+      lo0: [entry('127.0.0.1', '255.0.0.0', { internal: true })],
+      en0: [
+        entry('192.168.3.80', '255.255.255.0'),
+        { family: 'IPv6', address: 'fe80::1', netmask: 'ffff:ffff:ffff:ffff::', internal: false }
+      ],
+      wifi: [entry('10.1.2.3', '255.255.240.0')],
+      vEthernet: [entry('169.254.10.2', '255.255.0.0')],
+      utun: [entry('198.18.0.1', '255.255.255.255')],
+      clashTun: [entry('198.19.0.2', '255.255.255.252')],
+      dup: [entry('192.168.3.81', '255.255.255.0')]
+    }),
+    ['192.168.3.255', '10.1.15.255']
+  )
+})
+
+test('reports how the last announce round went', async (t) => {
+  const discoveryPort = await availablePort()
+  const stop = discoverUdp(
+    { id: 'status-test', name: 'Status', platform: 'darwin' },
+    9,
+    () => {},
+    () => {},
+    {
+      discoveryPort,
+      interval: 50
+    }
+  )
+  t.after(stop)
+  await until(() => stop.status().lastAnnounceAt)
+  const status = stop.status()
+  assert.equal(status.listening, true)
+  assert.equal(status.bindError, null)
+  assert.ok(status.delivered + status.failed >= 2)
+  assert.equal(typeof status.blocked, 'boolean')
+})

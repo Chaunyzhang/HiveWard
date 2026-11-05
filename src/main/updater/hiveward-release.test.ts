@@ -69,6 +69,51 @@ describe('HiveWard 正式版更新', () => {
       findHiveWardRelease('1.0.0', vi.fn().mockRejectedValue(new Error('offline')))
     ).rejects.toThrow('offline')
   })
+  const redirect = (location: string) => new Response(null, { status: 302, headers: { location } })
+  it('接口连不上改问 github.com 的 latest 跳转', async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('net::ERR_CONNECTION_CLOSED'))
+      .mockResolvedValueOnce(
+        redirect('https://github.com/Chaunyzhang/HiveWard/releases/tag/v1.1.2')
+      )
+    expect(await findHiveWardRelease('1.1.1', fetch)).toEqual({
+      version: '1.1.2',
+      notes: '',
+      url: 'https://github.com/Chaunyzhang/HiveWard/releases/tag/v1.1.2',
+      manifestUrl: 'https://github.com/Chaunyzhang/HiveWard/releases/download/v1.1.2/latest-mac.yml'
+    })
+    expect(fetch.mock.calls[1][0]).toBe('https://github.com/Chaunyzhang/HiveWard/releases/latest')
+  })
+  it('接口被限流也改问 github.com；已是最新时不虚构新版', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+      .mockResolvedValueOnce(
+        redirect('https://github.com/Chaunyzhang/HiveWard/releases/tag/v1.1.1')
+      )
+    expect(await findHiveWardRelease('1.1.1', fetch)).toBeNull()
+  })
+  it('还没有正式版时 latest 跳到发布列表，不算新版', async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(redirect('https://github.com/Chaunyzhang/HiveWard/releases'))
+    expect(await findHiveWardRelease('1.1.1', fetch)).toBeNull()
+  })
+  it('latest 跳到别的网站时拒绝', async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(redirect('https://example.invalid/releases/tag/v9.0.0'))
+    await expect(findHiveWardRelease('1.1.1', fetch)).rejects.toThrow('未授权地址')
+  })
+  it('两条路都不通时提示开代理', async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error('net::ERR_CONNECTION_CLOSED'))
+    await expect(findHiveWardRelease('1.1.1', fetch)).rejects.toThrow(
+      '连不上 GitHub（net::ERR_CONNECTION_CLOSED）。国内网络请开代理'
+    )
+  })
   it('拒绝清单版本不符及错误架构，不接受清单里的任意网址', async () => {
     const release = (await findHiveWardRelease(
       '1.0.0',

@@ -1,5 +1,9 @@
 import { useState } from 'react'
-import type { Machine, MachineInvitation } from '@shared/api'
+import type {
+  Machine,
+  MachineDiscoveryStatus,
+  MachineInvitation,
+} from '@shared/api'
 import { Check, ChevronDown, LoaderCircle, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { tr } from '@/lib/i18n'
@@ -65,6 +69,10 @@ export function Machines() {
           {tr('正在搜索')}
         </span>
       </header>
+      <DiscoveryWarning
+        status={lan.data?.discovery}
+        platform={self?.platform}
+      />
       {lan.isError ? (
         <p className='text-xs text-danger'>
           {tr('读取失败：{0}', [lan.error.message])}
@@ -108,6 +116,42 @@ export function Machines() {
 
       <ManualInviteDialog open={manual} onClose={() => setManual(false)} />
     </Page>
+  )
+}
+
+/** 发现发不出去、端口没占上时说清楚为什么搜不到、去哪儿打开 */
+function DiscoveryWarning({
+  status,
+  platform,
+}: {
+  status: MachineDiscoveryStatus | null | undefined
+  platform: Machine['platform']
+}) {
+  if (!status) {
+    return null
+  }
+  if (status.listening && !status.blocked) {
+    return null
+  }
+  const reason = status.listening
+    ? tr('本机发不出局域网广播（{0}）', [status.sendError ?? '?'])
+    : tr('局域网发现端口没占上（{0}）', [status.bindError ?? '?'])
+  const fix =
+    platform === 'darwin'
+      ? tr(
+          '打开「系统设置 → 隐私与安全性 → 本地网络」，把 HiveWard 打开，再重开 HiveWard。'
+        )
+      : platform === 'win32'
+        ? tr(
+            '在「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里勾上 HiveWard 的「专用」网络，再重开 HiveWard。'
+          )
+        : tr('检查防火墙是否放行 HiveWard，再重开 HiveWard。')
+  return (
+    <p className='mb-3 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger'>
+      {reason}
+      {tr('，别的电脑搜不到这台，这台也搜不到别的。')}
+      {fix}
+    </p>
   )
 }
 

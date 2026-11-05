@@ -1022,4 +1022,16 @@ export const en: Record<string, Phrase> = {
   额度恢复后自动继续: 'Continue after quota resets',
   '下属因为额度用完停下后，到了恢复时间自动叫它接着做；出错时丢掉的消息一并重发。':
     'When a worker stops because it ran out of quota, tell it to continue once the quota resets, and resend any messages it dropped.',
+  '本机发不出局域网广播（{0}）':
+    'This computer cannot send LAN broadcasts ({0})',
+  '局域网发现端口没占上（{0}）':
+    'The LAN discovery port could not be opened ({0})',
+  '，别的电脑搜不到这台，这台也搜不到别的。':
+    ', so other computers cannot find this one and this one cannot find them. ',
+  '打开「系统设置 → 隐私与安全性 → 本地网络」，把 HiveWard 打开，再重开 HiveWard。':
+    'Open System Settings → Privacy & Security → Local Network, turn on HiveWard, then restart HiveWard.',
+  '在「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里勾上 HiveWard 的「专用」网络，再重开 HiveWard。':
+    'In Windows Security → Firewall & network protection → Allow an app through firewall, check Private for HiveWard, then restart HiveWard.',
+  '检查防火墙是否放行 HiveWard，再重开 HiveWard。':
+    'Check that the firewall allows HiveWard, then restart HiveWard.',
 }

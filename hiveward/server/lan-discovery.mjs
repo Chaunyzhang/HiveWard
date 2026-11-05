@@ -37,6 +37,37 @@ function currentOrganization(source) {
   }
 }
 
+const ipv4Number = (address) =>
+  address.split('.').reduce((value, part) => ((value << 8) | Number(part)) >>> 0, 0)
+const ipv4Text = (value) => [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join('.')
+
+/** 每块真实网卡所在网段的广播地址。全网广播和组播走系统默认网卡，
+ * 开着代理 TUN、Hyper-V / WSL 虚拟网卡时默认网卡常是虚拟的，包到不了局域网 */
+export function lanBroadcastAddresses(interfaces = networkInterfaces()) {
+  const targets = new Set()
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries ?? []) {
+      if (
+        entry.family !== 'IPv4' ||
+        entry.internal ||
+        entry.address.startsWith('169.254.') ||
+        // 代理软件 TUN 的 fake-ip 网段（198.18.0.0/15），发进去只会进代理隧道
+        /^198\.1[89]\./.test(entry.address) ||
+        !entry.netmask ||
+        entry.netmask === '255.255.255.255'
+      ) {
+        continue
+      }
+      const mask = ipv4Number(entry.netmask)
+      targets.add(ipv4Text((ipv4Number(entry.address) & mask) | (~mask >>> 0)))
+    }
+  }
+  return [...targets]
+}
+
+// 系统不让发（Mac 没给「本地网络」权限时往局域网发是 EHOSTUNREACH），不是网络临时不通
+const BLOCKED_SEND_ERRORS = new Set(['EHOSTUNREACH', 'EPERM', 'EACCES'])
+
 export function discoverUdp(
   machine,
   port,
@@ -55,6 +86,8 @@ export function discoverUdp(
   const seen = new Map()
   let closed = false
   let ready = false
+  let bindError = null
+  let lastRound = null
   const announce = () => {
     if (!ready) {
       return
@@ -73,8 +106,28 @@ export function discoverUdp(
         ...(organizationSummary ? { organization: organizationSummary } : {})
       })
     )
-    socket.send(packet, discoveryPort, group, () => {})
-    socket.send(packet, discoveryPort, '255.255.255.255', () => {})
+    const targets = [group, '255.255.255.255', ...lanBroadcastAddresses()]
+    const round = {
+      at: new Date().toISOString(),
+      delivered: 0,
+      failed: 0,
+      blocked: 0,
+      error: null
+    }
+    for (const target of targets) {
+      socket.send(packet, discoveryPort, target, (sendError) => {
+        if (sendError) {
+          round.failed += 1
+          round.error = sendError.code ?? sendError.message
+          if (BLOCKED_SEND_ERRORS.has(sendError.code)) {
+            round.blocked += 1
+          }
+        } else {
+          round.delivered += 1
+        }
+        lastRound = round
+      })
+    }
     for (const [id, time] of seen) {
       if (Date.now() - time > ttl) {
         seen.delete(id)
@@ -82,7 +135,11 @@ export function discoverUdp(
       }
     }
   }
-  socket.on('error', () => {})
+  socket.on('error', (socketError) => {
+    if (!ready) {
+      bindError = socketError.code ?? socketError.message
+    }
+  })
   socket.on('message', (buffer, info) => {
     if (buffer.length > 2048) {
       return
@@ -145,7 +202,7 @@ export function discoverUdp(
   const timer = setInterval(announce, interval)
   timer.unref()
   socket.unref()
-  return () => {
+  const stop = () => {
     if (closed) {
       return
     }
@@ -156,6 +213,17 @@ export function discoverUdp(
       socket.close()
     } catch {}
   }
+  /** 发现自己的状态：端口没占上、或者上一轮一个包都没发出去，界面要提示 */
+  stop.status = () => ({
+    listening: ready,
+    bindError,
+    lastAnnounceAt: lastRound?.at ?? null,
+    delivered: lastRound?.delivered ?? 0,
+    failed: lastRound?.failed ?? 0,
+    blocked: (lastRound?.blocked ?? 0) > 0,
+    sendError: lastRound?.error ?? null
+  })
+  return stop
 }
 
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/
