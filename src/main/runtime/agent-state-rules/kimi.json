@@ -1,0 +1,82 @@
+{
+  "id": "kimi",
+  "engineVersion": 1,
+  "profile": {
+    "screenSource": "trusted"
+  },
+  "anchors": [],
+  "rules": [
+    {
+      "id": "python_composer_ready",
+      "why": "kimi-cli 1.50 redraws every second even at rest, so like Hermes it cannot require output quiet. Match the complete empty input and footer; modal delegates omit the input separator, drafts add a row, and running turns show spinners or Thinking.",
+      "priority": 500,
+      "when": {
+        "region": "screen",
+        "rows": [
+          {
+            "regex": "^(?:── input ─{3,}|╌╌ input · plan ╌{3,})$"
+          },
+          {
+            "regex": "^[─╌]{8,}$"
+          },
+          {
+            "regex": "^(?:yolo  )?(?:afk  )?(?:plan  )?agent(?: |$)"
+          },
+          {
+            "regex": "^context: [0-9.]+%",
+            "ignoreCase": true
+          }
+        ],
+        "noneAbove": {
+          "regex": "[⠁-⣿]|🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘|^Thinking(?: |$)",
+          "ignoreCase": true
+        }
+      },
+      "answer": {
+        "state": "idle",
+        "strength": "strong",
+        "requiresQuiet": false
+      }
+    },
+    {
+      "id": "node_composer_ready",
+      "why": "Kimi Code 2.3.1 renders an empty bordered > composer above its model/path and context footer. Trust, migration, approval and picker screens replace the composer. Require quiet as the composer can remain visible during a turn.",
+      "priority": 500,
+      "when": {
+        "region": "screen",
+        "rows": [
+          {
+            "regex": "^╭─{8,}╮$"
+          },
+          {
+            "regex": "^│ > +│$"
+          },
+          {
+            "regex": "^╰─{8,}╯$"
+          }
+        ],
+        "endsWithinBottom": 3,
+        "noneAbove": {
+          "regex": "[⠁-⣿]"
+        }
+      },
+      "answer": {
+        "state": "idle",
+        "strength": "strong",
+        "requiresQuiet": true,
+        "withoutClock": "skip"
+      }
+    },
+    {
+      "id": "composer_not_shown",
+      "why": "A readable screen without the empty composer may be starting, busy or awaiting confirmation; a bare title or quiet process cannot establish readiness.",
+      "priority": 100,
+      "when": {
+        "region": "screen"
+      },
+      "answer": {
+        "state": "hold"
+      }
+    }
+  ]
+}

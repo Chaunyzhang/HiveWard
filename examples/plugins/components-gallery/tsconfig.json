@@ -1,0 +1,4 @@
+{
+  "extends": "./.hiveward/types/tsconfig.json",
+  "include": ["src"]
+}

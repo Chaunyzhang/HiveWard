@@ -1,0 +1,192 @@
+// 仅保留本地诊断与日志；沿用既有隐私环境变量，不包含上传。
+
+import {
+  createLocalFileSink,
+  DEFAULT_MAX_FILES,
+  getRotatedFamilySize,
+  type LocalFileSink
+} from './local-file-sink'
+import { getDaemonLogFilePath, getTraceFilePath } from './logs-directory'
+import { DAEMON_LOG_MAX_FILES } from '../daemon/daemon-file-log'
+import {
+  collectBundle as _collectBundle,
+  type CollectBundleOptions,
+  type CollectedBundle
+} from './bundle'
+import { setActiveSink, startSpan } from './tracer'
+import { setSecurePathHardeningReporter } from '../../shared/secure-path-hardening-report'
+import { withTimeout } from '../../shared/promise-timeout-fallback'
+
+const CI_ENV_VARS = [
+  'CI',
+  'GITHUB_ACTIONS',
+  'GITLAB_CI',
+  'CIRCLECI',
+  'TRAVIS',
+  'BUILDKITE',
+  'JENKINS_URL',
+  'TEAMCITY_VERSION'
+] as const
+
+export type ObservabilityConsent = {
+  readonly localFileEnabled: boolean
+  readonly bundleEnabled: boolean
+  readonly disabledReason?:
+    | 'do_not_track'
+    | 'hiveward_telemetry_disabled'
+    | 'hiveward_diagnostics_disabled'
+    | 'ci'
+}
+
+function envOn(name: string): boolean {
+  const v = process.env[name]
+  if (!v) {
+    return false
+  }
+  const norm = v.trim().toLowerCase()
+  return norm === '1' || norm === 'true'
+}
+
+function inCI(): boolean {
+  return CI_ENV_VARS.some((v) => process.env[v] !== undefined && process.env[v] !== '')
+}
+
+export function resolveObservabilityConsent(): ObservabilityConsent {
+  const dnt = envOn('DO_NOT_TRACK')
+  const Hivewarddisabled = envOn('HIVEWARD_TELEMETRY_DISABLED')
+  const diagnosticsDisabled = envOn('HIVEWARD_DIAGNOSTICS_DISABLED')
+  const ci = inCI()
+
+  if (ci) {
+    return {
+      localFileEnabled: false,
+      bundleEnabled: false,
+      disabledReason: 'ci'
+    }
+  }
+  if (diagnosticsDisabled) {
+    return {
+      localFileEnabled: false,
+      bundleEnabled: false,
+      disabledReason: 'hiveward_diagnostics_disabled'
+    }
+  }
+  if (dnt || Hivewarddisabled) {
+    // 沿用资料打包限制，本地日志仍保留。
+    return {
+      localFileEnabled: true,
+      bundleEnabled: false,
+      disabledReason: dnt ? 'do_not_track' : 'hiveward_telemetry_disabled'
+    }
+  }
+
+  return {
+    localFileEnabled: true,
+    bundleEnabled: true
+  }
+}
+
+export { getTraceFilePath } from './logs-directory'
+
+const SHUTDOWN_FLUSH_TIMEOUT_MS = 500
+
+let sink: LocalFileSink | null = null
+let consent: ObservabilityConsent | null = null
+
+function installLocalSink(filePath: string): void {
+  try {
+    const localSink = createLocalFileSink({ filePath })
+    sink = localSink
+    setActiveSink(localSink)
+  } catch (error) {
+    // Optional diagnostics must not prevent app or host startup.
+    console.warn(`[observability] tracing is off: cannot open ${filePath}`, error)
+  }
+}
+
+/** Override for another process’s trace; desktop traces remain the bundle default. */
+export function initObservability(options?: { traceFilePath?: string }): ObservabilityConsent {
+  const c = resolveObservabilityConsent()
+  consent = c
+  if (!c.localFileEnabled) {
+    return c
+  }
+  installLocalSink(options?.traceFilePath ?? getTraceFilePath())
+  installSecurePathHardeningReporter()
+  return c
+}
+
+// Windows GUI builds have no console, so trace ACL hardening failures here.
+// Record recovery too, so diagnostics show both entering and leaving degraded state.
+function installSecurePathHardeningReporter(): void {
+  setSecurePathHardeningReporter((entry) => {
+    const span = startSpan('secure-path.windows-acl', {
+      attributes: { targetPath: entry.targetPath, stage: entry.stage, detail: entry.detail }
+    })
+    if (entry.stage === 'recovered') {
+      span.end()
+      console.info('[secure-path.windows-acl] path hardening recovered', entry)
+      return
+    }
+    span.fail(entry.detail)
+    console.warn('[secure-path.windows-acl] failed to restrict path', entry)
+  })
+}
+
+/** For exits that bypass shutdown. */
+export function closeObservabilityOnExit(): void {
+  sink?.close()
+}
+
+export async function shutdownObservability(): Promise<void> {
+  setSecurePathHardeningReporter(null)
+  // Stop new tracer writes before closing and flushing the sink.
+  setActiveSink(null)
+  if (sink) {
+    // Keep an orderly quit's in-flight batch; a stalled disk costs quit this long, never a hang.
+    await withTimeout(sink.flushAsync(), SHUTDOWN_FLUSH_TIMEOUT_MS, undefined)
+    sink?.close()
+    sink = null
+  }
+  consent = null
+}
+
+export type DiagnosticsStatus = {
+  readonly localFileEnabled: boolean
+  readonly bundleEnabled: boolean
+  readonly traceFilePath: string
+  readonly traceFamilySize: number
+  readonly disabledReason?: ObservabilityConsent['disabledReason']
+}
+
+export function getDiagnosticsStatus(): DiagnosticsStatus {
+  const c = consent ?? resolveObservabilityConsent()
+  const traceFilePath = getTraceFilePath()
+  const traceFamilySize = c.localFileEnabled ? getRotatedFamilySize(traceFilePath) : 0
+  return {
+    localFileEnabled: c.localFileEnabled,
+    bundleEnabled: c.bundleEnabled,
+    traceFilePath,
+    traceFamilySize,
+    ...(c.disabledReason ? { disabledReason: c.disabledReason } : {})
+  }
+}
+
+/** Never include install_id: bundles use independent submission IDs. */
+export async function collectDiagnosticBundle(
+  meta: Pick<
+    CollectBundleOptions,
+    'appVersion' | 'platform' | 'arch' | 'osRelease' | 'hivewardChannel' | 'lookbackMinutes'
+  >
+): Promise<CollectedBundle> {
+  // Flush before collection so the bundle includes the user’s latest action.
+  await sink?.flushAsync()
+  return _collectBundle({
+    traceFilePath: getTraceFilePath(),
+    maxFiles: DEFAULT_MAX_FILES,
+    // The daemon writes a separate file; collection does not glob the directory.
+    daemonLogFilePath: getDaemonLogFilePath(),
+    daemonLogMaxFiles: DAEMON_LOG_MAX_FILES,
+    ...meta
+  })
+}

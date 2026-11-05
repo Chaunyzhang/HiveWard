@@ -1,0 +1,8 @@
+{
+  "ios": {
+    "NSCameraUsageDescription": "Разрешите HiveWard использовать камеру для сканирования QR-кодов.",
+    "NSLocalNetworkUsageDescription": "HiveWard подключается к настольному приложению в вашей локальной сети.",
+    "NSMicrophoneUsageDescription": "Разрешите HiveWard использовать микрофон для диктовки. Запись отправляется на связанный компьютер для расшифровки.",
+    "NSPhotoLibraryUsageDescription": "Разрешите HiveWard прикреплять фотографии из медиатеки к сессии терминала на связанном компьютере."
+  }
+}

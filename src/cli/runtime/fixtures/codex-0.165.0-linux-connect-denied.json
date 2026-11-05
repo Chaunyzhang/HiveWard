@@ -1,0 +1,36 @@
+{
+  "provenance": {
+    "capture": "QA3286, real rendered remote HiveWard terminal, Linux arm64 glibc",
+    "codexVersion": "0.165.0",
+    "command": ["hiveward", "status", "--json"],
+    "policy": {
+      "sandbox_mode": "workspace-write",
+      "sandbox_workspace_write.network_access": false
+    },
+    "publishedPidProbeSystemCode": "ESRCH",
+    "source": "linux-container/query-codex-restricted-kernel.txt",
+    "rawSha256": "2b0af9d523c949d747b17ffe88364659c3be772a08b4a379807a39104e6128ae",
+    "cliSha256": "c4520c5afe063accedb22175f7d75f2f99f90fa6ea72bf7530be456050a0d97a",
+    "deployedVersion": "0.1.0+da3cb3b77bd0",
+    "sanitization": "Command executable path reduced to hiveward; response content unchanged."
+  },
+  "exitCode": 1,
+  "response": {
+    "id": "local",
+    "ok": false,
+    "error": {
+      "code": "runtime_access_denied",
+      "message": "Permission denied connecting to HiveWard (EPERM). HiveWard may be running normally; this command's sandbox or OS permissions block the connection.",
+      "data": {
+        "systemCode": "EPERM",
+        "nextSteps": [
+          "Re-run this command outside its sandbox, or as a user allowed to reach the HiveWard runtime.",
+          "Do not restart HiveWard or run 'hiveward open'; a restart cannot grant this command access."
+        ]
+      }
+    },
+    "_meta": {
+      "runtimeId": null
+    }
+  }
+}

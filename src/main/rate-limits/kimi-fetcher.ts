@@ -1,0 +1,232 @@
+import { getMainHttpClient } from '../network/http-client'
+import type {
+  ProviderRateLimits,
+  RateLimitWindow,
+  UsageRateLimitMetadata
+} from '../../shared/rate-limit-types'
+import { getHostKimiHome, type KimiHomeResolution } from '../kimi/kimi-runtime-home'
+import { readKimiCredentials, type KimiCredentials } from './kimi-credentials-read'
+import { classifyThrownUsageRequestError } from './usage-request-failure-kind'
+
+const API_TIMEOUT_MS = 10_000
+
+const SESSION_WINDOW_MINUTES = 300
+const WEEKLY_WINDOW_MINUTES = 10080
+
+function isAccessTokenFresh(creds: KimiCredentials): boolean {
+  return (
+    typeof creds.access_token === 'string' &&
+    creds.access_token.length > 0 &&
+    typeof creds.expires_at === 'number' &&
+    // Leave expiry skew for requests in flight; the CLI refreshes on next use.
+    creds.expires_at - Math.floor(Date.now() / 1000) > 5
+  )
+}
+
+type KimiUsageDetail = {
+  limit?: string | number
+  remaining?: string | number
+  used?: string | number
+  resetTime?: string
+  resetAt?: string
+}
+
+type KimiUsageWindow = {
+  duration?: number
+  timeUnit?: string
+}
+
+type KimiUsageLimit = {
+  window?: KimiUsageWindow
+  detail?: KimiUsageDetail
+}
+
+type KimiUsageResponse = {
+  usage?: KimiUsageDetail
+  limits?: KimiUsageLimit[]
+}
+
+function toInt(value: string | number | undefined): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function windowToMinutes(window: KimiUsageWindow | undefined): number | null {
+  const duration = toInt(window?.duration)
+  if (duration === null) {
+    return null
+  }
+  const unit = (window?.timeUnit ?? '').toUpperCase()
+  if (unit.includes('MINUTE')) {
+    return duration
+  }
+  if (unit.includes('HOUR')) {
+    return duration * 60
+  }
+  if (unit.includes('DAY')) {
+    return duration * 60 * 24
+  }
+  if (unit.includes('SECOND')) {
+    return Math.round(duration / 60)
+  }
+  return duration
+}
+
+function parseResetDescription(isoString: string | undefined): string | null {
+  if (!isoString) {
+    return null
+  }
+  const date = new Date(isoString)
+  if (Number.isNaN(date.getTime())) {
+    return null
+  }
+  const isToday = date.toDateString() === new Date().toDateString()
+  return isToday
+    ? date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : date.toLocaleDateString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })
+}
+
+function mapWindow(
+  detail: KimiUsageDetail | undefined,
+  windowMinutes: number
+): RateLimitWindow | null {
+  if (!detail) {
+    return null
+  }
+  const limit = toInt(detail.limit)
+  let used = toInt(detail.used)
+  if (used === null) {
+    const remaining = toInt(detail.remaining)
+    if (remaining !== null && limit !== null) {
+      used = limit - remaining
+    }
+  }
+  if (limit === null || limit <= 0 || used === null) {
+    return null
+  }
+  const reset = detail.resetTime ?? detail.resetAt
+  return {
+    usedPercent: Math.min(100, Math.max(0, (used / limit) * 100)),
+    windowMinutes,
+    resetsAt: reset ? new Date(reset).getTime() || null : null,
+    resetDescription: parseResetDescription(reset)
+  }
+}
+
+function mapUsageResponse(data: KimiUsageResponse): ProviderRateLimits {
+  // Top-level usage is weekly; limits carries shorter rolling windows, including the 5h session.
+  const weekly = mapWindow(data.usage, WEEKLY_WINDOW_MINUTES)
+  let session: RateLimitWindow | null = null
+  for (const limit of data.limits ?? []) {
+    const minutes = windowToMinutes(limit.window) ?? SESSION_WINDOW_MINUTES
+    const mapped = mapWindow(limit.detail, minutes)
+    if (!mapped) {
+      continue
+    }
+    // Prefer the window closest to a 5h session; otherwise keep the first seen.
+    if (
+      session === null ||
+      Math.abs(minutes - SESSION_WINDOW_MINUTES) <
+        Math.abs(session.windowMinutes - SESSION_WINDOW_MINUTES)
+    ) {
+      session = mapped
+    }
+  }
+  return {
+    provider: 'kimi',
+    session,
+    weekly,
+    updatedAt: Date.now(),
+    error: session || weekly ? null : 'Kimi usage response did not include quota windows',
+    status: session || weekly ? 'ok' : 'error'
+  }
+}
+
+// A bare "operation was aborted due to timeout" hides which machine stalled.
+function readErrorContext(home: KimiHomeResolution, error: string): string {
+  return home.runtime === 'wsl' ? `${error} (WSL ${home.wslDistro ?? 'default distro'})` : error
+}
+
+function expiredSessionMessage(home: KimiHomeResolution): string {
+  const where =
+    home.runtime === 'wsl'
+      ? `inside WSL (${home.wslDistro ?? 'default distro'})`
+      : 'on the computer running HiveWard'
+  return `Kimi session expired — run kimi ${where}, then retry usage.`
+}
+
+function result(
+  status: ProviderRateLimits['status'],
+  error: string | null,
+  usageMetadata?: UsageRateLimitMetadata
+): ProviderRateLimits {
+  return {
+    provider: 'kimi',
+    session: null,
+    weekly: null,
+    updatedAt: Date.now(),
+    error,
+    status,
+    ...(usageMetadata ? { usageMetadata } : {})
+  }
+}
+
+/** Read usage from host/WSL credentials selected by home (#12370); config chooses credential slot and usage URL.
+ * The CLI owns rotating refresh tokens: never refresh/write its file or invalidate a live session.
+ * Use GET /usages, never the completion endpoint. */
+export async function fetchKimiRateLimits(options?: {
+  home?: KimiHomeResolution
+}): Promise<ProviderRateLimits> {
+  const home: KimiHomeResolution = options?.home ?? {
+    runtime: 'host',
+    wslDistro: null,
+    path: getHostKimiHome()
+  }
+  if (home.path === null) {
+    return result('error', `WSL Kimi home unavailable for ${home.wslDistro ?? 'default distro'}`)
+  }
+  const readResult = await readKimiCredentials(home, home.path)
+  if (readResult.status === 'missing') {
+    return result('unavailable', 'Not signed in to Kimi Code')
+  }
+  if (readResult.status === 'error') {
+    return result('error', readErrorContext(home, readResult.error))
+  }
+  const creds = readResult.credentials
+  if (typeof creds.access_token !== 'string' || creds.access_token.length === 0) {
+    return result('error', 'Kimi credentials file is missing an access token')
+  }
+  if (!isAccessTokenFresh(creds)) {
+    // Let Kimi refresh on next use; transient error preserves the last good usage snapshot.
+    return result('error', expiredSessionMessage(home), {
+      failureKind: 'delegated-refresh-required',
+      source: 'oauth'
+    })
+  }
+
+  try {
+    const res = await getMainHttpClient().fetch(readResult.usageUrl, {
+      // Match CLI fetchManagedUsage headers; this token-authenticated endpoint needs no custom User-Agent.
+      headers: { Authorization: `Bearer ${creds.access_token}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(API_TIMEOUT_MS)
+    })
+    if (res.status === 401 || res.status === 403) {
+      return result('error', `Kimi usage request unauthorized (HTTP ${res.status})`)
+    }
+    if (!res.ok) {
+      return result('error', `Kimi usage request failed (HTTP ${res.status})`)
+    }
+    const data: unknown = await res.json()
+    return mapUsageResponse(typeof data === 'object' && data !== null ? data : {})
+  } catch (err) {
+    return result('error', err instanceof Error ? err.message : 'Kimi usage request failed', {
+      failureKind: classifyThrownUsageRequestError(err)
+    })
+  }
+}

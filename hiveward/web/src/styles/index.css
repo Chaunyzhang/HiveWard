@@ -1,0 +1,449 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import './theme.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  html {
+    @apply overflow-x-hidden;
+  }
+  /* 系统字体：SF Pro + 苹方，冷静、无外部依赖；正文 14px，辅助 12–13px */
+  html {
+    font-family:
+      -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
+      'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply min-h-svh w-full bg-background text-sm text-foreground;
+  }
+
+  /* Override Radix scroll locking for sticky headers */
+  body[data-scroll-locked] {
+    overflow: unset !important;
+  }
+
+  /* Cursor pointer for buttons */
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* Prevent focus zoom on mobile devices */
+  @media screen and (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
+  }
+}
+
+@utility container {
+  margin-inline: auto;
+  padding-inline: 2rem;
+}
+
+@utility no-scrollbar {
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  &::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+@utility faded-bottom {
+  @apply after:pointer-events-none after:absolute after:inset-s-0 after:bottom-0 after:hidden after:h-32 after:w-full after:rounded-b-2xl after:bg-[linear-gradient(180deg,transparent_10%,var(--background)_70%)] md:after:block;
+}
+
+/* ── Panel & lift system ───────────────────────────────────────────
+   静止：扁平面板（平涂底色 + 1px 细边），无阴影、无渐变。
+   悬停/键盘聚焦：可交互元素才浮起来 —— 上移 + 三层投影，2.5D 悬浮感。
+   浮起只表示"手在这里"，不表示选中；鼠标移开就落回去。 */
+@utility panel {
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+}
+/* 大框里的小块（节点、列表行）：静止时透明、没有边，等于"隐藏的框"；
+   悬停时底色变灰把框显出来。lift 再叠一层上浮投影，只给架构图节点用。 */
+@utility hover-box {
+  background-color: transparent;
+  transition: background-color 160ms ease;
+  &:hover,
+  &:focus-visible,
+  &[data-open='true'] {
+    background-color: var(--accent);
+    outline: none;
+  }
+}
+@utility lift {
+  transition:
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 200ms ease;
+  &:hover,
+  &:focus-visible {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-float);
+    outline: none;
+  }
+  &:active {
+    transform: translateY(-2px);
+    transition-duration: 90ms;
+  }
+}
+@utility lift-sm {
+  transition:
+    transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  &:hover,
+  &:focus-visible {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-float-sm);
+    outline: none;
+  }
+}
+/* 示意图画布：点阵底 */
+@utility dot-canvas {
+  background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+/* 正在进行的那一行（运行中的命令、干活中…）：一道亮光从左扫到右，同 Claude 桌面端 */
+@utility shimmer-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 40%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 60%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer-text 2s linear infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    color: var(--foreground);
+  }
+}
+@keyframes shimmer-text {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+/* 等宽大写小标签（STATUS / LAST BACKUP 那种） */
+@utility mono-label {
+  @apply font-mono text-[11px] tracking-[0.14em] text-muted-foreground uppercase;
+}
+
+.CollapsibleContent {
+  overflow: hidden;
+}
+.CollapsibleContent[data-state='open'] {
+  animation: slideDown 300ms ease-out;
+}
+.CollapsibleContent[data-state='closed'] {
+  animation: slideUp 300ms ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    height: var(--radix-collapsible-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+
+/* 架构图的连线：全图一个颜色（排版算出来的 SVG 连线：分叉、主干、Personal Agent 和 Leader 的弧线） */
+:root {
+  --wire: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+}
+
+/* 桌面 App：左上角给红绿灯让位，顶栏空白处可拖动窗口；嵌在 HiveWard 主窗口里时不贴窗口左边，不用让位 */
+html.is-desktop .app-top-bar {
+  -webkit-app-region: drag;
+}
+/* 红绿灯只在最左边那一格让位：左栏开着是左栏顶行，收起时是中间栏的顶栏 */
+html.is-desktop:not(.is-embedded) .app-top-left {
+  padding-inline-start: 84px;
+}
+html.is-desktop .app-top-bar :is(a, button, input, [role='button']) {
+  -webkit-app-region: no-drag;
+}
+
+/* Agent 回复的 Markdown 排版（features/live/markdown.tsx）：对齐 Claude 桌面端的阅读节奏 */
+@layer components {
+  .md {
+    overflow-wrap: anywhere;
+  }
+  .md > * + * {
+    margin-top: 0.9em;
+  }
+  .md :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+    line-height: 1.4;
+    margin-top: 1.5em;
+  }
+  .md > :is(h1, h2, h3, h4, h5, h6):first-child {
+    margin-top: 0;
+  }
+  .md :is(h1, h2, h3, h4, h5, h6) + * {
+    margin-top: 0.5em;
+  }
+  .md h1 {
+    font-size: 1.3em;
+  }
+  .md h2 {
+    font-size: 1.17em;
+  }
+  .md h3 {
+    font-size: 1.05em;
+  }
+  .md :is(ul, ol) {
+    padding-inline-start: 1.5em;
+  }
+  .md ul {
+    list-style: disc;
+  }
+  .md ol {
+    list-style: decimal;
+  }
+  .md li::marker {
+    color: var(--muted-foreground);
+  }
+  .md li + li,
+  .md li > :is(ul, ol, p) {
+    margin-top: 0.35em;
+  }
+  .md li > ul {
+    list-style: circle;
+  }
+  .md input[type='checkbox'] {
+    margin-inline-end: 0.4em;
+    vertical-align: -0.1em;
+  }
+  .md strong {
+    font-weight: 600;
+  }
+  .md a {
+    text-decoration: underline;
+    text-decoration-color: color-mix(
+      in oklab,
+      var(--muted-foreground) 60%,
+      transparent
+    );
+    text-underline-offset: 4px;
+  }
+  .md a:hover {
+    text-decoration-color: var(--foreground);
+  }
+  .md code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    padding: 0.12em 0.4em;
+    border-radius: 5px;
+    background: var(--muted);
+  }
+  .md pre {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.65;
+    padding: 0.85em 1em;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: color-mix(in oklab, var(--muted) 55%, transparent);
+    overflow-x: auto;
+  }
+  .md img {
+    max-width: 100%;
+    height: auto;
+  }
+  .md pre code {
+    font-size: inherit;
+    padding: 0;
+    background: none;
+  }
+  .md blockquote {
+    border-inline-start: 3px solid var(--border);
+    padding-inline-start: 1em;
+    color: var(--muted-foreground);
+  }
+  .md hr {
+    border-top: 1px solid var(--border);
+    margin-block: 1.6em;
+  }
+  /* 对话里能点开的本地路径（features/files/file-open.ts） */
+  .md-path {
+    cursor: pointer;
+    text-align: start;
+  }
+  .md-path code {
+    text-decoration: underline dotted;
+    text-decoration-color: var(--muted-foreground);
+    text-underline-offset: 3px;
+  }
+  .md-path:hover code {
+    background: var(--accent);
+    text-decoration-color: var(--foreground);
+  }
+  .md-table {
+    overflow-x: auto;
+  }
+  .md table {
+    border-collapse: collapse;
+    font-size: 0.93em;
+  }
+  /* 表格里不随处断字（会挤成一字一行）：长内容撑宽表格，由外面的 .md-table 自己横向滚 */
+  .md :is(th, td) {
+    overflow-wrap: break-word;
+    min-width: 5em;
+    padding: 0.5em 1.2em 0.5em 0;
+    border-bottom: 1px solid var(--border);
+    text-align: start;
+    vertical-align: top;
+  }
+  .md th {
+    white-space: nowrap;
+    font-weight: 500;
+    color: var(--muted-foreground);
+  }
+  .md tr:last-child td {
+    border-bottom: none;
+  }
+}
+
+/* Grok Bot 头像的动作：空闲呼吸、干活蹦、等你眨眼；系统要求减少动态效果时不动 */
+@media (prefers-reduced-motion: no-preference) {
+  .grokbot-breathe {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation: grokbot-breathe 3.2s ease-in-out infinite;
+  }
+  .grokbot-hop {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation: grokbot-hop 0.9s cubic-bezier(0.3, 0, 0.3, 1) infinite;
+  }
+  .grokbot-blink {
+    transform-box: fill-box;
+    transform-origin: 50% 50%;
+    animation: grokbot-blink 3.6s ease-in-out infinite;
+  }
+}
+@keyframes grokbot-breathe {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(1.03, 0.97);
+  }
+}
+@keyframes grokbot-hop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1.04, 0.96);
+  }
+  45% {
+    transform: translateY(-9%) scale(0.97, 1.03);
+  }
+}
+@keyframes grokbot-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.1);
+  }
+}
+
+/*
+ * 架构图座位的状态灯（seat-shape.tsx），颜色和 agentStatusStyle 一致：
+ * 干活 = 蓝色亮光像彗星一样沿边框转圈（亮头 + 渐隐的尾巴，约 2 秒一圈）；等待 = 橙色闪烁。
+ * 彗星画在背景上：里层是卡片底色（padding-box），外层是转动的锥形渐变（border-box），边框透明露出它，
+ * 所以圆、圆角、胶囊都贴边，Personal Agent 的 overflow-hidden 也裁不掉。减少动态效果时只留静止颜色。
+ */
+@property --seat-comet {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+.seat-working {
+  border-color: var(--working);
+}
+.seat-waiting {
+  border-color: var(--attention);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .seat-working {
+    --seat-fill: var(--panel);
+    border-color: transparent;
+    background:
+      linear-gradient(var(--seat-fill), var(--seat-fill)) padding-box,
+      conic-gradient(
+          from var(--seat-comet),
+          color-mix(in oklab, var(--working) 22%, transparent) 0deg 200deg,
+          color-mix(in oklab, var(--working) 65%, transparent) 300deg,
+          var(--working) 345deg,
+          color-mix(in oklab, var(--working) 45%, white) 357deg,
+          color-mix(in oklab, var(--working) 22%, transparent) 360deg
+        )
+        border-box;
+    animation: seat-comet 2s linear infinite;
+  }
+  /* 下属卡片悬停 / 打开时照样变灰底 */
+  .seat-working.hover-box:is(:hover, :focus-visible, [data-open='true']) {
+    --seat-fill: var(--accent);
+  }
+  .seat-waiting {
+    animation: seat-blink 1.4s ease-in-out infinite;
+  }
+}
+@keyframes seat-comet {
+  to {
+    --seat-comet: 360deg;
+  }
+}
+/* 两端都是同一个 drop-shadow、只变颜色深浅：filter 函数列表一致才能平滑插值，不会卡一下再突然亮 */
+@keyframes seat-blink {
+  0%,
+  100% {
+    border-color: var(--attention);
+    filter: drop-shadow(
+      0 0 6px color-mix(in oklab, var(--attention) 70%, transparent)
+    );
+  }
+  50% {
+    border-color: color-mix(in oklab, var(--attention) 25%, transparent);
+    filter: drop-shadow(
+      0 0 6px color-mix(in oklab, var(--attention) 0%, transparent)
+    );
+  }
+}

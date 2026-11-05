@@ -1,0 +1,13 @@
+{
+  "name": "HiveWard",
+  "appId": "app.hiveward",
+  "dataDirectory": "HiveWard",
+  "devDataDirectory": "HiveWard-Dev",
+  "scheme": "hiveward",
+  "runtimeMetadata": "hiveward-runtime.json",
+  "cliName": "hiveward",
+  "vendorServices": false,
+  "homeDirectory": ".hiveward",
+  "globalCliRegistration": false,
+  "keychainName": "HiveWard"
+}

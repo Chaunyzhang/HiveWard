@@ -1,0 +1,8 @@
+{
+  "ios": {
+    "NSCameraUsageDescription": "QR コードをスキャンするため、HiveWard にカメラの使用を許可してください。",
+    "NSLocalNetworkUsageDescription": "HiveWard は LAN 上のデスクトップアプリに接続します。",
+    "NSMicrophoneUsageDescription": "音声ディクテーションのため、HiveWard にマイクの使用を許可してください。音声はペアリング済みのデスクトップに送信され、文字起こしされます。",
+    "NSPhotoLibraryUsageDescription": "ペアリング済みのデスクトップのターミナルセッションに写真を添付するため、HiveWard に写真ライブラリへのアクセスを許可してください。"
+  }
+}

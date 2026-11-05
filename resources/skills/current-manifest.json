@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 3,
+  "skills": [
+    {
+      "name": "hiveward-cli",
+      "sourcePath": "skills/hiveward-cli",
+      "packageDigest": "0f02eaf0b5355ab72a49f1b873723752b26617c186c701b9f4157d150349c274",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 2172,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "2170fd4d5804e3da984bb367b985f6d29256188a9fefe065d3c33535c80583c0",
+          "textNormalizedSha256": "2170fd4d5804e3da984bb367b985f6d29256188a9fefe065d3c33535c80583c0",
+          "identitySha256": "2170fd4d5804e3da984bb367b985f6d29256188a9fefe065d3c33535c80583c0"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-computer-use",
+      "sourcePath": "skills/hiveward-computer-use",
+      "packageDigest": "a57ced49b3e381812e512bd8865267de1589e9e75c6e8ce4ab8fd8d4915c0694",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 2057,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "c4801a3d4aa162b89274ff154d71940ed0cd081ee93d500533542f1ccb260678",
+          "textNormalizedSha256": "c4801a3d4aa162b89274ff154d71940ed0cd081ee93d500533542f1ccb260678",
+          "identitySha256": "c4801a3d4aa162b89274ff154d71940ed0cd081ee93d500533542f1ccb260678"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-emulator",
+      "sourcePath": "skills/hiveward-emulator",
+      "packageDigest": "1b3fc14f083fdbfa12a27ab9d6d7e5b0dd133eb823072caf75f4024f8325060c",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 2185,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "d45728902b4d83654e740328c805e55e15730dd870d77be2e2833df6aa61b02f",
+          "textNormalizedSha256": "d45728902b4d83654e740328c805e55e15730dd870d77be2e2833df6aa61b02f",
+          "identitySha256": "d45728902b4d83654e740328c805e55e15730dd870d77be2e2833df6aa61b02f"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-emulator-android",
+      "sourcePath": "skills/hiveward-emulator-android",
+      "packageDigest": "5e0ae9f36b609b2b07276b2024194231795556fdb88c0046dcd2be1e17dd02f0",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 2074,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "0a18531dda94e4f22775f882b1a596c75fb1d42b6968b3469df834b644e657d7",
+          "textNormalizedSha256": "0a18531dda94e4f22775f882b1a596c75fb1d42b6968b3469df834b644e657d7",
+          "identitySha256": "0a18531dda94e4f22775f882b1a596c75fb1d42b6968b3469df834b644e657d7"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-jira",
+      "sourcePath": "skills/hiveward-jira",
+      "packageDigest": "ef7abc13325d63c18c8fc762cc242bd486e533f81b67894e4587c46d3d805223",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 1916,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "4fc3355e4994032c41cd07b98d7cd2f4d787c3d2f3e8d22184e7d5f59088b2d2",
+          "textNormalizedSha256": "4fc3355e4994032c41cd07b98d7cd2f4d787c3d2f3e8d22184e7d5f59088b2d2",
+          "identitySha256": "4fc3355e4994032c41cd07b98d7cd2f4d787c3d2f3e8d22184e7d5f59088b2d2"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-jira-tickets",
+      "sourcePath": "skills/hiveward-jira-tickets",
+      "packageDigest": "682517f580bbaa0254e959dae482b60d0cf0dc25ba0d82efed0580dbd3b8c066",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 1967,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "2d3fa6e5ef44498315a7ffd9cd0d33ffa59a9bec29551ea7417e69c029adbf36",
+          "textNormalizedSha256": "2d3fa6e5ef44498315a7ffd9cd0d33ffa59a9bec29551ea7417e69c029adbf36",
+          "identitySha256": "2d3fa6e5ef44498315a7ffd9cd0d33ffa59a9bec29551ea7417e69c029adbf36"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-linear",
+      "sourcePath": "skills/hiveward-linear",
+      "packageDigest": "6ae7b7c5ca75f3c6a4bc018741699aecf0e463d061898aa993e10cdf383a8fc2",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 1924,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "7f8d7edcd89c7f73760929e6ec4f3ea532f45db91141f5f0eb593e73aea837eb",
+          "textNormalizedSha256": "7f8d7edcd89c7f73760929e6ec4f3ea532f45db91141f5f0eb593e73aea837eb",
+          "identitySha256": "7f8d7edcd89c7f73760929e6ec4f3ea532f45db91141f5f0eb593e73aea837eb"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-linear-tickets",
+      "sourcePath": "skills/hiveward-linear-tickets",
+      "packageDigest": "9a88ba12bbd35cd83ccf73148b2fc53caf4e749b5431fe533fb4037e634f3ed5",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 2086,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "9c1f80136e5ad1a166dd2674f19f665f57dcddcf6f365197f460dbb2f1da3e0d",
+          "textNormalizedSha256": "9c1f80136e5ad1a166dd2674f19f665f57dcddcf6f365197f460dbb2f1da3e0d",
+          "identitySha256": "9c1f80136e5ad1a166dd2674f19f665f57dcddcf6f365197f460dbb2f1da3e0d"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-orchestration",
+      "sourcePath": "skills/hiveward-orchestration",
+      "packageDigest": "edbee44261073d8a4a4eb74f83a25ecd81b1d7566de7c3729bd8f420800e8b77",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 4291,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "895f4697dfa1a854b45635b1a0ba30e790e13d380f2c5684e153a3939f670464",
+          "textNormalizedSha256": "895f4697dfa1a854b45635b1a0ba30e790e13d380f2c5684e153a3939f670464",
+          "identitySha256": "895f4697dfa1a854b45635b1a0ba30e790e13d380f2c5684e153a3939f670464"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-per-workspace-env",
+      "sourcePath": "skills/hiveward-per-workspace-env",
+      "packageDigest": "600d86d0572cce6e186c27736e9df508a314cc3063eb3214644e937f54f1d8e4",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 2096,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "0b39e3ff3676467c3126973cc4cf68d4c13ab38bd94ce70814361ff259ae00cd",
+          "textNormalizedSha256": "0b39e3ff3676467c3126973cc4cf68d4c13ab38bd94ce70814361ff259ae00cd",
+          "identitySha256": "0b39e3ff3676467c3126973cc4cf68d4c13ab38bd94ce70814361ff259ae00cd"
+        }
+      ]
+    },
+    {
+      "name": "hiveward-plugin-authoring",
+      "sourcePath": "skills/hiveward-plugin-authoring",
+      "packageDigest": "da3e78154105079e210e395ae3ca4b09b545c1b648eda2f7d623403bae5c827d",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 2168,
+          "executable": false,
+          "classification": "text",
+          "exactSha256": "992c70d5003702d0b775f5d6f111e994782d3ce8680529de6ff7f6d5f2e62e81",
+          "textNormalizedSha256": "992c70d5003702d0b775f5d6f111e994782d3ce8680529de6ff7f6d5f2e62e81",
+          "identitySha256": "992c70d5003702d0b775f5d6f111e994782d3ce8680529de6ff7f6d5f2e62e81"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "capturedAt": "2026-09-28T08:03:27.131Z",
+  "platform": "darwin",
+  "command": [
+    "qodercli",
+    "--config-dir",
+    "/tmp/hiveward-qoder-probe/config",
+    "--cwd",
+    "/tmp/hiveward-qoder-probe/workspace",
+    "--prompt-interactive",
+    "Reply with hello."
+  ],
+  "cols": 100,
+  "rows": 32,
+  "note": "Qoder CLI 1.1.64; isolated trusted folder; no account; lifecycle hook capture",
+  "exitCode": 129
+}

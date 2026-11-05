@@ -1,0 +1,49 @@
+]0;Kimi Code[?25l⠋ Loading configuration...[2K⠙ Scanning workspace...[2K⠹ Loading agent...[2K⠸ Loading agent...[2K⠸ Restoring conversation...
+[?25h[1A[2K╭──────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                  │
+│   ▐█▛█▛█▌  Welcome to Kimi Code CLI!                                             │
+│   ▐█████▌  Send /help for help information.                                      │
+│                                                                                  │
+│  Directory: /private/tmp/hiveward-kimi-readiness/work                            │
+│  Session: 90056e69-b228-40a4-ac5d-56047dc62459                                   │
+│  Model: K2.8 Preview                                                             │
+│                                                                                  │
+│  ✨ Update: The new Kimi Code is here — rebuilt to be faster and more powerful.  │
+│  Run [1m/upgrade[0m; your config & sessions carry over.                                │
+│                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────╯
+[?12l[?25h[6n[6n[?2004h[?1l[?25l[0m[?7l[0m[J[0m
+[0m── input ──────────────────────────────────────────────────────────────────────────────────────────[99C─[0m
+[0m [0m
+
+
+
+
+[0m [5A[C[?7h[0m[?12l[?25h[?25l[?7l[0m
+
+
+
+
+[0m [0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[0m [0m
+[0m───────────────────────────────────────────────────────────────────────────────────────────────────[99C─[0m
+[0;1myolo[0m  agent (K2.8 Preview ●)  [0m…/hiveward-kimi-readiness/work[0m  [0mctrl-o: editor | ctrl-j: newline[0m
+[0m                                                                                context: 0.0% (0/1m[99C)[27A[C[?7h[0m[?12l[?25h[?25l[?7l[?7h[0m[?12l[?25h[?25l[?7l[?7h[0m[?12l[?25h[?25l[?7l[?7h[0m[?12l[?25h[?25l[?7l[?7h[0m[?12l[?25h[?25l[?7l[?7h[0m[?12l[?25h[?25l[?7l[?7h[0m[?12l[?25h[?25l[?7l[?7h[0m[?12l[?25h

@@ -1,0 +1,6 @@
+@echo off
+chcp 65001 >nul
+call "%HIVEWARD_WINDOWS_VSDEVCMD%" -no_logo -arch=%HIVEWARD_WINDOWS_NATIVE_ARCH% -host_arch=%HIVEWARD_WINDOWS_NATIVE_ARCH%
+if errorlevel 1 exit /b 1
+echo HIVEWARD_WINDOWS_NATIVE_ENVIRONMENT
+set

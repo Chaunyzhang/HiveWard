@@ -1,0 +1,179 @@
+---
+title: HiveWard skills registry & MCP
+description: Install HiveWard agent skills with npx skills add. Hybrid stubs stay thin; hiveward skills get serves the version-matched guide. HiveWard updates its own skills without npx.
+keywords:
+  - HiveWard skills
+  - npx skills add
+  - hiveward-cli skill
+  - orchestration skill
+  - computer-use skill
+  - hiveward-linear skill
+  - hiveward-emulator skill
+  - hiveward-emulator-android skill
+  - hiveward-plugin-authoring skill
+---
+
+HiveWard ships **skills** that agents install into their skill directories. Public install packages are **hybrid discovery stubs**: short `SKILL.md` files that tell the agent _when_ to engage HiveWard and how to load the full guide from the running CLI. Command flags live in the binary so they cannot drift from the app version.
+
+## Installable HiveWard skills
+
+Use `npx skills add` with the public HiveWard repo and the skill name. Default agent setup usually installs `hiveward-cli`, `computer-use`, and `orchestration`.
+
+| Skill                                               | Install                                                                                   | Use it for                                                    |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| [`hiveward-cli`](#hiveward-cli)                             | `npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-cli --global`               | Worktrees, terminals, files, automations, embedded browser.   |
+| [`orchestration`](#orchestration)                   | `npx skills add https://github.com/Chaunyzhang/HiveWard --skill orchestration --global`          | Multi-agent Runs, tasks, supervised workers, messages, gates. |
+| [`computer-use`](#computer-use)                     | `npx skills add https://github.com/Chaunyzhang/HiveWard --skill computer-use --global`           | Desktop apps via accessibility trees and safe UI actions.     |
+| [`hiveward-linear`](#hiveward-linear)                       | `npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-linear --global`            | Linear ticket read/write through `hiveward linear`.               |
+| [`hiveward-emulator`](#hiveward-emulator)                   | `npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-emulator --global`          | iOS Simulator control.                                        |
+| [`hiveward-emulator-android`](#hiveward-emulator-android)   | `npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-emulator-android --global`  | Android emulator/device via adb.                              |
+| [`hiveward-per-workspace-env`](#hiveward-per-workspace-env) | `npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-per-workspace-env --global` | Per-workspace environment recipes (`hiveward.yaml`).              |
+| [`hiveward-plugin-authoring`](#hiveward-plugin-authoring)   | `npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-plugin-authoring --global`  | Build, debug and publish HiveWard plugins.                        |
+
+## Hybrid stubs vs the live guide
+
+After `npx skills add`, agents see a short stub that says:
+
+1. Resolve the CLI executable for this session (`HIVEWARD_CLI_COMMAND`, `hiveward-dev`, Linux `hiveward-ide`, else `hiveward`).
+2. Load the full guide: `hiveward skills get <topic>` (or `--full` for the long guide).
+3. Prefer `--json` and do not invent flags from memory.
+
+```bash
+hiveward skills list
+hiveward skills get hiveward-cli
+hiveward skills get orchestration --references
+hiveward skills get orchestration --reference recovery-and-cleanup
+hiveward skills get orchestration --full
+hiveward skills get hiveward-linear --json
+```
+
+A guide's action gates name conditional references. `--reference <name>` prints one of them alone, so an agent pays for the kernel plus that document instead of the whole package; `--references` lists the names. The name may be bare (`recovery-and-cleanup`) or spelled as the guide writes it (`references/recovery-and-cleanup.md`). `--full` still prints the kernel plus every reference.
+
+Add `--json` when an agent needs deterministic output for automation. `skills show` is an alias for `skills get`.
+
+## Keep skills up to date
+
+HiveWard updates its own skills itself, with no `npx`, Git, Node or network. A copy counts as HiveWard's untouched copy when its folder holds only `SKILL.md` and that file matches a version HiveWard has shipped. Only those copies are rewritten, in place (the shared `~/.agents/skills/<name>` or a real folder in an agent's skills folder such as `~/.claude/skills/<name>`). Anything else is left alone and reported: **You've changed this copy**, or **A different skill already uses this name**. HiveWard never deletes a folder it did not create.
+
+When this HiveWard build ships a newer version of a skill you installed, the app:
+
+- Shows an **update available** nudge and badge. Update only touches locations that already hold the skill; it never adds the skill for another agent.
+- Opens **Update skills**, which lists every location and what Update does there: **No change**, **Will update**, **Will link**, or **Left alone** with the reason. A copy left alone has a **Replace** choice (off by default); Replace first moves that copy to `~/.agents/.hiveward-skill-backups/`, then puts HiveWard's copy in its place.
+- Runs exactly the plan you reviewed: if a folder changed after you opened the dialog, that skill reports **Changed since you reviewed it** and nothing is written there.
+- Shows the result per skill, for example `Updated · 1 left alone: You've changed this copy`, and a status-bar segment while it runs.
+
+This covers skills installed on this computer. The app does not check WSL projects, SSH hosts or paired HiveWard servers yet; run `hiveward skills update` there.
+
+On headless hosts (SSH, containers, CI, `hiveward serve`) use the CLI. It runs the same planner on the machine that runs it and does **not** need a running HiveWard app:
+
+```bash
+hiveward skills install                                      # list installable names
+hiveward skills install --skill hiveward-cli --skill orchestration
+hiveward skills install --skill hiveward-cli --agent claude,codex
+hiveward skills update --all --dry-run                       # what would change, and the plan digest
+hiveward skills update --all
+hiveward skills update --all --force                         # also replace copies left alone (backup kept)
+```
+
+- Default scope is **global**; pass `--local` for the current project only (HiveWard links only into agent folders the project already has).
+- Targets the agents HiveWard detects on the host plus the shared `.agents/skills` folder. Use `--agent <name>[,<name>…]` to choose (the skills CLI's keys such as `claude-code` still work), or `--agent universal` for the shared folder alone.
+- `update` only touches locations that already hold the skill; `install` adds it, including for newly detected agents.
+- `--dry-run` prints the plan and its digest without writing. A real run plans again and writes only while the plan still matches.
+- `--json` works for dry runs and real runs. The exit code is 1 when a location failed or changed during the run; folders left alone are warnings.
+
+## Install and delete from the Skills page
+
+When an in-app install asks for a workspace target, search the picker by workspace name or by kind (**worktree** / **folder**). The agent picker separates directories HiveWard always includes from additional agent directories you can select, so you can review the exact installation targets before continuing.
+
+To remove a scanned skill, open its actions menu and choose **Delete…**. For several skills, open the page's **More actions** menu, choose **Delete skills…**, and select the eligible results. HiveWard explains why a copy cannot be deleted—for example because it is bundled, plugin-managed, read-only, or outside a removable skill folder—before you confirm. This is separate from **Manage installs**, which manages copies installed from shared links.
+
+## Share private skills between hosts
+
+Open **Skills → Share skills** to publish one skill or a bundle behind one unlisted, revocable link. Publishing requires your HiveWard account. Review the included files, scripts, executables, digest, and optional release notes before you publish; each published version is immutable, so later local edits do not silently change what recipients install.
+
+Anyone with an active link can inspect and install the shared skills without signing in, so treat the link like a credential. A recipient reviews the exact version, chooses all or a subset of its skills, then selects global or workspace scope on this computer, a paired HiveWard runtime, WSL, or an SSH host. Existing modified skills default to **Keep local**. Use **Skills → Manage installs** to update, roll back, or remove copies HiveWard installed, and **Settings → Share Skills** to copy or revoke your active links. Revoking a link blocks future access but does not remove copies already installed.
+
+Agents can publish an explicitly named set from the CLI after you enable the separate, default-off **Settings → Share Skills → Allow agents and the HiveWard CLI to publish skill links** permission:
+
+```bash
+hiveward skills installed --json
+hiveward skills share --skill frontend --skill testing --bundle-name "Team Toolkit" --json
+```
+
+`skills installed` returns safe selectors without exposing local paths. `skills share` accepts exact discovery IDs or unambiguous names; it does not accept arbitrary paths or `--all`.
+
+## hiveward-cli
+
+```bash
+npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-cli --global
+```
+
+After install, load the version-matched command guide with `hiveward skills get hiveward-cli`. See [HiveWard CLI](/docs/cli/overview).
+
+## orchestration
+
+```bash
+npx skills add https://github.com/Chaunyzhang/HiveWard --skill orchestration --global
+```
+
+Use this when an agent should coordinate other agents through Runs, tasks, supervised workers, and decision gates. See [Orchestration](/docs/cli/orchestration). Always load `hiveward skills get orchestration --full` before mutating orchestration state — the legacy `orchestration run` command is retired.
+
+## computer-use
+
+```bash
+npx skills add https://github.com/Chaunyzhang/HiveWard --skill computer-use --global
+```
+
+Use this when an agent needs to inspect and operate local desktop app windows. See [Computer use](/docs/cli/computer-use).
+
+## hiveward-linear
+
+```bash
+npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-linear --global
+```
+
+Agents should load `hiveward skills get hiveward-linear` before mutating tickets. Covers `issue --full`, `save-issue`, `list-issues`, relations, completion attach+comment flow, and untrusted-ticket rules. Existing `linear-tickets` installs still resolve. See [CLI reference → Linear](/docs/cli/reference#linear).
+
+## hiveward-emulator
+
+```bash
+npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-emulator --global
+```
+
+Use this when an agent should control an iOS Simulator from inside HiveWard through `hiveward emulator` commands.
+
+## hiveward-emulator-android
+
+```bash
+npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-emulator-android --global
+```
+
+Use for adb-connected Android AVDs/devices: list/boot, tap/swipe/type, hardware buttons, install/launch, permissions, accessibility tree, logcat. Load details with `hiveward skills get hiveward-emulator-android`.
+
+## hiveward-per-workspace-env
+
+```bash
+npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-per-workspace-env --global
+```
+
+Use when setting up or debugging per-workspace environment recipes in `hiveward.yaml`. See [Ways to run HiveWard](/docs/ways-to-run#4-cloud-vms-per-workspace-environments).
+
+## hiveward-plugin-authoring
+
+```bash
+npx skills add https://github.com/Chaunyzhang/HiveWard --skill hiveward-plugin-authoring --global
+```
+
+Use when an agent should make, debug, test or publish an HiveWard plugin: themes, syntaxes, custom editors, TSX components panels and worker commands. Load it with `hiveward skills get hiveward-plugin-authoring`; its references (components, host API, events, manifest fields, CLI) are generated from the running HiveWard.
+
+## Discovery sources
+
+HiveWard's skill UI scans installed skill homes for Claude, Codex, Agent Skills, and **OMP** (`~/.omp/agent/skills`), so skills placed there show up without a manual symlink.
+
+## Add your own skills
+
+Any repo with a `skills/<name>/SKILL.md` file can be installed via `npx skills add`. Point your agent at internal repos to give it company-specific powers.
+
+## MCP servers
+
+Model Context Protocol (MCP) servers expose external tools to compatible agents. Register MCP endpoints under [Settings → Integrations → MCP](/docs/settings); those tools appear inside agent CLIs that support MCP.

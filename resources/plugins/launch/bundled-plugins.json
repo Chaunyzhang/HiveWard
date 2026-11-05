@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "pluginKey": "stablyai.hiveward-github-vscode-theme",
+      "path": "stablyai.hiveward-github-vscode-theme",
+      "contentHash": "9ba9aed9339d2a190d945c3a2557f962138b3ce6e667159dfc91069dd5cc71d4"
+    },
+    {
+      "pluginKey": "stablyai.hiveward-vscode-default-themes",
+      "path": "stablyai.hiveward-vscode-default-themes",
+      "contentHash": "26ac1f4a6dcc855a25ca7c1f0afe93b0550f541c0d4248f5edf769d9e7d1ecbf"
+    }
+  ]
+}

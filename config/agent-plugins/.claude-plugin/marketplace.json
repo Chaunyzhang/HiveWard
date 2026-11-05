@@ -1,0 +1,12 @@
+{
+  "name": "hiveward-agent-plugins",
+  "owner": { "name": "HiveWard" },
+  "description": "Repository-local plugins for coding agents working in HiveWard",
+  "plugins": [
+    {
+      "name": "hiveward-typescript",
+      "source": "./hiveward-typescript",
+      "description": "TypeScript 7 diagnostics and code navigation from the repo's own compiler"
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+name: HiveWard Windows 版
+
+# 在 GitHub 的 Windows 机器上编出 HiveWard 安装包（未签名）。
+# Windows 原生模块和 CLI 启动器只能在 Windows 上编译，Mac 上交叉打包不出来。
+# 推到 main 自动编一次，产物挂在这次运行的 Artifacts 里；推 v* 标签时另外建一个草稿发布。
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hiveward-windows-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' || github.event.pull_request.draft == true }}
+
+jobs:
+  build:
+    if: github.repository == 'Chaunyzhang/HiveWard' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      HIVEWARD_BACKGROUND_LAUNCH: '1'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: 安装 pnpm
+        uses: pnpm/setup@v2
+        with:
+          install: false
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            mobile/pnpm-lock.yaml
+            hiveward/web/pnpm-lock.yaml
+
+      - name: 缓存 Electron 下载
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-win-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: electron-win-
+
+      - name: 安装依赖
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            pnpm install --frozen-lockfile && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 30
+          done
+          (cd mobile && pnpm install --frozen-lockfile)
+
+      - name: 编 HiveWard 界面
+        run: pnpm run build:cockpit
+
+      - name: 测试 Windows 适配
+        run: node --test hiveward/server/hiveward-client-launch-order.test.mjs hiveward/server/hiwd-windows-runtime.test.mjs hiveward/server/windows-path.test.mjs
+
+      - name: 编 Windows 原生部分（CLI 启动器、Agent hook）
+        shell: bash
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          pnpm run build:native
+
+      - name: 编桌面端
+        run: pnpm run build:desktop:assets
+
+      - name: 打包
+        shell: bash
+        run: |
+          node config/scripts/ensure-native-runtime.mjs --runtime=electron
+          pnpm exec electron-builder --config config/electron-builder.config.cjs --win --x64 --publish never
+
+      - name: 检查打包后的 Windows 运行
+        run: node hiveward/server/tests/windows-packaged-smoke.mjs
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v7
+        with:
+          name: HiveWard-windows-x64
+          # latest.yml 和 blockmap 是 Windows 自动更新要读的，少了它老版本查得到新版却下不了
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/latest.yml
+            dist/*.blockmap
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: 检查产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la dist
+          ls dist/HiveWard-*-windows-x64-setup.exe dist/HiveWard-*-windows-x64.zip dist/latest.yml
+          test -f dist/win-unpacked/HiveWard.exe
+          test -f dist/win-unpacked/resources/hiveward/bin/hiwd.cmd
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: HiveWard-windows-x64
+          path: dist
+      - name: 建草稿发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "HiveWard $TAG" --notes ""
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

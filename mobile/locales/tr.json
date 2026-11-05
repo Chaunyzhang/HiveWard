@@ -1,0 +1,8 @@
+{
+  "ios": {
+    "NSCameraUsageDescription": "HiveWard'nın QR kodlarını taramak için kamerayı kullanmasına izin verin.",
+    "NSLocalNetworkUsageDescription": "HiveWard, yerel ağınızdaki masaüstü uygulamasına bağlanır.",
+    "NSMicrophoneUsageDescription": "HiveWard'nın sesli dikte için mikrofonunuzu kullanmasına izin verin. Ses kaydı, yazıya dönüştürülmek üzere eşleştirdiğiniz masaüstü bilgisayara gönderilir.",
+    "NSPhotoLibraryUsageDescription": "HiveWard'nın arşivinizdeki fotoğrafları eşleştirdiğiniz masaüstü bilgisayardaki bir terminal oturumuna eklemesine izin verin."
+  }
+}

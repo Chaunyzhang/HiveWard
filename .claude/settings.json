@@ -1,0 +1,11 @@
+{
+  "extraKnownMarketplaces": {
+    "hiveward-agent-plugins": {
+      "source": { "source": "directory", "path": "./config/agent-plugins" }
+    }
+  },
+  "enabledPlugins": {
+    "hiveward-typescript@hiveward-agent-plugins": true,
+    "typescript-lsp@claude-plugins-official": false
+  }
+}

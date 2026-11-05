@@ -1,0 +1,23 @@
+[package]
+name = "hiveward-agent-hook"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Why `hiveward-agent-hook`: it ships as resources\bin\hiveward-agent-hook.exe and installs under the
+# same name in ~/.hiveward/agent-hooks, so the name that runs matches the PE's OriginalFilename.
+[[bin]]
+name = "hiveward-agent-hook"
+path = "src/main.rs"
+
+[build-dependencies]
+winresource = "0.1"
+
+# Why: runs once per agent hook event, so it stays a small std-only utility with
+# no panic machinery or debug sections, like native/windows-cli-launcher.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

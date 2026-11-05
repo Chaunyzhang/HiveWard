@@ -1,0 +1,12 @@
+{
+  "title": "The HiveWard Model",
+  "defaultOpen": true,
+  "pages": [
+    "worktrees",
+    "hiveward-yaml",
+    "tabs-panes-splits",
+    "agents-sessions",
+    "session-restore",
+    "quick-open"
+  ]
+}

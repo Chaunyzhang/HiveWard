@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Chaunyzhang/HiveWard/hiveward/docs/schemas/plugins/hiveward-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "execution": "data",
+  "id": "hiveward-gleam-syntax",
+  "publisher": "stablyai",
+  "name": "Gleam",
+  "version": "1.0.0",
+  "description": "Syntax highlighting for Gleam files.",
+  "engines": { "hiveward": ">=1.4.245" },
+  "contributes": {
+    "syntaxes": [
+      {
+        "id": "gleam",
+        "title": "Gleam",
+        "scopeName": "source.gleam",
+        "path": "syntaxes/gleam.tmLanguage.json",
+        "configuration": "syntaxes/language-configuration.json",
+        "extensions": [".gleam"]
+      }
+    ]
+  }
+}

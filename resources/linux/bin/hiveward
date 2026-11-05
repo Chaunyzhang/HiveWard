@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# HiveWard 对外只有这一个命令（hiveward 是同一个脚本）：hiwd 先认自己的命令，其余转给 resources/engine/hiwd-engine 背后的引擎。
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+	DIR="$(cd "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+	SOURCE="$(readlink "$SOURCE")"
+	[[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+RESOURCES_DIR="$(cd "$(dirname "$SOURCE")/.." >/dev/null 2>&1 && pwd)"
+APP_DIR="$(cd "$RESOURCES_DIR/.." >/dev/null 2>&1 && pwd)"
+HIWD="$RESOURCES_DIR/hiveward/server/hiwd.mjs"
+
+# hiveward avoids the GNOME HiveWard name; -f excludes executable directories.
+ELECTRON=""
+for candidate in hiveward HiveWard; do
+	if [ -f "$APP_DIR/$candidate" ] && [ -x "$APP_DIR/$candidate" ]; then
+		ELECTRON="$APP_DIR/$candidate"
+		break
+	fi
+done
+
+if [ -z "$ELECTRON" ] || [ ! -f "$HIWD" ]; then
+	echo "Unable to locate the HiveWard executable next to $RESOURCES_DIR" >&2
+	exit 1
+fi
+
+export HIVEWARD_NODE_OPTIONS="${NODE_OPTIONS-}"
+export HIVEWARD_NODE_REPL_EXTERNAL_MODULE="${NODE_REPL_EXTERNAL_MODULE-}"
+unset NODE_OPTIONS
+unset NODE_REPL_EXTERNAL_MODULE
+
+ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$HIWD" "$@"

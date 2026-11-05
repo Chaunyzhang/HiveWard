@@ -1,0 +1,265 @@
+# HiveWard Mobile
+
+React Native companion app for HiveWard. Monitor worktrees, view terminal output, and send commands from your phone.
+
+Local development uses two processes:
+
+- HiveWard desktop/Electron from the repo root. This hosts the mobile WebSocket RPC server on port `6768`.
+- Expo Metro from `mobile/`. This serves the React Native app on port `8081`.
+
+Unless a command says otherwise, run mobile app commands from the `mobile/` directory.
+
+The Node commands `pnpm rpc:diff` and `pnpm rpc:record` use a development dependency linked to `../src/packages/process-host`. Mobile's install supplies the link, and `tsx` runs its source with the `hiveward-source` condition, so these command wrappers do not require a desktop install or package build. Keep that source directory in sparse checkouts. The recording suites still need root dependencies when they exercise desktop modules. The React Native app does not import this host package.
+
+## Prerequisites
+
+- Node.js 24+
+- pnpm
+- Xcode and/or Android Studio tooling for simulator or device builds
+- Expo Go on your phone, or a development client build when native modules are needed
+- Phone and desktop on the same LAN when testing a physical phone
+
+## Start Desktop HiveWard
+
+From the repository root:
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Confirm the mobile RPC server is listening:
+
+```bash
+lsof -nP -iTCP:6768 -sTCP:LISTEN
+```
+
+Restart `pnpm dev` after changing Electron main-process code. Metro hot reload only applies to the mobile JavaScript bundle.
+
+## Start The Mobile App
+
+```bash
+cd mobile
+pnpm install
+pnpm start
+```
+
+Scan the Expo QR code with your phone's camera on iOS, or Expo Go on Android.
+
+For a native dev-client build:
+
+```bash
+pnpm native ensure ios       # or: pnpm native ensure android [--device <name|udid|serial>]
+pnpm start --dev-client
+```
+
+`ensure` computes the Expo fingerprint of the native inputs (native dependencies, config plugins,
+`modules/`, `patches/`, and the Expo config). On a **HIT** it installs the cached build on the booted
+simulator or the running emulator in a few seconds. On a **MISS** it regenerates `ios/` or `android/`,
+runs `expo run:<platform>`, and caches the result. `--rebuild` forces a fresh build.
+
+Builds are cached per fingerprint in the user cache directory (`~/Library/Caches/hiveward-mobile/native-builds`
+on macOS, `$XDG_CACHE_HOME/hiveward-mobile/native-builds` on Linux, `%LOCALAPPDATA%\hiveward-mobile\native-builds`
+on Windows, or `HIVEWARD_MOBILE_NATIVE_BUILD_CACHE_DIR`), so every worktree reuses them. The newest three
+per platform are kept. `app.config.js` also registers the cache as Expo's `buildCacheProvider`, so a
+plain `pnpm ios` / `pnpm android` installs a cached build instead of compiling. Only `ensure` writes to
+the cache, because `expo run` reuses an existing `ios/` or `android/` directory even when it was
+generated from older inputs. Expo caches iOS Simulator builds only, not physical devices.
+
+`pnpm native fingerprint` prints the current hashes. On pull requests, the `Mobile native fingerprint`
+job reports in its summary whether the PR changes them, which means dev clients need a native rebuild.
+
+## Pair With Desktop HiveWard
+
+1. Open HiveWard desktop.
+2. Go to Settings > Mobile.
+3. Scan the pairing QR code from the mobile app.
+4. Confirm the mobile host endpoint is `ws://<desktop-ip>:6768`.
+
+For the Android emulator, use `ws://10.0.2.2:6768`. For a physical phone, use the desktop LAN IP, for example `ws://192.168.0.179:6768`.
+
+If the phone has a stale host entry, remove it from the app and pair again.
+
+## Development Paths
+
+### Android Phone
+
+1. Install Expo Go from Google Play
+2. Run `pnpm start`, scan QR with Expo Go
+3. For native modules: `pnpm exec expo run:android`
+4. Run with `pnpm start --dev-client`
+
+### iOS Simulator
+
+1. Install Xcode from the App Store
+2. Run `pnpm start --ios` to open in iOS Simulator
+
+## Physical Phone Debugging
+
+The phone can be inspected through the connected device tooling:
+
+```bash
+hiveward snapshot --json
+hiveward click --element @e3 --json
+hiveward fill --element @e1 --value "ls" --json
+hiveward screenshot --json
+```
+
+Use `snapshot` first to find the current element refs, then click/fill those refs. After mobile file edits, Metro usually hot reloads automatically, but navigating out of and back into the session screen can be useful because it re-runs `terminal.subscribe`.
+
+## Terminal Streaming Repro Without A Phone
+
+Use this when terminal output does not render on device and you need to split server streaming bugs from WebView/UI bugs:
+
+```bash
+cd mobile
+HIVEWARD_MOBILE_WS_URL=ws://127.0.0.1:6768 pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64>
+```
+
+You can pass a worktree selector as the third argument:
+
+```bash
+pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> "id:<worktreeId>"
+pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> "path:/absolute/worktree/path"
+pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> "name:my-worktree"
+```
+
+The expected result includes:
+
+```text
+streamSawMarker: true
+readSawMarker: true
+```
+
+If this repro fails, debug the desktop runtime/PTY path before the mobile WebView. If it passes but the phone is blank, debug the session screen or `TerminalWebView` readiness/queueing path.
+
+## Terminal Color Repro Without A Phone
+
+Use this when terminal colors disappear after switching tabs. Open a Claude Code terminal and at least one other terminal in the target worktree, then run:
+
+```bash
+cd mobile
+HIVEWARD_MOBILE_WS_URL=ws://127.0.0.1:6768 pnpm exec tsx scripts/repro-terminal-colors.ts \
+  <deviceToken> <serverPublicKeyB64> "id:<worktreeId>"
+```
+
+The script captures `terminal.subscribe` snapshots in an A → B → A sequence and writes raw snapshots to `mobile/terminal-color-repro/`. If the two A snapshots have different `sgrColor` counts, the desktop snapshot changed during the switch. If they match, the ANSI color data is still present and the bug is in mobile replay/rendering.
+
+## Validation
+
+Run these checks before committing mobile terminal changes:
+
+```bash
+cd mobile
+pnpm exec tsc --noEmit
+pnpm run check:tests-typecheck
+pnpm lint
+cd ..
+pnpm typecheck:node
+```
+
+`tsc --noEmit` reads `tsconfig.json`, which excludes test files so Metro never bundles them.
+`tsconfig.test.json` puts them back, and `pnpm run typecheck:tests` shows their errors in full.
+`check:tests-typecheck` is the gate over it: a ratchet against `tests-typecheck-baseline.txt`, the
+127 test files that do not typecheck yet. It fails when a file that checks today stops checking,
+and when a baseline entry starts checking (prune it with
+`node scripts/check-tests-typecheck-ratchet.mjs --prune`). The list may only shrink.
+
+The same gate censuses the program first: every `*.test.ts(x)` on disk must be in it, or named in
+the script's `TESTS_OUTSIDE_PROGRAM` with a reason. Without that, a test excluded from
+`tsconfig.test.json` — or a `Foo.test.tsx` shadowed by a `Foo.test.ts` beside it, which a wildcard
+`include` drops for the higher-priority extension — would leave the ratchet silently.
+
+## Localization
+
+UI copy goes through `src/i18n`, with the same call shape and languages as desktop:
+
+- In components and hooks: `const t = useMobileTranslation()`, then `t('area.thing.label', 'English text')`.
+  The function changes with the language, so list it in memo and callback dependencies.
+- In helpers and imperative code (alerts, notifications): `translate(key, fallback, options)` from
+  `src/i18n/mobile-i18n`, called when the text is shown, never at module scope.
+- Counts: `count === 1 ? t('x.files_one', '{{count}} file', { count }) : t('x.files_other', '{{count}} files', { count })`.
+- Dates and numbers: pass `getUiIntlLocale()` to `Intl` formatters instead of `undefined`.
+- Keep identity separate from display text: never compare or key on a translated string.
+
+Run `pnpm sync:mobile-localization` from the repo root to add new keys to `src/i18n/locales/en.json`;
+other catalogs may lag and fall back to English. `pnpm verify:mobile-localization` and
+`pnpm verify:mobile-localization-coverage` run in CI. iOS permission prompts live in `locales/<lang>.json`.
+
+## Protocol Version Compatibility
+
+Mobile and desktop talk over a versioned protocol. Because mobile updates lag desktop by 24-48h via the App Store, both sides exchange version numbers on `status.get` so a genuinely incompatible combo can hard-block instead of silently misbehaving.
+
+Constants live in two files (Metro can't resolve outside `mobile/`):
+
+- `src/shared/protocol-version.ts` — `DESKTOP_PROTOCOL_VERSION`, `MIN_COMPATIBLE_MOBILE_VERSION`
+- `mobile/src/transport/protocol-version.ts` — `MOBILE_PROTOCOL_VERSION`, `MIN_COMPATIBLE_DESKTOP_VERSION`
+
+Today all four are set so `evaluateCompat` always returns `{ kind: 'ok' }` — nothing blocks. The wire format is in place to flip a switch when needed.
+
+### When to bump
+
+Bump `DESKTOP_PROTOCOL_VERSION` (and the mobile mirror `MOBILE_PROTOCOL_VERSION` when relevant) for **breaking** changes:
+
+- Removed RPC method or required parameter that mobile uses
+- Changed meaning (units, nullability) of an existing field mobile reads
+- Changed encryption, framing, or auth handshake
+
+Do **not** bump for additive changes:
+
+- New RPC methods
+- New optional fields on existing methods
+- New event types in `terminal.subscribe`
+
+Set `MIN_COMPATIBLE_MOBILE_VERSION` (kill-switch) when desktop ships a change that requires a minimum mobile version to function safely. Same for `MIN_COMPATIBLE_DESKTOP_VERSION` from the mobile side.
+
+When a verdict is `blocked`, `mobile/src/components/ProtocolBlockScreen.tsx` renders a screen pointing the user at the update that clears it. When mobile is too old it opens the newest release if the installed app's update check knows one, otherwise the App Store (iOS) or GitHub Releases (Android). When desktop is too old it opens GitHub Releases.
+
+To exercise the block screen locally: set `MIN_COMPATIBLE_DESKTOP_VERSION = 999` in `mobile/src/transport/protocol-version.ts`, rebuild, pair to any desktop. Revert before merging.
+
+## Mock Server
+
+Develop the mobile app without a running HiveWard desktop instance:
+
+```bash
+pnpm mock-server           # starts mock WebSocket server on port 6768
+```
+
+Connect from the app using endpoint `ws://localhost:6768` and token `mock-device-token`.
+
+### Environment variables
+
+- `MOCK_NATIVE_CHAT=1` — serve the native-chat scenario (one live agent tab, empty transcript, image upload) instead of the default terminal fixtures.
+- `MOCK_CHAT_AGENT=omp` — with `MOCK_NATIVE_CHAT=1`, present an OMP tab and four decoded transcript messages, including a tool call and result, instead of the default Claude scenario. It deliberately omits `transcriptPath` to exercise legacy-hook readability discovery; current OMP hooks may report a path.
+- `MOCK_SERVER_KEY_FILE` — persist the server keypair across restarts so a paired device keeps its public-key pin. A missing or invalid file is re-keyed with a warning, which forces a re-pair.
+
+### Scenario control files
+
+Read on every request, so behaviour can be flipped mid-session without a restart (a restart would re-key E2EE and force a re-pair). Write the mode into the file, or delete it for the default.
+
+- `MOCK_SEND_MODE_FILE` (default `hiveward-mock-send-mode` in the system temporary directory) — `accept` (default) accepts the send, `error` fails it with `mobile_input_floor_unavailable`, anything else reports the send as rejected.
+- `MOCK_TERMINAL_LIST_MODE_FILE` (default `hiveward-mock-terminal-list-mode` in the system temporary directory) — `omit` returns an empty terminal list, `other` returns a list that omits the chat handle, anything else lists it.
+- `MOCK_TERMINAL_STREAM_MODE_FILE` (default `hiveward-mock-terminal-stream-mode` in the system temporary directory) — `dead` answers a subscribe with `subscribed` then `end` (a gone PTY), which is what exercises the rearm bound and terminal prune; anything else streams normally.
+
+## Connecting to Real HiveWard
+
+1. Start HiveWard desktop with WebSocket transport enabled
+2. In HiveWard, go to Settings > Mobile and scan the QR code with this app
+3. The QR encodes the connection endpoint, device token, and TLS fingerprint
+
+## Project Structure
+
+```
+mobile/
+├── app/                   # Expo Router screens (file-based routing)
+│   ├── _layout.tsx        # Root layout with navigation stack
+│   ├── index.tsx          # Home screen — paired hosts list
+│   └── pair-scan.tsx      # QR code scanning screen
+├── src/
+│   ├── terminal/          # Terminal WebView and xterm bridge
+│   └── transport/         # WebSocket RPC client
+├── scripts/
+│   ├── test-subscribe.ts  # Desktop streaming repro without a phone
+│   └── mock-server.ts     # Standalone mock WebSocket server
+└── assets/                # App icons and splash screen
+```

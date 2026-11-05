@@ -1,0 +1,67 @@
+import type { RuntimePtyWorktreeRecord } from '../runtime-terminal-state-records'
+import { isStructuredWorkerHandle } from '../../../shared/structured-worker-handle'
+import { parseHiveWardSessionAddress } from '../../../shared/hiveward-session-address'
+import type { ProjectExecutionRuntimeResolution } from '../../../shared/project-execution-runtime'
+import { getAppEnvironment, hasAppEnvironment } from '../../../shared/app-environment'
+
+export type OrchestrationCliCommand = 'hiveward' | 'hiveward-dev' | 'hiveward' | 'hiveward-dev' | 'hiveward-ide'
+
+// 开发版使用 hiveward-dev；正式版与远程终端使用 hiveward。
+export function runtimeOrchestrationCliCommand(): OrchestrationCliCommand | undefined {
+  return hasAppEnvironment() && !getAppEnvironment().isPackaged() ? 'hiveward-dev' : undefined
+}
+
+/** What a local, non-WSL terminal is told to run; a structured session is always one. */
+export function localOrchestrationCliCommand(): OrchestrationCliCommand {
+  return runtimeOrchestrationCliCommand() ?? 'hiveward'
+}
+
+export function resolveTerminalOrchestrationCliCommand(args: {
+  connectionId: string | null
+  isWsl: boolean | null | undefined
+  worktreeId: string
+  projectRuntime?: ProjectExecutionRuntimeResolution
+  runtimeCliCommand?: OrchestrationCliCommand
+}): OrchestrationCliCommand {
+  if (args.connectionId) {
+    return 'hiveward'
+  }
+  if (args.runtimeCliCommand) {
+    return args.runtimeCliCommand
+  }
+
+  return 'hiveward'
+}
+
+export function resolveRuntimeTerminalOrchestrationCliCommand(
+  handle: string,
+  source: {
+    resolvePtyId: (handle: string) => string | null | undefined
+    getPty: (ptyId: string) => RuntimePtyWorktreeRecord | undefined
+    getProjectRuntime: (
+      pty: RuntimePtyWorktreeRecord
+    ) => ProjectExecutionRuntimeResolution | undefined
+  }
+): OrchestrationCliCommand {
+  // A structured session runs in this process: it is told what the structured mail lane types.
+  if (isStructuredWorkerHandle(handle) || parseHiveWardSessionAddress(handle)) {
+    return localOrchestrationCliCommand()
+  }
+  let pty: RuntimePtyWorktreeRecord | null = null
+  try {
+    const ptyId = source.resolvePtyId(handle)
+    pty = ptyId ? (source.getPty(ptyId) ?? null) : null
+  } catch {
+    return 'hiveward'
+  }
+  if (!pty) {
+    return 'hiveward'
+  }
+  return resolveTerminalOrchestrationCliCommand({
+    connectionId: pty.connectionId,
+    isWsl: pty.isWsl,
+    worktreeId: pty.worktreeId,
+    runtimeCliCommand: runtimeOrchestrationCliCommand(),
+    projectRuntime: source.getProjectRuntime(pty)
+  })
+}
