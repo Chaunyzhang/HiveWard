@@ -545,6 +545,13 @@ export function createLan({
         headers[key] = req.headers[key]
       }
     }
+    // 对方的文件接口把「没标是人」的转发一律当 Agent，受它的「Agent 往这台写文件」限制。
+    // 本机页面上人拖的文件要标成 human，不然只要不是传进收件箱就被拒（大文件还没传完就被掐断，页面只看到「连接断了」）；
+    // Agent 走 hiwd 时自己带 agent，照旧标 agent。
+    if (/^\/api\/files\//.test(path)) {
+      headers['x-hiveward-caller'] =
+        req.headers['x-hiveward-caller'] === 'agent' ? 'agent' : 'human'
+    }
     Object.assign(headers, agentHeaders)
     upstream = pinnedRequest(identity, p, path, { method: req.method, headers }, (response) => {
       if (response.statusCode >= 200 && response.statusCode < 300) {

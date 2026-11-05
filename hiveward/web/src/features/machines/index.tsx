@@ -71,7 +71,7 @@ export function Machines() {
           <header className='mt-8 mb-3 flex items-center gap-2'>
             <h2 className='text-[15px] font-semibold'>{tr('组织里的电脑')}</h2>
             <span className='text-xs text-muted-foreground'>
-              {tr('点一台看它的文件、给它传文件')}
+              {tr('点一台给它传文件')}
             </span>
           </header>
           <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>

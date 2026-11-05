@@ -20,7 +20,7 @@ export function MachineTransferPage({ machineId }: { machineId: string }) {
         title={machine ? tr('{0} · 传输', [machine.name]) : tr('传输')}
         subtitle={
           machine
-            ? tr('{0}{1} · 选文件下载，或拖进来传过去', [
+            ? tr('{0}{1} · 拖文件进来，传到它的收件箱', [
                 machine.self ? tr('本机') : tr('局域网'),
                 machine.platform ? ` · ${platformName(machine.platform)}` : '',
               ])

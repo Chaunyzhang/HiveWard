@@ -363,41 +363,31 @@ export const en: Record<string, Phrase> = {
     "The channel to “{0}” isn't encrypted, so files can't be transferred. It encrypts automatically once both computers update HiveWard.",
   '这台电脑的 HiveWard 还不支持文件，升级后再试':
     "HiveWard on this computer doesn't support files yet. Update and try again",
-  '没建成：{0}': "Couldn't create: {0}",
   '读取失败：{0}': "Couldn't load: {0}",
-  新建文件夹: 'New folder',
-  '，把文件拖进来就传到这里': '. Drop files here to upload',
   '空文件夹{0}': 'Empty folder{0}',
-  '文件太多，只列了前面一部分': 'Too many files; showing the first part only',
-  只读: 'Read-only',
-  '这个位置对方设成了只读，传进了它的收件箱':
-    'That location is read-only on the other computer, so the files went to its inbox',
+  '{0}{1} · 拖文件进来，传到它的收件箱':
+    '{0}{1} · Drop files here to send them to its inbox',
+  '传到「{0}」的收件箱': 'Sends to the inbox on “{0}”',
+  传输进度: 'Transfers',
+  '{0} 个正在传': '{0} in progress',
+  '还没传文件。传了以后在这里看进度。':
+    'Nothing sent yet. Progress shows up here.',
+  '已传完 · {0}': 'Sent · {0}',
   '「{0}」超过单个文件上限 {1}，没传':
     '“{0}” is over the {1} per-file limit and was not sent',
   访达: 'Finder',
-  名称: 'Name',
-  大小: 'Size',
-  修改时间: 'Modified',
-  这台电脑没有开放任何目录: "This computer isn't sharing any folders",
-  收件: 'Inbox',
-  常用: 'Favorites',
-  其他共享: 'Other shares',
   '把文件拖到这里，或点一下从{0}里选':
     'Drop files here, or click to choose from {0}',
-  '传到「{0}」的 {1}': 'Sends to {1} on “{0}”',
-  空: 'Empty',
-  双击打开: 'Double-click to open',
   组织里的电脑: 'Computers in this organization',
-  '点一台看它的文件、给它传文件':
-    'Click one to browse its files or send files to it',
+  点一台给它传文件: 'Click one to send files to it',
   正在搜索还没加入组织的电脑:
     'Looking for computers not yet in the organization',
   '别的电脑推过来、没指定放哪的文件都落在这个目录。目录不存在会自动建，已经收到的文件不会搬过去。':
     "Files other computers send without a destination land here. The folder is created if missing; files already received aren't moved.",
   '收件箱目录：填绝对路径': 'Inbox folder: absolute path',
-  '下载 {0}': 'Download {0}',
   那边已经有同名文件: 'A file with that name already exists there',
-  连接断了: 'Connection lost',
+  '连接断了：对方可能拒收了（目录不让写、已有同名文件），或者网断了':
+    'Connection lost: the other computer may have refused it (folder not writable, file already exists), or the network dropped',
   已传完: 'Transferred',
   建: 'Create',
   对话: 'Chat',
@@ -544,8 +534,6 @@ export const en: Record<string, Phrase> = {
   '只改本机上显示的名字。': 'Only changes the name shown on this computer.',
   '{0} · 传输': '{0} · Transfer',
   传输: 'Transfer',
-  '{0}{1} · 选文件下载，或拖进来传过去':
-    '{0}{1} · pick files to download, or drop files to send',
   '找不到这台电脑，可能已经移出组织了。':
     'Computer not found. It may have been removed from the organization.',
   修改: 'Modified',

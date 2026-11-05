@@ -45,8 +45,8 @@ export function MachineCard({
 }) {
   const online = m.self || m.status === 'online'
   const Icon = m.platform === 'win32' ? Monitor : Laptop
-  // 组织里的电脑整张卡能点，进传输页；卡上的按钮浮在上面照常点
-  const transfer = member && online
+  // 组织里别的电脑整张卡能点，进传输页给它传文件（本机不用给自己传）；卡上的按钮浮在上面照常点
+  const transfer = member && online && !m.self
   return (
     <div
       className={cn(

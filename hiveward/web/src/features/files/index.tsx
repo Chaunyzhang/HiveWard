@@ -1,51 +1,24 @@
 import { useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import type {
-  FileEntry,
-  FileListResponse,
-  FileRoot,
-  FileRootsResponse,
-  Machine,
-} from '@shared/api'
+import { useQuery } from '@tanstack/react-query'
+import type { FileRootsResponse, Machine } from '@shared/api'
 import {
-  Briefcase,
-  ChevronRight,
-  Download,
-  File,
-  Folder,
-  FolderOpen,
-  FolderPlus,
-  HardDrive,
-  Inbox,
+  CircleCheck,
+  CircleX,
   LoaderCircle,
-  Lock,
   Plus,
-  RotateCw,
   TriangleAlert,
   Upload,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { timeAgo } from '@/lib/hiveward-format'
 import { tr } from '@/lib/i18n'
 import { scoped } from '@/lib/machine'
 import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 
 /**
- * 一台电脑的「传输」，像访达一样：
- * 左边是它开放的位置（收件箱排第一、默认选中，然后是业务目录、下载 / 桌面 / 文稿、自己加的共享目录），
- * 右边是选中位置的文件树：文件夹点箭头往下展、双击进去，面包屑回上层，文件悬停能下载。
- * 最上面一块带加号的空地：把文件 / 文件夹拖进去，或点一下从访达（Windows 是「此电脑」）里选，
- * 就传到正在看的这个文件夹；这个位置对方设成只读时传进它的收件箱。也能直接拖到树里某个文件夹上。
- * 每台电脑只开放它自己设定的共享目录，路径用那台电脑自己的格式。
+ * 一台电脑的「传输」，只有两块：
+ * 上面是传文件的地方——带加号的虚线框，把文件 / 文件夹拖进去或点一下从访达（Windows 是此电脑）选，
+ * 一律传进对方的收件箱（对方在「设置 → 共享」里定收件箱放哪）；
+ * 下面是传输进度，这次传的每个文件一行：进度条、已传多少、传完 / 失败。
  * 别的电脑只走加密且核对过证书的组织通道；没加密的不让传。
  */
 export function MachineTransfer({ machine }: { machine: Machine }) {
@@ -68,7 +41,9 @@ export function MachineTransfer({ machine }: { machine: Machine }) {
       </p>
     )
   }
-  return <Browser key={remote ?? 'self'} machine={remote} name={machine.name} />
+  return (
+    <Transfer key={remote ?? 'self'} machine={remote} name={machine.name} />
+  )
 }
 
 export async function getJson<T>(url: string): Promise<T> {
@@ -86,7 +61,7 @@ export async function getJson<T>(url: string): Promise<T> {
 
 export const q = (path: string) => encodeURIComponent(path)
 
-// 系统自己生成的文件，看了没用，也不传
+// 系统自己生成的文件，不传
 const HIDDEN = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini'])
 
 // 「点一下选文件」打开的是本机的文件选择窗口：Mac 上是访达，Windows 上是此电脑
@@ -95,14 +70,10 @@ const PICKER =
     ? tr('此电脑')
     : tr('访达')
 
-const trimSep = (p: string) => p.replace(/[\\/]+$/, '')
-const baseName = (p: string) => trimSep(p).split(/[\\/]/).pop() || p
-
 /** 要传的一个文件：相对路径（拖进来的文件夹里的会带子目录） */
 type Outgoing = { file: globalThis.File; rel: string[] }
 
-function Browser({ machine, name }: { machine: string | null; name: string }) {
-  const queryClient = useQueryClient()
+function Transfer({ machine, name }: { machine: string | null; name: string }) {
   const roots = useQuery({
     queryKey: ['files', machine, 'roots'],
     queryFn: () =>
@@ -110,27 +81,11 @@ function Browser({ machine, name }: { machine: string | null; name: string }) {
   })
   const info = roots.data
   const sep = info?.platform === 'win32' ? '\\' : '/'
-  const [picked, setPicked] = useState<string | null>(null)
-  const inboxRoot = info?.roots.find((r) => r.kind === 'inbox')
-  // 没选过就停在收件箱
-  const path = picked ?? inboxRoot?.path ?? info?.roots[0]?.path ?? null
-  const root = path && info ? rootOf(info.roots, path, info.platform) : null
-  const writableAt = (dir: string) =>
-    !!info && !!rootOf(info.roots, dir, info.platform)?.writable
-  const refresh = () =>
-    queryClient.invalidateQueries({ queryKey: ['files', machine] })
+  const upload = useUpload(machine, () => {}, true)
 
-  const upload = useUpload(machine, refresh)
-  const [dropAt, setDropAt] = useState<string | null>(null)
-
-  /** 传进 dir；对方设成只读的位置改传进收件箱 */
-  const send = (items: Outgoing[], dir: string | null) => {
-    if (!info || !items.length) {
+  const send = (items: Outgoing[]) => {
+    if (!info) {
       return
-    }
-    const into = dir && writableAt(dir) ? dir : info.inbox
-    if (dir && into !== dir) {
-      toast(tr('这个位置对方设成了只读，传进了它的收件箱'))
     }
     for (const { file, rel } of items) {
       if (file.size > info.maxBytes) {
@@ -142,228 +97,39 @@ function Browser({ machine, name }: { machine: string | null; name: string }) {
         )
         continue
       }
-      upload.start(file, [trimSep(into), ...rel].join(sep))
+      upload.start(file, [info.inbox.replace(/[\\/]+$/, ''), ...rel].join(sep))
     }
   }
-
-  const [naming, setNaming] = useState(false)
-  const mkdir = async (folder: string) => {
-    if (!path) {
-      return
-    }
-    const res = await fetch(scoped('/api/files/mkdir', machine), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: `${trimSep(path)}${sep}${folder}` }),
-    })
-    const body = await res.json().catch(() => ({}))
-    if (!res.ok) {
-      toast.error(tr('没建成：{0}', [body.error?.message ?? res.status]))
-      return
-    }
-    void refresh()
-  }
-
-  if (roots.isError) {
-    return (
-      <p className='px-1 text-xs text-danger'>
-        {tr('读取失败：{0}', [roots.error.message])}
-      </p>
-    )
-  }
-
-  const writable = !!path && writableAt(path)
-  const target = writable ? path : (info?.inbox ?? null)
-  const targetLabel = !target
-    ? ''
-    : target === inboxRoot?.path || !writable
-      ? tr('收件箱')
-      : root && trimSep(target) === trimSep(root.path)
-        ? root.label
-        : baseName(target)
-
-  // 拖进树里时落在哪个文件夹（最近的那层 data-dir），空白处就是正在看的这层
-  const dirOf = (el: EventTarget | null) =>
-    (el instanceof HTMLElement &&
-      el.closest<HTMLElement>('[data-dir]')?.dataset.dir) ||
-    path
 
   return (
-    <section className='grid gap-4 md:grid-cols-[13rem_minmax(0,1fr)]'>
-      <Places
-        roots={info?.roots ?? []}
-        loading={roots.isLoading}
-        current={root?.id ?? null}
-        onPick={(r) => setPicked(r.path)}
-      />
-
-      <div className='min-w-0 space-y-3'>
+    <section className='space-y-4'>
+      {roots.isError ? (
+        <p className='rounded-xl panel p-6 text-[13px] text-danger'>
+          {tr('读取失败：{0}', [roots.error.message])}
+        </p>
+      ) : (
         <DropZone
-          disabled={!target}
+          disabled={!info}
           machineName={name}
-          targetLabel={targetLabel}
-          targetPath={target ?? ''}
-          onFiles={(items) => send(items, path)}
+          inbox={info?.inbox ?? ''}
+          onFiles={send}
         />
-        {upload.items.length > 0 && (
-          <div className='overflow-hidden rounded-xl panel'>
-            <Uploads items={upload.items} />
-          </div>
-        )}
-
-        <div
-          className={cn(
-            'overflow-hidden rounded-xl panel',
-            dropAt === path && 'ring-2 ring-ring'
-          )}
-          onDragOver={(e) => {
-            if (!e.dataTransfer.types.includes('Files')) {
-              return
-            }
-            e.preventDefault()
-            setDropAt(dirOf(e.target))
-          }}
-          onDragLeave={(e) => {
-            const into = e.relatedTarget
-            if (!(into instanceof Node) || !e.currentTarget.contains(into)) {
-              setDropAt(null)
-            }
-          }}
-          onDrop={(e) => {
-            e.preventDefault()
-            const dir = dirOf(e.target)
-            setDropAt(null)
-            void dropped(e.dataTransfer).then((items) => send(items, dir))
-          }}
-        >
-          <header className='flex h-10 items-center gap-1 border-b px-3 text-[13px]'>
-            <Crumbs root={root} path={path} sep={sep} onPath={setPicked} />
-            <span className='ms-auto flex shrink-0 items-center gap-1'>
-              {writable && (
-                <ToolButton onClick={() => setNaming(true)}>
-                  <FolderPlus className='size-3.5' />
-                  {tr('新建文件夹')}
-                </ToolButton>
-              )}
-              <ToolButton onClick={() => void refresh()}>
-                <RotateCw className='size-3.5' />
-                {tr('刷新')}
-              </ToolButton>
-            </span>
-          </header>
-          <div className='flex h-7 items-center gap-3 border-b px-3 text-[11px] text-muted-foreground'>
-            <span className='flex-1 ps-5'>{tr('名称')}</span>
-            <span className='w-20 text-end'>{tr('大小')}</span>
-            <span className='w-24 text-end'>{tr('修改时间')}</span>
-            <span className='w-6' />
-          </div>
-          <div className='max-h-[60vh] min-h-48 overflow-y-auto'>
-            {path ? (
-              <TreeDir
-                key={path}
-                path={path}
-                depth={0}
-                machine={machine}
-                dropAt={dropAt}
-                onEnter={setPicked}
-                writable={writable}
-              />
-            ) : (
-              <Empty>
-                {roots.isLoading
-                  ? tr('读取中…')
-                  : tr('这台电脑没有开放任何目录')}
-              </Empty>
-            )}
-          </div>
-        </div>
-      </div>
-      <FolderDialog
-        key={String(naming)}
-        open={naming}
-        onClose={() => setNaming(false)}
-        onSave={(folder) => void mkdir(folder)}
-      />
+      )}
+      <Progress items={upload.items} />
     </section>
   )
 }
 
-/** 左栏：这台电脑开放的位置，分组列 */
-function Places({
-  roots,
-  loading,
-  current,
-  onPick,
-}: {
-  roots: FileRoot[]
-  loading: boolean
-  current: string | null
-  onPick: (root: FileRoot) => void
-}) {
-  const groups: { title: string; kinds: FileRoot['kind'][] }[] = [
-    { title: tr('收件'), kinds: ['inbox'] },
-    { title: tr('业务'), kinds: ['business'] },
-    { title: tr('常用'), kinds: ['home'] },
-    { title: tr('其他共享'), kinds: ['custom', 'drive'] },
-  ]
-  return (
-    <nav className='space-y-4 md:sticky md:top-4 md:self-start'>
-      {loading && (
-        <p className='px-2 text-xs text-muted-foreground'>{tr('读取中…')}</p>
-      )}
-      {groups.map((g) => {
-        const list = roots.filter((r) => g.kinds.includes(r.kind))
-        if (!list.length) {
-          return null
-        }
-        return (
-          <div key={g.title}>
-            <p className='mb-1 px-2 text-[11px] text-muted-foreground'>
-              {g.title}
-            </p>
-            <ul className='space-y-px'>
-              {list.map((r) => (
-                <li key={r.id}>
-                  <button
-                    type='button'
-                    title={r.path}
-                    onClick={() => onPick(r)}
-                    className={cn(
-                      'flex h-7 w-full items-center gap-2 rounded-md px-2 text-start text-[13px] hover:bg-accent',
-                      current === r.id && 'bg-accent font-medium'
-                    )}
-                  >
-                    <RootIcon kind={r.kind} />
-                    <span className='min-w-0 flex-1 truncate'>{r.label}</span>
-                    {!r.writable && (
-                      <Lock
-                        aria-label={tr('只读')}
-                        className='size-3 shrink-0 text-muted-foreground'
-                      />
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )
-      })}
-    </nav>
-  )
-}
-
-/** 传输的空地：虚线框中间一个加号，拖文件进来或点一下从访达里选 */
+/** 传文件的地方：虚线框中间一个加号，拖文件进来或点一下从访达里选，传进对方收件箱 */
 function DropZone({
   disabled,
   machineName,
-  targetLabel,
-  targetPath,
+  inbox,
   onFiles,
 }: {
   disabled: boolean
   machineName: string
-  targetLabel: string
-  targetPath: string
+  inbox: string
   onFiles: (items: Outgoing[]) => void
 }) {
   const input = useRef<HTMLInputElement>(null)
@@ -388,20 +154,20 @@ function DropZone({
           void dropped(e.dataTransfer).then(onFiles)
         }}
         className={cn(
-          'flex w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-7 text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-accent/40 hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
+          'flex w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-12 text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-accent/40 hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
           over && 'border-ring bg-accent/50 text-foreground'
         )}
       >
-        <span className='grid size-10 place-items-center rounded-full border bg-background'>
+        <span className='grid size-11 place-items-center rounded-full border bg-background'>
           <Plus className='size-5' />
         </span>
-        <span className='text-[13px] text-foreground'>
+        <span className='text-[14px] text-foreground'>
           {tr('把文件拖到这里，或点一下从{0}里选', [PICKER])}
         </span>
-        {targetLabel && (
+        {inbox && (
           <span className='max-w-full truncate text-[11px]'>
-            {tr('传到「{0}」的 {1}', [machineName, targetLabel])}
-            <span className='ms-1.5 font-mono'>{targetPath}</span>
+            {tr('传到「{0}」的收件箱', [machineName])}
+            <span className='ms-1.5 font-mono'>{inbox}</span>
           </span>
         )}
       </button>
@@ -421,6 +187,70 @@ function DropZone({
         }}
       />
     </>
+  )
+}
+
+/** 传输进度：这次传的每个文件一行，新的在上面 */
+function Progress({ items }: { items: UploadItem[] }) {
+  const sending = items.filter((x) => x.state === 'sending').length
+  return (
+    <div className='overflow-hidden rounded-xl panel'>
+      <header className='flex h-10 items-center gap-2 border-b px-4 text-[13px]'>
+        <span className='font-medium'>{tr('传输进度')}</span>
+        {sending > 0 && (
+          <span className='text-xs text-muted-foreground'>
+            {tr('{0} 个正在传', [sending])}
+          </span>
+        )}
+      </header>
+      {items.length === 0 ? (
+        <p className='px-4 py-8 text-center text-xs text-muted-foreground'>
+          {tr('还没传文件。传了以后在这里看进度。')}
+        </p>
+      ) : (
+        <ul className='divide-y'>
+          {[...items].reverse().map((x) => (
+            <li key={x.id} className='space-y-1.5 px-4 py-2.5'>
+              <div className='flex items-center gap-3 text-[13px]'>
+                {x.state === 'sending' ? (
+                  <LoaderCircle className='size-3.5 shrink-0 animate-spin text-muted-foreground' />
+                ) : x.state === 'done' ? (
+                  <CircleCheck className='size-3.5 shrink-0 text-done' />
+                ) : (
+                  <CircleX className='size-3.5 shrink-0 text-danger' />
+                )}
+                <span className='min-w-0 flex-1 truncate'>{x.name}</span>
+                <span
+                  className={cn(
+                    'shrink-0 font-mono text-[11px]',
+                    x.state === 'failed'
+                      ? 'text-danger'
+                      : 'text-muted-foreground'
+                  )}
+                >
+                  {x.state === 'done'
+                    ? tr('已传完 · {0}', [size(x.total)])
+                    : `${size(x.loaded)} / ${size(x.total)}`}
+                </span>
+              </div>
+              {x.state === 'sending' && (
+                <div className='h-1 overflow-hidden rounded-full bg-muted'>
+                  <div
+                    className='h-full rounded-full bg-foreground/60 transition-[width]'
+                    style={{
+                      width: `${x.total ? Math.min(100, (x.loaded / x.total) * 100) : 0}%`,
+                    }}
+                  />
+                </div>
+              )}
+              {x.state === 'failed' && (
+                <p className='ps-6.5 text-[11px] text-danger'>{x.error}</p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
@@ -471,334 +301,6 @@ async function dropped(data: DataTransfer): Promise<Outgoing[]> {
   return out
 }
 
-/** 路径落在哪个共享目录里（取最长的；Windows 不分大小写） */
-function rootOf(roots: FileRoot[], path: string, platform: string) {
-  const norm = (p: string) =>
-    platform === 'win32' ? p.toLowerCase().replace(/\//g, '\\') : p
-  const p = norm(path)
-  return (
-    roots
-      .filter((r) => {
-        const base = norm(r.path).replace(/[\\/]+$/, '')
-        return (
-          p === base || p.startsWith(base + (platform === 'win32' ? '\\' : '/'))
-        )
-      })
-      .sort((a, b) => b.path.length - a.path.length)[0] ?? null
-  )
-}
-
-function Crumbs({
-  root,
-  path,
-  sep,
-  onPath,
-}: {
-  root: FileRoot | null
-  path: string | null
-  sep: string
-  onPath: (path: string) => void
-}) {
-  if (!root || !path) {
-    return null
-  }
-  const base = trimSep(root.path)
-  const rest = path
-    .slice(base.length)
-    .split(/[\\/]+/)
-    .filter(Boolean)
-  const crumbs = [
-    { label: root.label, path: base },
-    ...rest.map((seg, i) => ({
-      label: seg,
-      path: base + sep + rest.slice(0, i + 1).join(sep),
-    })),
-  ]
-  return (
-    <nav className='flex min-w-0 items-center gap-0.5 overflow-hidden'>
-      {crumbs.map((c, i) => (
-        <span key={c.path} className='flex min-w-0 items-center gap-0.5'>
-          {i > 0 && (
-            <ChevronRight className='size-3.5 shrink-0 text-muted-foreground' />
-          )}
-          <button
-            type='button'
-            title={c.path}
-            onClick={() => onPath(c.path)}
-            className={cn(
-              'truncate rounded px-1 hover:bg-accent',
-              i === crumbs.length - 1 ? 'font-medium' : 'text-muted-foreground'
-            )}
-          >
-            {c.label}
-          </button>
-        </span>
-      ))}
-    </nav>
-  )
-}
-
-function ToolButton({
-  onClick,
-  children,
-}: {
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type='button'
-      onClick={onClick}
-      className='flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground'
-    >
-      {children}
-    </button>
-  )
-}
-
-function RootIcon({ kind }: { kind: FileRoot['kind'] }) {
-  const cls = 'size-4 shrink-0 text-muted-foreground'
-  if (kind === 'inbox') {
-    return <Inbox className={cls} />
-  }
-  if (kind === 'drive') {
-    return <HardDrive className={cls} />
-  }
-  if (kind === 'business') {
-    return <Briefcase className={cls} />
-  }
-  return <Folder className={cls} />
-}
-
-/** 文件树的一层：文件夹在前，点箭头展开，双击进去 */
-function TreeDir({
-  path,
-  depth,
-  machine,
-  dropAt,
-  onEnter,
-  writable,
-}: {
-  path: string
-  depth: number
-  machine: string | null
-  dropAt: string | null
-  onEnter: (path: string) => void
-  writable: boolean
-}) {
-  const listing = useQuery({
-    queryKey: ['files', machine, 'list', path],
-    queryFn: () =>
-      getJson<FileListResponse>(
-        scoped(`/api/files/list?path=${q(path)}`, machine)
-      ),
-  })
-  const pad = { paddingInlineStart: 12 + depth * 16 + 20 }
-  if (listing.isLoading) {
-    return depth === 0 ? (
-      <Empty>{tr('读取中…')}</Empty>
-    ) : (
-      <p style={pad} className='py-1 text-xs text-muted-foreground'>
-        {tr('读取中…')}
-      </p>
-    )
-  }
-  if (listing.isError) {
-    return depth === 0 ? (
-      <Empty danger>{tr('读取失败：{0}', [listing.error.message])}</Empty>
-    ) : (
-      <p style={pad} className='py-1 pe-3 text-xs text-danger'>
-        {tr('读不到：{0}', [listing.error.message])}
-      </p>
-    )
-  }
-  const entries = (listing.data?.entries ?? [])
-    .filter((e) => !HIDDEN.has(e.name))
-    .sort(
-      (a, b) =>
-        Number(b.type === 'dir') - Number(a.type === 'dir') ||
-        a.name.localeCompare(b.name)
-    )
-  if (!entries.length) {
-    return depth === 0 ? (
-      <Empty>
-        {tr('空文件夹{0}', [writable && tr('，把文件拖进来就传到这里')])}
-      </Empty>
-    ) : (
-      <p style={pad} className='py-1 text-xs text-muted-foreground'>
-        {tr('空')}
-      </p>
-    )
-  }
-  return (
-    <ul>
-      {entries.map((e) =>
-        e.type === 'dir' ? (
-          <TreeFolder
-            key={e.path}
-            entry={e}
-            depth={depth}
-            machine={machine}
-            dropAt={dropAt}
-            onEnter={onEnter}
-          />
-        ) : (
-          <TreeFile key={e.path} entry={e} depth={depth} machine={machine} />
-        )
-      )}
-      {listing.data?.truncated && (
-        <li style={pad} className='py-1.5 text-[11px] text-muted-foreground'>
-          {tr('文件太多，只列了前面一部分')}
-        </li>
-      )}
-    </ul>
-  )
-}
-
-const rowCls =
-  'group flex h-8 w-full items-center gap-3 pe-3 text-start text-[13px] hover:bg-accent'
-
-function Meta({ entry: e }: { entry: FileEntry }) {
-  return (
-    <>
-      <span className='w-20 shrink-0 text-end font-mono text-[11px] text-muted-foreground'>
-        {e.type === 'dir' ? '—' : size(e.size ?? 0)}
-      </span>
-      <span className='w-24 shrink-0 text-end text-[11px] text-muted-foreground'>
-        {timeAgo(e.modifiedAt)}
-      </span>
-    </>
-  )
-}
-
-function TreeFolder({
-  entry: e,
-  depth,
-  machine,
-  dropAt,
-  onEnter,
-}: {
-  entry: FileEntry
-  depth: number
-  machine: string | null
-  dropAt: string | null
-  onEnter: (path: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  return (
-    <li data-dir={e.path}>
-      <div
-        role='button'
-        tabIndex={0}
-        title={tr('双击打开')}
-        onClick={() => setOpen(!open)}
-        onDoubleClick={() => onEnter(e.path)}
-        onKeyDown={(ev) => {
-          if (ev.key === 'Enter') {
-            onEnter(e.path)
-          } else if (ev.key === ' ' || ev.key === 'ArrowRight') {
-            ev.preventDefault()
-            setOpen(ev.key === ' ' ? !open : true)
-          } else if (ev.key === 'ArrowLeft') {
-            setOpen(false)
-          }
-        }}
-        style={{ paddingInlineStart: 12 + depth * 16 }}
-        className={cn(
-          rowCls,
-          'cursor-default select-none',
-          dropAt === e.path && 'bg-accent ring-1 ring-ring ring-inset'
-        )}
-      >
-        <span className='flex min-w-0 flex-1 items-center gap-1.5'>
-          <ChevronRight
-            className={cn(
-              'size-3.5 shrink-0 text-muted-foreground transition-transform',
-              open && 'rotate-90'
-            )}
-          />
-          {open ? (
-            <FolderOpen className='size-4 shrink-0 text-muted-foreground' />
-          ) : (
-            <Folder className='size-4 shrink-0 text-muted-foreground' />
-          )}
-          <span className='min-w-0 truncate'>{e.name}</span>
-        </span>
-        <Meta entry={e} />
-        <span className='size-6 shrink-0' />
-      </div>
-      {open && (
-        <TreeDir
-          path={e.path}
-          depth={depth + 1}
-          machine={machine}
-          dropAt={dropAt}
-          onEnter={onEnter}
-          writable={false}
-        />
-      )}
-    </li>
-  )
-}
-
-function TreeFile({
-  entry: e,
-  depth,
-  machine,
-}: {
-  entry: FileEntry
-  depth: number
-  machine: string | null
-}) {
-  const href = scoped(`/api/files/read?path=${q(e.path)}`, machine)
-  return (
-    <li
-      style={{ paddingInlineStart: 12 + depth * 16 + 20 }}
-      className={rowCls}
-      onDoubleClick={() => {
-        const a = document.createElement('a')
-        a.href = href
-        a.download = e.name
-        a.click()
-      }}
-    >
-      <span className='flex min-w-0 flex-1 items-center gap-1.5'>
-        <File className='size-4 shrink-0 text-muted-foreground' />
-        <span className='min-w-0 truncate'>{e.name}</span>
-      </span>
-      <Meta entry={e} />
-      <a
-        href={href}
-        download={e.name}
-        aria-label={tr('下载 {0}', [e.name])}
-        title={tr('下载')}
-        className='grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-background hover:text-foreground focus-visible:opacity-100'
-      >
-        <Download className='size-3.5' />
-      </a>
-    </li>
-  )
-}
-
-function Empty({
-  children,
-  danger,
-}: {
-  children: React.ReactNode
-  danger?: boolean
-}) {
-  return (
-    <p
-      className={cn(
-        'px-4 py-10 text-center text-xs',
-        danger ? 'text-danger' : 'text-muted-foreground'
-      )}
-    >
-      {children}
-    </p>
-  )
-}
-
 export function size(bytes: number) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let n = bytes
@@ -820,7 +322,12 @@ type UploadItem = {
 }
 
 /** 上传：一个文件一个请求，请求体就是文件字节，带进度 */
-export function useUpload(machine: string | null, onDone: () => void) {
+/** keep：传完、失败的也留着（传输页要一直显示进度）；不传时开始新的就清掉旧的 */
+export function useUpload(
+  machine: string | null,
+  onDone: () => void,
+  keep = false
+) {
   const [items, setItems] = useState<UploadItem[]>([])
   const patch = (id: string, next: Partial<UploadItem>) =>
     setItems((all) => all.map((x) => (x.id === id ? { ...x, ...next } : x)))
@@ -828,7 +335,7 @@ export function useUpload(machine: string | null, onDone: () => void) {
   const start = (file: globalThis.File, dest: string) => {
     const id = `${Date.now()}-${Math.random()}`
     setItems((all) => [
-      ...all.filter((x) => x.state === 'sending'),
+      ...(keep ? all : all.filter((x) => x.state === 'sending')),
       { id, name: file.name, loaded: 0, total: file.size, state: 'sending' },
     ])
     const xhr = new XMLHttpRequest()
@@ -852,7 +359,14 @@ export function useUpload(machine: string | null, onDone: () => void) {
         error: xhr.status === 409 ? tr('那边已经有同名文件') : message,
       })
     }
-    xhr.onerror = () => patch(id, { state: 'failed', error: tr('连接断了') })
+    // 对方没收完就回绝（目录不让写、已有同名文件…）时浏览器拿不到原因，只看到连接被掐断
+    xhr.onerror = () =>
+      patch(id, {
+        state: 'failed',
+        error: tr(
+          '连接断了：对方可能拒收了（目录不让写、已有同名文件），或者网断了'
+        ),
+      })
     xhr.send(file)
   }
   return { items, start }
@@ -889,47 +403,5 @@ export function Uploads({ items }: { items: UploadItem[] }) {
         </li>
       ))}
     </ul>
-  )
-}
-
-function FolderDialog({
-  open,
-  onClose,
-  onSave,
-}: {
-  open: boolean
-  onClose: () => void
-  onSave: (name: string) => void
-}) {
-  const [name, setName] = useState('')
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className='sm:max-w-sm'>
-        <form
-          className='grid gap-4'
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (name.trim()) {
-              onSave(name.trim())
-            }
-            onClose()
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>{tr('新建文件夹')}</DialogTitle>
-          </DialogHeader>
-          <Input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <DialogFooter>
-            <Button type='submit' disabled={!name.trim()}>
-              {tr('建')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   )
 }

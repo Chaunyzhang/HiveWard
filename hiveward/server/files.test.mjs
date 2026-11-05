@@ -676,6 +676,23 @@ test(
       assert.equal(res.headers.get('x-file-mtime'), String(Math.trunc(info.mtimeMs)))
       assert.equal(res.headers.get('x-file-size'), '10')
       assert.equal(await res.text(), '2345')
+
+      // 人在本机页面上拖文件（没带 caller）：转发时标成 human，传进对方业务目录不受 Agent 限制
+      const via = { base: `http://127.0.0.1:${local.address().port}` }
+      const human = await request(
+        via,
+        pathQuery(`/api/m/${target.id}/files/write`, join(target.business, 'human.txt')),
+        { method: 'POST', body: 'x' }
+      )
+      assert.equal(human.status, 200)
+      // Agent 走 hiwd 自带 agent：仍然只能写对方收件箱
+      const agent = await request(
+        via,
+        pathQuery(`/api/m/${target.id}/files/write`, join(target.business, 'agent.txt')),
+        { method: 'POST', body: 'x', headers: { 'x-hiveward-caller': 'agent' } }
+      )
+      assert.equal(agent.status, 403)
+      assert.equal((await agent.json()).error.code, 'agent_write_denied')
     } finally {
       await close(local)
       await lan?.close()
