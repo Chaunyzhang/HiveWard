@@ -962,8 +962,27 @@ export type AgentExitWarning = {
   /** 仅提醒，不自动终止已有 Agent；网页按 id 去重显示 */
   message: string
 }
+/** 出口 IP 的一族（IPv4 或 IPv6）：IP 信息服务看到的 IP 和所在地 */
+export type ExitIpEndpoint = {
+  ip: string
+  city: string | null
+  region: string | null
+  /** ISO 两位国家码 */
+  country: string | null
+  /** 运营商 / 机房，如「AS3257 GTT」 */
+  org: string | null
+}
+/** 出口 IP（server/exit-ip.mjs）：用 Agent 的登录 shell 网络环境分别走 IPv4、IPv6 查；缓存 10 分钟 */
+export type ExitIp = {
+  v4: ExitIpEndpoint | null
+  v6: ExitIpEndpoint | null
+  /** IPv6 从另一个国家 / 地区出去（双栈分裂） */
+  split: boolean
+  checkedAt: IsoTime
+  reason: string | null
+}
 export type AgentExitRegion = {
-  /** ISO 两位国家码；未知为 null，不提供 IP */
+  /** ISO 两位国家码；未知为 null。只按它判断受限 Agent 能不能开 */
   country: string | null
   checkedAt: IsoTime
   method: 'login-shell-proxy-trace' | 'login-shell-route-trace' | 'unavailable'
@@ -974,6 +993,10 @@ export type AgentExitRegion = {
   limitation: string
   agents: Record<string, { allowed: boolean; allowedCountries: string[] | null }>
   warnings?: AgentExitWarning[]
+  /** 电脑卡片看的出口 IP 和所在地；还没测完或对方是旧版时没有 */
+  exitIp?: ExitIp | null
+  /** 电脑型号，如「MacBook Pro · Apple M3 Pro」；测不出或旧版没有 */
+  model?: string | null
 }
 /** GET /api/exit-region：本机状态 + warnings；已配对机器可读。
  * POST /api/exit-region/refresh {}：强制重测，仅本机。

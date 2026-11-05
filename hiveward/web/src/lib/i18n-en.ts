@@ -369,6 +369,15 @@ export const en: Record<string, Phrase> = {
     '{0}{1} · Drop files here to send them to its inbox',
   '传到「{0}」的收件箱': 'Sends to the inbox on “{0}”',
   传输进度: 'Transfers',
+  型号未知: 'Model unknown',
+  '出口 IP': 'Exit IP',
+  'IPv6 从另一个出口出去（双栈分裂）：{0} · {1}':
+    'IPv6 leaves through a different exit (dual-stack split): {0} · {1}',
+  '出口 IP：还没检测': 'Exit IP: not checked yet',
+  '出口 IP：对方还没升级，看不到':
+    'Exit IP: that computer needs an update to show it',
+  '出口 IP：正在测': 'Exit IP: checking…',
+  '出口 IP 测不出': "Couldn't detect the exit IP",
   '{0} 个正在传': '{0} in progress',
   '还没传文件。传了以后在这里看进度。':
     'Nothing sent yet. Progress shows up here.',
@@ -490,9 +499,6 @@ export const en: Record<string, Phrase> = {
   '给「{0}」传文件': 'Send files to “{0}”',
   点进去传文件: 'Click to transfer files',
   '离线{0}': 'Offline{0}',
-  'Agent {0} · 任务 {1} 进行中': 'Agents {0} · {1} tasks in progress',
-  '· 待决定 {0}': '· {0} to decide',
-  '· 引擎没开': '· engine off',
   '通道没加密：对方还没升级，或证书对不上':
     "Channel not encrypted: the other computer hasn't updated, or the certificate doesn't match",
   '这台是升级前加入的：先移出组织，两台都升级后重新邀请。':
@@ -502,8 +508,6 @@ export const en: Record<string, Phrase> = {
   ' · {0} 台': (a: string) => ` · ${a} computer${Number(a) === 1 ? '' : 's'}`,
   '在「{0}」{1}': 'In “{0}”{1}',
   还没加入组织: 'Not in an organization',
-  正在看: 'Viewing',
-  切过去看: 'Switch to it',
   邀请加入: 'Invite',
   '已邀请「{0}」，等对方在屏幕上同意':
     'Invited “{0}”; waiting for them to accept on screen',

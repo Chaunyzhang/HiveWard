@@ -11,6 +11,8 @@ import {
   configureExitRegionGuard,
   exitRegionGuard
 } from './agent-exit-region.mjs'
+import { createExitIp } from './exit-ip.mjs'
+import { createMachineModel } from './machine-model.mjs'
 import { installTerminalWebSockets } from './terminal-websocket.mjs'
 import { createMcpService } from './mcp-shares.mjs'
 import { closingWorkers, createWorkerCloser } from './worker-close.mjs'
@@ -422,10 +424,19 @@ export async function startBridge({
     regionGuard ??
     createExitRegionGuard({ capture: captureExitEnvironment, onWarning: onExitRegionWarning })
   configureExitRegionGuard(guard)
+  // 电脑卡片要看的出口 IP / 所在地和电脑型号，顺着出口状态一起给组织里的电脑
+  const exitIp = createExitIp(captureExitEnvironment ? { capture: captureExitEnvironment } : {})
+  const machineModel = createMachineModel()
+  const exitStatus = async () => ({
+    ...(await guard.status()),
+    warnings: guard.warnings(),
+    exitIp: exitIp.current(),
+    model: machineModel.current()
+  })
   const lan = createLan({
     lanPort,
     onInvite: onMachineInvite,
-    exitRegion: async () => ({ ...(await guard.status()), warnings: guard.warnings() })
+    exitRegion: exitStatus
   })
   const workerCloser = createWorkerCloser({ call })
   // 各家额度：引擎把 /api/usage 挂在 extraRoutes 里（只有桌面 App 有），这里直接借它的处理函数
@@ -576,7 +587,7 @@ export async function startBridge({
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/exit-region') {
-        return reply(200, { ...(await guard.status()), warnings: guard.warnings() })
+        return reply(200, await exitStatus())
       }
       if (!isLan && url.pathname === '/api/exit-region/policy') {
         if (req.method === 'GET') {
@@ -590,7 +601,13 @@ export async function startBridge({
       }
       if (!isLan && req.method === 'POST' && url.pathname === '/api/exit-region/refresh') {
         guard.invalidate()
-        return reply(200, { ...(await guard.status({ fresh: true })), warnings: guard.warnings() })
+        await exitIp.refresh()
+        return reply(200, {
+          ...(await guard.status({ fresh: true })),
+          warnings: guard.warnings(),
+          exitIp: exitIp.current(),
+          model: machineModel.current()
+        })
       }
       if (!isLan && staticDir && req.method === 'GET' && !url.pathname.startsWith('/api/')) {
         return await serveStatic(staticDir, url.pathname, res)

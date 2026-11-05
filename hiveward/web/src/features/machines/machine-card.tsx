@@ -1,17 +1,24 @@
 import { useState } from 'react'
-import { Link, useNavigate } from '@tanstack/react-router'
-import type { Machine, MachineInvitation } from '@shared/api'
-import { Laptop, LoaderCircle, Monitor, MoreHorizontal } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import type { ExitIpEndpoint, Machine, MachineInvitation } from '@shared/api'
+import {
+  Cpu,
+  Globe,
+  Laptop,
+  LoaderCircle,
+  MapPin,
+  Monitor,
+  MoreHorizontal,
+} from 'lucide-react'
 import { toast } from 'sonner'
+import { countryName } from '@/lib/exit-region'
 import { timeAgo } from '@/lib/hiveward-format'
 import { tr } from '@/lib/i18n'
 import {
-  useCurrentMachine,
   useInvitation,
   useInviteMachine,
   useRemoveMachine,
   useRenameMachine,
-  useSwitchMachine,
 } from '@/lib/machine'
 import { cn } from '@/lib/utils'
 import {
@@ -20,7 +27,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { ExitRegionLine } from '@/components/hiveward/exit-region'
 import { NameDialog } from './dialogs'
 import { platformName, spaced } from './verify-code'
 
@@ -31,7 +37,7 @@ const secondary =
 
 /**
  * 局域网页的一张电脑卡片：本机、组织里的电脑、局域网里还没加入的电脑都用它。
- * 组织里的点卡片进它的「传输」页，也能切过去看；没加入的能邀请；
+ * 组织里别的电脑点卡片进它的「传输」页；卡上只写型号、出口 IP 和所在地；没加入的能邀请；
  * 有待处理的邀请 / 申请时在卡片底部核对确认码、同意或撤回。
  */
 export function MachineCard({
@@ -91,15 +97,15 @@ export function MachineCard({
         {member ? <MemberDetail machine={m} /> : <NearbyDetail machine={m} />}
       </div>
 
-      <div className='mt-4 flex flex-wrap items-center gap-2'>
-        {invitation ? (
-          <InvitationActions invitation={invitation} />
-        ) : member ? (
-          <ViewButton machine={m} />
-        ) : (
-          <InviteButton machine={m} />
-        )}
-      </div>
+      {(invitation || !member) && (
+        <div className='mt-4 flex flex-wrap items-center gap-2'>
+          {invitation ? (
+            <InvitationActions invitation={invitation} />
+          ) : (
+            <InviteButton machine={m} />
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -107,23 +113,7 @@ export function MachineCard({
 function MemberDetail({ machine: m }: { machine: Machine }) {
   return (
     <>
-      {m.summary && (
-        <p className='font-mono text-[11px]'>
-          {tr('Agent {0} · 任务 {1} 进行中', [
-            m.summary.agents,
-            m.summary.tasksOpen,
-          ])}
-          {m.summary.decisionsPending > 0 && (
-            <span className='text-attention'>
-              {tr('· 待决定 {0}', [m.summary.decisionsPending])}
-            </span>
-          )}
-          {!m.summary.hivewardReachable && (
-            <span className='text-danger'> {tr('· 引擎没开')}</span>
-          )}
-        </p>
-      )}
-      <ExitRegionLine region={m.exitRegion} />
+      <MachineFacts machine={m} />
       {!m.self && m.secure === false && (
         <p className='text-danger'>
           {tr('通道没加密：对方还没升级，或证书对不上')}
@@ -138,6 +128,68 @@ function MemberDetail({ machine: m }: { machine: Machine }) {
                   '对方的证书和加入时记下的不一样，已拒绝连接。确认是同一台后移出再重新邀请。'
                 )
               : m.error.message}
+        </p>
+      )}
+    </>
+  )
+}
+
+const place = (e: ExitIpEndpoint) =>
+  [[e.city, e.region].filter(Boolean).join(', '), countryName(e.country)]
+    .filter(Boolean)
+    .join(' · ')
+
+/** 电脑型号、出口 IP、IP 所在地；IPv6 从另一个地方出去时标红（双栈分裂） */
+function MachineFacts({ machine: m }: { machine: Machine }) {
+  const r = m.exitRegion
+  const ip = r?.exitIp
+  const main = ip?.v4 ?? ip?.v6 ?? null
+  return (
+    <>
+      <p className='flex items-center gap-1.5'>
+        <Cpu className='size-3 shrink-0' />
+        <span className='truncate'>
+          {r?.model ?? (m.platform ? platformName(m.platform) : tr('型号未知'))}
+        </span>
+      </p>
+      {main ? (
+        <>
+          <p
+            className='flex items-center gap-1.5'
+            title={main.org ?? undefined}
+          >
+            <Globe className='size-3 shrink-0' />
+            {tr('出口 IP')}
+            <span className='truncate font-mono text-foreground'>
+              {main.ip}
+            </span>
+          </p>
+          <p
+            className='flex items-center gap-1.5'
+            title={main.org ?? undefined}
+          >
+            <MapPin className='size-3 shrink-0' />
+            <span className='truncate'>{place(main)}</span>
+          </p>
+          {ip?.split && ip.v6 && (
+            <p className='text-danger'>
+              {tr('IPv6 从另一个出口出去（双栈分裂）：{0} · {1}', [
+                ip.v6.ip,
+                place(ip.v6),
+              ])}
+            </p>
+          )}
+        </>
+      ) : (
+        <p className='flex items-center gap-1.5'>
+          <Globe className='size-3 shrink-0' />
+          {!r
+            ? tr('出口 IP：还没检测')
+            : ip === undefined
+              ? tr('出口 IP：对方还没升级，看不到')
+              : ip === null
+                ? tr('出口 IP：正在测')
+                : tr('出口 IP 测不出')}
         </p>
       )}
     </>
@@ -159,28 +211,6 @@ function NearbyDetail({ machine: m }: { machine: Machine }) {
       </p>
       {m.address && <p className='font-mono text-[11px]'>{m.address}</p>}
     </>
-  )
-}
-
-function ViewButton({ machine: m }: { machine: Machine }) {
-  const current = useCurrentMachine()
-  const switchTo = useSwitchMachine()
-  const navigate = useNavigate()
-  if (current?.id === m.id) {
-    return <span className='text-xs text-muted-foreground'>{tr('正在看')}</span>
-  }
-  return (
-    <button
-      type='button'
-      disabled={!m.self && m.status !== 'online'}
-      onClick={async () => {
-        await switchTo(m)
-        void navigate({ to: '/' })
-      }}
-      className={secondary}
-    >
-      {tr('切过去看')}
-    </button>
   )
 }
 
