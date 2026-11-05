@@ -29,7 +29,6 @@ HiveWard 是给「一人公司」老板用的桌面驾驶舱。你登记几块**
 
 - 日常主要在 macOS（Apple Silicon）使用；Windows x64 支持源码构建，GitHub Actions 提供未签名安装包和 ZIP。
 - 这是早期版本，接口和数据格式还会变。
-- 本仓库之前的旧版本已经封存在 [`legacy`](https://github.com/Chaunyzhang/HiveWard/tree/legacy) 分支，旧的发布标签保留不动。
 
 ## 从源码构建
 

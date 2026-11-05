@@ -59,6 +59,7 @@ const {
   hivewarddTemplateMacSignIgnore
 } = require('./scripts/packaged-hivewardd-template.cjs')
 const { verifySkillsCliRuntime } = require('./scripts/verify-skills-cli-runtime.cjs')
+const { scrubBuildMachinePaths } = require('./scripts/scrub-build-machine-paths.cjs')
 const { assertNotDarkBuild } = require('./dark-build-switches.cjs')
 const { verifyStaticAppImagePackage } = require('./scripts/static-appimage-package-contract.cjs')
 const {
@@ -262,6 +263,13 @@ module.exports = {
     '!notes{,/**/*}',
     // Local tooling directories are not runtime inputs and may contain symlink loops.
     '!{.claude,.grok,.agents,.codex}{,/**/*}',
+    // 根目录点开头的都是本机缓存、测试日志、构建中转（.tmp、.cache、.hiveward-build…），会带出本机路径和测试数据
+    '!.*{,/**/*}',
+    // HiveWard 服务端和网页走 extraResources 进 Resources/hiveward；asar 里再放一份会带上派单记录和测试数据
+    '!hiveward{,/**/*}',
+    // 本机开发启动脚本和开发实例记录，写着本机路径
+    '!out/bin{,/**/*}',
+    '!out/dev-instance.json',
     '!Casks{,/**/*}',
     '!{AGENTS.md,CLAUDE.md,DEVELOPING.md,bundle-size-progress.md,ORCHESTRATION_IMPLEMENTATION_CHECKLIST.md,ORCHESTRATION_STRUCTURED_OUTPUT_DESIGN.md}',
     '!out/**/*.test.js',
@@ -358,7 +366,11 @@ module.exports = {
     hivewarddTemplateDir = join(__dirname, '..', hivewarddTemplateExtraResource.from)
   ) => {
     // The template is the server every SSH host gets, so a dark test template must never ship.
-    assertNotDarkBuild([join(__dirname, '..', 'out', 'main'), mobileWebBundleDir, hivewarddTemplateDir])
+    assertNotDarkBuild([
+      join(__dirname, '..', 'out', 'main'),
+      mobileWebBundleDir,
+      hivewarddTemplateDir
+    ])
     assertPackagedNativeVariantsInstalled(context.electronPlatformName, context.arch)
     assertBundledRipgrepInstalled()
     assertProcessHostOutputBuilt()
@@ -418,6 +430,8 @@ module.exports = {
     chmodSync(join(resourcesDir, 'hiveward/server/hiwd.mjs'), 0o755)
     stampPackagedCliVersion(resourcesDir, context.packager.appInfo.version)
     prunePackagedRuntimeNodeModules(resourcesDir, context.electronPlatformName, context.arch)
+    // 终端宿主下面会拷这份 node-pty，先清掉编译机路径
+    scrubBuildMachinePaths(resourcesDir, context.electronPlatformName)
     assertNoWindowsExecutablesInRuntimeNodeModules(resourcesDir, context.electronPlatformName)
     // Gate native glibc floor after pruning foreign CPU variants; GLIBC_2.34 once broke Ubuntu 20.04 startup (#9902).
     let appImageNodeRuntime = null

@@ -45,6 +45,8 @@ function buildUniversalBinary() {
   })
   mkdirSync(path.dirname(binaryPath), { recursive: true })
   run('lipo', ['-create', ...builtBinaries, '-output', binaryPath])
+  // 调试符号里记着编译机上的绝对路径（带用户名），安装包里不要
+  run('strip', ['-S', binaryPath])
 }
 
 function createHelperApp() {
