@@ -39,8 +39,16 @@ function setup(window: BrowserWindow | null, store: Store, hooks?: UpdaterSetupH
     )
     .catch((error) => console.error('[updater]', error))
 }
+/**
+ * 不等窗口就初始化更新服务。桌面模式也走这里（主窗口那条初始化随 Orca 界面删掉了），
+ * 所以安装模式必须用调用方按有没有窗口算出来的：桌面是 interactive，才会真正初始化、能「重启并更新」；
+ * 只有真正的无窗口服务模式才是 unsupported-headless-serve。以前这里写死成后者，桌面端更新服务永远没初始化。
+ */
 export function setupHeadlessServeAutoUpdater(store: Store, hooks: UpdaterSetupHooks): void {
-  setup(null, store, { ...hooks, updateInstallMode: 'unsupported-headless-serve' })
+  setup(null, store, {
+    ...hooks,
+    updateInstallMode: hooks.updateInstallMode ?? 'unsupported-headless-serve'
+  })
 }
 export function scheduleMainWindowAutoUpdaterSetup(
   window: BrowserWindow,
