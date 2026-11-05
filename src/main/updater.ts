@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import type { UpdateStatus, UpdateCheckOptions } from '../shared/update-status-types'
 import type { RemoteServerUpdaterSnapshot } from '../shared/remote-server-update'
 import { hivewardProduct } from '../shared/hiveward-policy'
-import { getMainHttpClient } from './network/http-client'
+import { fetchReleaseHop } from './updater/electron-release-fetch'
 import { loadElectronAutoUpdater } from './electron-updater-loader'
 import { mainProcessState } from './startup/main-process-state'
 import {
@@ -39,7 +39,7 @@ let initialized = false
 let quitting = false
 let busy = false
 let prepared: { app: string; directory: string } | null = null
-const fetchRelease = (url: string, init?: RequestInit) => getMainHttpClient().fetch(url, init)
+const fetchRelease = fetchReleaseHop
 const automatic = () => options.getAutomatic?.() ?? true
 function publish(next: UpdateStatus): void {
   status = next

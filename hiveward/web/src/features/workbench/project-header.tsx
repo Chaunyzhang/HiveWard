@@ -45,6 +45,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { ProjectLogo } from '@/components/hiveward/project-logo'
+import { PatrolChip, PresetBadge } from './patrol-dialog'
 import { ProjectActions } from './projects-panel'
 
 /**
@@ -103,6 +104,7 @@ export function HomeHeader({
             <h1 className='truncate text-lg font-semibold'>
               {project?.name ?? business?.name ?? GROUP_TITLES[tab]}
             </h1>
+            {project && <PresetBadge project={project} />}
             {business && !project && business.kind && (
               <span className='shrink-0 rounded bg-muted px-1.5 text-[11px] leading-5 whitespace-nowrap text-muted-foreground'>
                 {business.kind === 'git' ? 'git' : tr('文件夹')}
@@ -119,14 +121,17 @@ export function HomeHeader({
               </span>
             )}
           </div>
-          <p
-            title={path}
-            className='truncate font-mono text-xs text-muted-foreground'
-          >
-            {path
-              ? path.replace(/^\/Users\/[^/]+/, '~')
-              : tr('所有业务、所有电脑合在一起看')}
-          </p>
+          <div className='flex min-w-0 items-center gap-2'>
+            <p
+              title={path}
+              className='min-w-0 truncate font-mono text-xs text-muted-foreground'
+            >
+              {path
+                ? path.replace(/^\/Users\/[^/]+/, '~')
+                : tr('所有业务、所有电脑合在一起看')}
+            </p>
+            {project && <PatrolChip project={project} />}
+          </div>
         </div>
         {business && !project && <ProjectMenu project={business} />}
         {project && <ProjectActions project={project} />}

@@ -21,6 +21,7 @@ import type {
   LaunchWorkerResponse,
   LeaderScreenResponse,
   OverviewResponse,
+  PatrolSettings,
   ResolveDecisionRequest,
   ResumeRecordResponse,
   ReviewTaskRequest,
@@ -29,6 +30,7 @@ import type {
   TopologyResponse,
   Project,
   RegisterBusinessRequest,
+  SetProjectScheduleRequest,
   UpdateBusinessProjectRequest,
   UpdateBusinessRequest,
 } from '@shared/api'
@@ -338,6 +340,53 @@ export function useUpdateProject() {
         m
       ),
     onSuccess: () => queryClient.invalidateQueries(),
+  })
+}
+
+/** 项目的定时巡检：开关、间隔、Agent、巡检的话、上一轮没做完就跳过、预设 */
+export function useSetProjectSchedule() {
+  const queryClient = useQueryClient()
+  const m = useMachineId()
+  return useMutation({
+    mutationFn: ({
+      project: p,
+      ...body
+    }: SetProjectScheduleRequest & { project: Project }) =>
+      request<{ project: Project }>(
+        `${businessPath(p.businessId)}/projects/${encodeURIComponent(p.id)}/schedule`,
+        noMock(tr('改巡检设置')),
+        { method: 'PUT', body: JSON.stringify(body) },
+        m
+      ),
+    onSuccess: () => queryClient.invalidateQueries(),
+  })
+}
+
+/** 设置 → 常规：定时巡检（只在本机） */
+export function usePatrolSettings() {
+  return useQuery({
+    queryKey: ['patrol-settings'],
+    queryFn: () =>
+      request<PatrolSettings>(
+        '/api/settings/patrol',
+        () => ({ idleCloseMinutes: 60 }),
+        undefined,
+        null
+      ),
+  })
+}
+
+export function useSetPatrolSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: PatrolSettings) =>
+      request<PatrolSettings>(
+        '/api/settings/patrol',
+        noMock(tr('改巡检设置')),
+        { method: 'PUT', body: JSON.stringify(body) },
+        null
+      ),
+    onSuccess: (data) => queryClient.setQueryData(['patrol-settings'], data),
   })
 }
 

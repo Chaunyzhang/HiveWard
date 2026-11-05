@@ -631,15 +631,17 @@ test(
       const externalNode = await ceoNode()
       assert.equal(externalNode.sessionId, ceoSession)
       assert.equal(externalNode.terminal, undefined)
-      assert.equal(externalNode.state, 'idle', JSON.stringify(externalNode))
-      assert.equal(externalNode.liveness, 'unverifiable', JSON.stringify(externalNode))
-      assert.equal(externalNode.activity, undefined)
+      // 原生看不到外部会话：按它的对话记录算，老板的话还没回完就是在干活
+      assert.equal(externalNode.state, 'working', JSON.stringify(externalNode))
+      assert.equal(externalNode.liveness, 'live', JSON.stringify(externalNode))
+      assert.equal(externalNode.activity, '外部 CEO 会话正在处理工作')
       assert.equal(closes(ceo).length, 0)
       const stale = new Date(Date.now() - 31 * 60 * 1000)
       await utimes(externalTranscript, stale, stale)
       invalidate()
       const staleNode = await ceoNode()
-      assert.equal(staleNode.liveness, 'unverifiable')
+      assert.equal(staleNode.state, 'working')
+      assert.equal(staleNode.liveness, 'unverifiable', 'mid-turn and silent for 30+ minutes')
       assert.equal(staleNode.sessionId, ceoSession, 'silent sessions must remain seated')
 
       const sessionOwnerPrompt = await api('/api/businesses/business/ceo', {
@@ -665,7 +667,7 @@ test(
       assert.equal(emptyNode.sessionId, undefined)
       assert.equal((await api('/api/overview')).businesses[0].ceo, null)
       console.log(
-        'ACCEPT 1b isolated HOME: complete brief; external session stays unverifiable/idle without native evidence; file age never fabricates activity; leave empty; no identity rejected'
+        'ACCEPT 1b isolated HOME: complete brief; external session state from its transcript (working mid-turn, unverifiable when silent 30+ min); leave empty; no identity rejected'
       )
 
       const terminalClaim = await cli(['seat', 'ceo'], { terminal: ceo })

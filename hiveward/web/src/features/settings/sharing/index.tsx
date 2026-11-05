@@ -255,14 +255,11 @@ function FolderRows() {
         }
       />
       {s && (
-        <SettingRow
-          title={tr('收件箱')}
-          desc={
-            <>
-              {tr('别的电脑推过来的文件放在这里：')}
-              <span className='font-mono'>{s.inbox}</span>
-            </>
-          }
+        <InboxRow
+          key={s.inbox}
+          inbox={s.inbox}
+          saving={set.isPending}
+          onSave={(inbox) => save({ ...s, inbox })}
         />
       )}
       {s && (
@@ -292,5 +289,78 @@ function FolderRows() {
         />
       )}
     </>
+  )
+}
+
+/** 收件箱：别的电脑推过来、没指定目录的文件落在这里。能手填或选一个目录换掉 */
+function InboxRow({
+  inbox,
+  saving,
+  onSave,
+}: {
+  inbox: string
+  saving: boolean
+  onSave: (path: string) => void
+}) {
+  const [draft, setDraft] = useState(inbox)
+  const changed = draft.trim() !== '' && draft.trim() !== inbox
+  return (
+    <SettingRow
+      title={tr('收件箱')}
+      desc={tr(
+        '别的电脑推过来、没指定放哪的文件都落在这个目录。目录不存在会自动建，已经收到的文件不会搬过去。'
+      )}
+      below={
+        <form
+          className='flex gap-2'
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (changed) {
+              onSave(draft.trim())
+            }
+          }}
+        >
+          <Input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={tr('收件箱目录：填绝对路径')}
+            className='h-8 font-mono text-[12px]'
+          />
+          {desktop?.pickFolder && (
+            <button
+              type='button'
+              onClick={async () => {
+                const picked = await desktop?.pickFolder?.()
+                if (picked && picked !== inbox) {
+                  setDraft(picked)
+                  onSave(picked)
+                }
+              }}
+              className='h-8 shrink-0 rounded-md border px-3 text-[13px] hover:bg-accent'
+            >
+              {tr('选目录')}
+            </button>
+          )}
+          {changed && (
+            <>
+              <button
+                type='button'
+                onClick={() => setDraft(inbox)}
+                className='h-8 shrink-0 rounded-md px-3 text-[13px] text-muted-foreground hover:bg-accent'
+              >
+                {tr('取消')}
+              </button>
+              <button
+                type='submit'
+                disabled={saving}
+                className='h-8 shrink-0 rounded-md bg-primary px-3 text-[13px] text-primary-foreground hover:bg-primary/90 disabled:opacity-50'
+              >
+                {tr('保存')}
+              </button>
+            </>
+          )}
+        </form>
+      }
+    />
   )
 }

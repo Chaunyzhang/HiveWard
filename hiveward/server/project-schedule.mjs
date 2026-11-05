@@ -3,6 +3,18 @@ import { badRequest } from './business.mjs'
 import { rpc, iso, ensureRepo } from './api-runtime.mjs'
 import { invalidate } from './orchestration.mjs'
 import { SEAT_AGENTS } from './business-terminals.mjs'
+import { hivewardEnvironment } from '../shared/environment.mjs'
+
+export const PROJECT_PRESETS = ['github']
+
+/** 原生定时任务的前置检查：问本机 HiveWard 上一轮做完没有，没做完 curl 以非 0 退出，原生把这一轮记成「已跳过」 */
+export function patrolPrecheck(project) {
+  const port = Number(hivewardEnvironment.HIVEWARD_PORT ?? 47615)
+  return {
+    command: `curl -fsS --noproxy 127.0.0.1 http://127.0.0.1:${port}/api/patrol/${encodeURIComponent(project.id)}/ready`,
+    timeoutSeconds: 30
+  }
+}
 
 // 旧分钟间隔由原生 recurrence 执行，保留原来的起点和频率。
 export function hivewardScheduleRule(everyMinutes) {
@@ -29,6 +41,7 @@ export async function projectScheduleProjection(project, call = rpc) {
       agentId: automation.agentId ?? undefined,
       agentRequired: !automation.agentId,
       message: automation.prompt,
+      skipWhileBusy: Boolean(automation.precheck),
       ...(automation.lastRunAt ? { lastRunAt: iso(automation.lastRunAt) } : {}),
       ...(automation.enabled ? { nextRunAt: iso(automation.nextRunAt) } : {})
     }
@@ -52,6 +65,12 @@ export async function setProjectSchedule(project, body, now = Date.now(), call =
   ) {
     throw badRequest('message 必须为 1–2000 字')
   }
+  if (body.skipWhileBusy !== undefined && typeof body.skipWhileBusy !== 'boolean') {
+    throw badRequest('skipWhileBusy 必须是布尔值')
+  }
+  if (body.preset !== undefined && body.preset !== null && !PROJECT_PRESETS.includes(body.preset)) {
+    throw badRequest(`preset 只能是 ${PROJECT_PRESETS.join('、')} 或 null`)
+  }
   const rrule = body.rrule ?? hivewardScheduleRule(body.everyMinutes)
   const dtstart =
     body.dtstart ??
@@ -69,6 +88,7 @@ export async function setProjectSchedule(project, body, now = Date.now(), call =
     rrule,
     dtstart,
     enabled: body.enabled && !!agentId,
+    precheck: body.skipWhileBusy === false ? null : patrolPrecheck(project),
     ...(body.timezone ? { timezone: body.timezone } : {})
   }
   await ensureRepo(project.path, undefined, call)
@@ -86,6 +106,9 @@ export async function setProjectSchedule(project, body, now = Date.now(), call =
       creationKey: `hiveward-project-schedule:${project.id}`
     })
     updateProject(project.id, { schedule: { automationId: automation.id } })
+  }
+  if (body.preset !== undefined) {
+    updateProject(project.id, { preset: body.preset ?? undefined })
   }
   const saved = businessProjects().find((p) => p.id === project.id)
   return projectScheduleProjection(saved, call)

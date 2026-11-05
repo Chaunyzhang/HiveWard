@@ -11,6 +11,8 @@ import { launchWorker } from './worker-launch.mjs'
 import { resolveDispatcher, dispatcherRpc } from './hiveward-dispatcher.mjs'
 import { startWorker } from './worker-start.mjs'
 import { disableProjectSchedule, setProjectSchedule } from './project-schedule.mjs'
+import { patrolReady } from './automation-run-idle-close.mjs'
+import { patrolSettings, setPatrolSettings } from './patrol-settings.mjs'
 import { getBusiness, updateBusiness, apiError, badRequest } from './business.mjs'
 import { WORKER_START_TIMEOUT_MS } from '../shared/orchestration-budgets.mjs'
 import { bounded, rpc, iso } from './api-runtime.mjs'
@@ -132,6 +134,41 @@ export function businessRoutes(readJson) {
         const project = await setProjectSchedule(getProject(projectId, id), await readJson(req))
         invalidate()
         return { project }
+      }
+    ],
+    // 原生定时任务的前置检查：上一轮还在干活回 409，curl -f 非 0 退出，这一轮记成「已跳过」
+    [
+      'GET',
+      /^\/api\/patrol\/([^/]+)\/ready$/,
+      async (_req, [projectId], _url, context) => {
+        if (context?.isLan) {
+          throw apiError(403, 'forbidden', '只给本机的定时任务用')
+        }
+        const result = await patrolReady(getProject(projectId))
+        if (!result.ready) {
+          throw apiError(409, 'patrol_busy', '上一轮巡检还没做完，这轮跳过')
+        }
+        return result
+      }
+    ],
+    [
+      'GET',
+      /^\/api\/settings\/patrol$/,
+      async (_req, _params, _url, context) => {
+        if (context?.isLan) {
+          throw apiError(403, 'forbidden', '设置只能在本机改')
+        }
+        return patrolSettings()
+      }
+    ],
+    [
+      'PUT',
+      /^\/api\/settings\/patrol$/,
+      async (req, _params, _url, context) => {
+        if (context?.isLan) {
+          throw apiError(403, 'forbidden', '设置只能在本机改')
+        }
+        return setPatrolSettings(await readJson(req))
       }
     ],
     [

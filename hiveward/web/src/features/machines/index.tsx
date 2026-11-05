@@ -27,7 +27,7 @@ import { MachineCard } from './machine-card'
 
 /**
  * 局域网：标题就是本机所在的组织（默认以本机建），点开能切到局域网里的别的组织（申请加入）。
- * 下面一张张卡片：本机、组织里的电脑、局域网里还没加入的电脑。能邀请别的电脑加入，
+ * 下面两块：「组织里的电脑」（本机 + 已加入的），「局域网里的电脑」只列还没加入组织的别的电脑。能邀请别的电脑加入，
  * 别的电脑也能申请加入，这边同意；两边屏幕核对同一个确认码。
  * 点组织里的某台电脑，进它的「传输」页选文件、传文件。
  * 设置（共享、剪贴板、MCP）在「设置」里。
@@ -62,56 +62,69 @@ export function Machines() {
         pendingRemovals={lan.data?.pendingRemovals ?? 0}
       />
 
-      <header className='mt-8 mb-3 flex items-center gap-2'>
-        <h2 className='text-[15px] font-semibold'>{tr('局域网里的电脑')}</h2>
-        <span className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-          <LoaderCircle className='size-3 animate-spin' />
-          {tr('正在搜索')}
-        </span>
-      </header>
-      <DiscoveryWarning
-        status={lan.data?.discovery}
-        platform={self?.platform}
-      />
       {lan.isError ? (
-        <p className='text-xs text-danger'>
+        <p className='mt-8 text-xs text-danger'>
           {tr('读取失败：{0}', [lan.error.message])}
         </p>
       ) : (
-        <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
-          {members.map((m) => (
-            <MachineCard
-              key={m.id}
-              machine={m}
-              member
-              invitation={pendingOf(m)}
-            />
-          ))}
-          {sortedNearby.map((m) => (
-            <MachineCard
-              key={m.id}
-              machine={m}
-              member={false}
-              invitation={pendingOf(m)}
-            />
-          ))}
-          <OrphanInvitations
-            invitations={invitations.filter(
-              (i) => !list.some((m) => m.id === i.machine.id)
-            )}
-          />
-          <button
-            type='button'
-            onClick={() => setManual(true)}
-            className='flex min-h-40 flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed text-xs text-muted-foreground hover:bg-accent hover:text-foreground'
-          >
-            <Plus className='size-4' />
-            {tr('手动输入地址邀请')}
-            <span className='text-[11px]'>
-              {tr('路由器不让设备互相发现时用')}
+        <>
+          <header className='mt-8 mb-3 flex items-center gap-2'>
+            <h2 className='text-[15px] font-semibold'>{tr('组织里的电脑')}</h2>
+            <span className='text-xs text-muted-foreground'>
+              {tr('点一台看它的文件、给它传文件')}
             </span>
-          </button>
-        </div>
+          </header>
+          <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
+            {members.map((m) => (
+              <MachineCard
+                key={m.id}
+                machine={m}
+                member
+                invitation={pendingOf(m)}
+              />
+            ))}
+          </div>
+
+          <header className='mt-8 mb-3 flex items-center gap-2'>
+            <h2 className='text-[15px] font-semibold'>
+              {tr('局域网里的电脑')}
+            </h2>
+            <span className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+              <LoaderCircle className='size-3 animate-spin' />
+              {tr('正在搜索还没加入组织的电脑')}
+            </span>
+          </header>
+          <DiscoveryWarning
+            status={lan.data?.discovery}
+            platform={self?.platform}
+          />
+          <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
+            {sortedNearby.map((m) => (
+              <MachineCard
+                key={m.id}
+                machine={m}
+                member={false}
+                invitation={pendingOf(m)}
+              />
+            ))}
+            <OrphanInvitations
+              invitations={invitations.filter(
+                (i) => !list.some((m) => m.id === i.machine.id)
+              )}
+            />
+            <button
+              type='button'
+              onClick={() => setManual(true)}
+              className='flex min-h-40 flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed text-xs text-muted-foreground hover:bg-accent hover:text-foreground'
+            >
+              <Plus className='size-4' />
+              {tr('手动输入地址邀请')}
+              <span className='text-[11px]'>
+                {tr('路由器不让设备互相发现时用')}
+              </span>
+            </button>
+          </div>
+        </>
       )}
 
       <ManualInviteDialog open={manual} onClose={() => setManual(false)} />

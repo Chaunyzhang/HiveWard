@@ -58,6 +58,11 @@ test('项目定时迁入原生 automation，业务只留引用，修改与重启
     assert.equal(automation.rrule, 'FREQ=MINUTELY;INTERVAL=30')
     assert.equal(automation.workspace, `path:${path}`)
     assert.equal(automation.creationKey, 'hiveward-project-schedule:project')
+    // 默认上一轮没做完就跳过：原生前置检查问本机 HiveWard
+    assert.match(
+      automation.precheck.command,
+      /^curl -fsS --noproxy 127\.0\.0\.1 http:\/\/127\.0\.0\.1:\d+\/api\/patrol\/project\/ready$/
+    )
     assert.deepEqual(businessProjects()[0].schedule, { automationId: 'automation_1' })
     assert.deepEqual(
       JSON.parse(await readFile(join(root, 'business-projects.json'), 'utf8')).projects[0].schedule,
@@ -75,6 +80,39 @@ test('项目定时迁入原生 automation，业务只留引用，修改与重启
     assert.equal(updated.schedule.rrule, '0 */2 * * *')
     assert.equal(updated.schedule.nextRunAt, undefined)
     assert.equal(updated.schedule.message, '停止巡检')
+    assert.equal(updated.schedule.skipWhileBusy, true)
+    const unchecked = await setProjectSchedule(
+      businessProjects()[0],
+      {
+        enabled: true,
+        everyMinutes: 30,
+        message: 'GitHub',
+        skipWhileBusy: false,
+        preset: 'github'
+      },
+      1000,
+      call
+    )
+    assert.equal(automation.precheck, null)
+    assert.equal(unchecked.schedule.skipWhileBusy, false)
+    assert.equal(unchecked.preset, 'github')
+    await assert.rejects(
+      setProjectSchedule(
+        businessProjects()[0],
+        { enabled: true, everyMinutes: 30, message: 'x', preset: 'gitlab' },
+        1000,
+        call
+      ),
+      { status: 400 }
+    )
+    const cleared = await setProjectSchedule(
+      businessProjects()[0],
+      { enabled: true, everyMinutes: 30, message: 'x', preset: null },
+      1000,
+      call
+    )
+    assert.equal(cleared.preset, undefined)
+    assert.ok(automation.precheck)
     assert.equal(hivewardScheduleRule(120), 'FREQ=MINUTELY;INTERVAL=120')
     assert.equal(hivewardScheduleRule(70), 'FREQ=MINUTELY;INTERVAL=70')
     await assert.rejects(

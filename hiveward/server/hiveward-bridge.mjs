@@ -45,6 +45,7 @@ import { call, HiveWardUnavailable } from './hiveward-client.mjs'
 import { imagePasteText, MAX_IMAGES, saveTerminalImage } from './terminal-image-paste.mjs'
 import { agentOfPid } from './transcripts.mjs'
 import { createProjectScheduleService } from './project-schedule.mjs'
+import { createAutomationRunIdleCloser } from './automation-run-idle-close.mjs'
 import { spinningOnScreen } from './terminal-spinning.mjs'
 import { resolveDispatcher } from './hiveward-dispatcher.mjs'
 import { createAgentWakeService, formatWakeMessages } from './agent-wake.mjs'
@@ -411,6 +412,7 @@ export async function startBridge({
   captureExitEnvironment,
   regionGuard,
   projectSchedule: providedProjectSchedule,
+  automationIdleCloser: providedAutomationIdleCloser,
   agentWake: providedAgentWake,
   clipboardAdapter,
   onClipboardNotice,
@@ -432,6 +434,8 @@ export async function startBridge({
   const quotaResumer = createQuotaResumer({ call, readUsage })
   const agentWake = providedAgentWake ?? createAgentWakeService()
   const projectSchedule = providedProjectSchedule ?? createProjectScheduleService()
+  // 定时巡检的运行终端空闲满一小时自动关（原生只管派单下属）
+  const automationIdleCloser = providedAutomationIdleCloser ?? createAutomationRunIdleCloser()
   let observing = false
   const observe = async () => {
     if (observing) {
@@ -672,6 +676,7 @@ export async function startBridge({
     clearInterval(warningTimer)
     workerCloser.close()
     projectSchedule.close()
+    automationIdleCloser.close()
     agentWake.close()
     mcpSockets.close()
     closeStreams()
@@ -709,6 +714,7 @@ export async function startBridge({
     }
     agentWake.start()
     await projectSchedule.start()
+    automationIdleCloser.start()
     console.log(
       `HiveWard bridge on http://127.0.0.1:${server.address().port}${lanServer ? `; LAN :${lanPort}` : ''}`
     )

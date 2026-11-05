@@ -15,7 +15,7 @@ const fixtures = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   app: { isPackaged: true, getVersion: () => '1.0.0', once: vi.fn(), quit: fixtures.quit }
 }))
-vi.mock('../network/http-client', () => ({ getMainHttpClient: () => ({ fetch: fixtures.fetch }) }))
+vi.mock('./electron-release-fetch', () => ({ fetchReleaseHop: fixtures.fetch }))
 vi.mock('../startup/main-process-state', () => ({
   mainProcessState: { agentAwakeService: { getWorkingAgentCount: fixtures.agents } }
 }))

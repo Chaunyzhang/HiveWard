@@ -1,10 +1,12 @@
 import type {
   HivewardSeatRuntime,
   HivewardCrewSnapshot,
+  ProjectPreset,
   ProjectSchedule,
   HivewardWorkerReadMetadata
 } from './hiveward-orchestration-api'
 export type {
+  ProjectPreset,
   HivewardSeatRuntime,
   HivewardWorkerStartRequest,
   HivewardWorkerTellRequest,
@@ -143,6 +145,8 @@ export type Project = {
   }
   /** 定时巡检：到点给这个项目的 Leader 发一句话；没设过为空 */
   schedule?: ProjectSchedule
+  /** HiveWard 预设的特殊项目（如 GitHub 巡检）；普通项目为空 */
+  preset?: ProjectPreset
   createdAt: IsoTime
   updatedAt: IsoTime
 }
@@ -1075,6 +1079,12 @@ export type MachineOrganizationNotice = {
  * incoming + pending 时展示谁、电脑名、地址、组织名和同意/拒绝。
  * 邀请默认 120 秒有效；结果保留 10 分钟，服务重启后未完成邀请失效。
  */
+/** 设置 → 常规：定时巡检 */
+export type PatrolSettings = {
+  /** 巡检终端这一轮结束后空闲多久自动关（分钟，10–1440） */
+  idleCloseMinutes: number
+}
+
 export type MachinesResponse = {
   machines: Machine[]
   /** 本机所在的组织：始终有一个，默认以本机建（名字「<电脑名>的组织」）；旧版本可能为 null */

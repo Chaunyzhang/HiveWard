@@ -36,6 +36,8 @@ export type ProjectSchedule = {
   everyMinutes?: number
   /** 发给 Leader 的话（github 触发时后面接新动静清单） */
   message: string
+  /** 上一轮还在干活就跳过这一轮（原生前置检查） */
+  skipWhileBusy?: boolean
   /** github 触发时：owner/name */
   repo?: string
   /** 上一轮的时间 */
@@ -61,8 +63,15 @@ export type SetProjectScheduleRequest = {
   trigger?: 'timer' | 'github'
   everyMinutes?: number
   message: string
+  /** 不填 = 跳过 */
+  skipWhileBusy?: boolean
+  /** 套用的预设项目；null 取消 */
+  preset?: ProjectPreset | null
   repo?: string
 }
+
+/** HiveWard 预设好的特殊项目 */
+export type ProjectPreset = 'github'
 
 /** 终端当前画面 ← terminal read --screen（负责人）/ orchestration worker-read（下属） */
 export type HivewardWorkerReadMetadata = {

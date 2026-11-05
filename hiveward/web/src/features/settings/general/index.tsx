@@ -1,4 +1,7 @@
+import { useState } from 'react'
 import { Moon, Monitor, Search, Sun } from 'lucide-react'
+import { toast } from 'sonner'
+import { usePatrolSettings, useSetPatrolSettings } from '@/lib/hiveward-api'
 import { lang, setLang, tr, type Lang } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { useSearch } from '@/context/search-provider'
@@ -69,6 +72,7 @@ export function SettingsGeneral() {
         }
       />
       <SearchRow />
+      <PatrolIdleRow />
       <EngineRow />
       <MigrationRow />
     </>
@@ -104,6 +108,62 @@ function SearchRow() {
           {tr('打开搜索')}
           <kbd className='font-mono text-xs text-muted-foreground'>{key}</kbd>
         </button>
+      }
+    />
+  )
+}
+
+/** 定时巡检每轮新开一个 Agent；这一轮结束后空闲满这么久，终端自动关掉 */
+function PatrolIdleRow() {
+  const { data } = usePatrolSettings()
+  const save = useSetPatrolSettings()
+  const [draft, setDraft] = useState<string | null>(null)
+  const saved = data?.idleCloseMinutes
+  const commit = () => {
+    if (draft === null) {
+      return
+    }
+    const minutes = Number(draft)
+    setDraft(null)
+    if (minutes === saved) {
+      return
+    }
+    if (!Number.isInteger(minutes) || minutes < 10 || minutes > 1440) {
+      toast.error(tr('填 10 到 1440 之间的整数分钟'))
+      return
+    }
+    save.mutate(
+      { idleCloseMinutes: minutes },
+      {
+        onSuccess: () =>
+          toast.success(tr('已改成空闲 {0} 分钟自动关', [String(minutes)])),
+        onError: (e) => toast.error(tr('没改成：{0}', [e.message])),
+      }
+    )
+  }
+  return (
+    <SettingRow
+      title={tr('巡检终端空闲自动关')}
+      desc={tr(
+        '定时巡检每轮新开一个 Agent。这一轮做完后空闲满这么久，就关掉它的终端，报告留在运行记录里；中途你跟它说话、它又干活了，就从下次做完重新算。'
+      )}
+      control={
+        <label className='flex h-8 items-center gap-2 text-[13px] text-muted-foreground'>
+          <input
+            type='number'
+            min={10}
+            max={1440}
+            step={10}
+            aria-label={tr('空闲多少分钟后关')}
+            disabled={saved === undefined}
+            value={draft ?? saved ?? ''}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+            className='h-8 w-20 rounded-md border bg-transparent px-2 text-end font-mono text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring'
+          />
+          {tr('分钟')}
+        </label>
       }
     />
   )

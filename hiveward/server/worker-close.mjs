@@ -9,7 +9,7 @@ export const UNDO_CLOSE_MS = 5000
 const pending = new Map()
 export const closingWorkers = () => new Set(pending.keys())
 
-function seatHandles() {
+export function seatHandles() {
   const seats = new Set()
   for (const b of businesses()) {
     seats.add(seatOccupantId(b.ceo))

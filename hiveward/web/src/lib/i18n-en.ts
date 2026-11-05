@@ -363,18 +363,38 @@ export const en: Record<string, Phrase> = {
     "The channel to “{0}” isn't encrypted, so files can't be transferred. It encrypts automatically once both computers update HiveWard.",
   '这台电脑的 HiveWard 还不支持文件，升级后再试':
     "HiveWard on this computer doesn't support files yet. Update and try again",
-  这个目录对方设成了只读: 'This folder is read-only on the other computer',
   '没建成：{0}': "Couldn't create: {0}",
   '读取失败：{0}': "Couldn't load: {0}",
   新建文件夹: 'New folder',
-  上传到这里: 'Upload here',
-  传到收件箱: 'Send to inbox',
   '，把文件拖进来就传到这里': '. Drop files here to upload',
   '空文件夹{0}': 'Empty folder{0}',
   '文件太多，只列了前面一部分': 'Too many files; showing the first part only',
-  '只列这台电脑开放的共享目录。拖进来的文件进收件箱：':
-    "Only this computer's shared folders are listed. Dropped files go to the inbox: ",
   只读: 'Read-only',
+  '这个位置对方设成了只读，传进了它的收件箱':
+    'That location is read-only on the other computer, so the files went to its inbox',
+  '「{0}」超过单个文件上限 {1}，没传':
+    '“{0}” is over the {1} per-file limit and was not sent',
+  访达: 'Finder',
+  名称: 'Name',
+  大小: 'Size',
+  修改时间: 'Modified',
+  这台电脑没有开放任何目录: "This computer isn't sharing any folders",
+  收件: 'Inbox',
+  常用: 'Favorites',
+  其他共享: 'Other shares',
+  '把文件拖到这里，或点一下从{0}里选':
+    'Drop files here, or click to choose from {0}',
+  '传到「{0}」的 {1}': 'Sends to {1} on “{0}”',
+  空: 'Empty',
+  双击打开: 'Double-click to open',
+  组织里的电脑: 'Computers in this organization',
+  '点一台看它的文件、给它传文件':
+    'Click one to browse its files or send files to it',
+  正在搜索还没加入组织的电脑:
+    'Looking for computers not yet in the organization',
+  '别的电脑推过来、没指定放哪的文件都落在这个目录。目录不存在会自动建，已经收到的文件不会搬过去。':
+    "Files other computers send without a destination land here. The folder is created if missing; files already received aren't moved.",
+  '收件箱目录：填绝对路径': 'Inbox folder: absolute path',
   '下载 {0}': 'Download {0}',
   那边已经有同名文件: 'A file with that name already exists there',
   连接断了: 'Connection lost',
@@ -440,7 +460,6 @@ export const en: Record<string, Phrase> = {
   '{0}的组织': "{0}'s organization",
   我的组织: 'My organization',
   局域网里的电脑: 'Computers on the LAN',
-  正在搜索: 'Searching',
   手动输入地址邀请: 'Invite by address',
   路由器不让设备互相发现时用:
     'Use this when the router blocks device discovery',
@@ -866,8 +885,6 @@ export const en: Record<string, Phrase> = {
   '再共享一个目录：填绝对路径': 'Share another folder: enter an absolute path',
   加上: 'Add',
   收件箱: 'Inbox',
-  '别的电脑推过来的文件放在这里：':
-    'Files pushed from other computers land here: ',
   '别的电脑上的 Agent 往这台写文件': 'Agents on other computers writing here',
   '别的电脑派出去的 Agent 能往这台的哪里写。':
     'Where Agents dispatched from other computers may write on this one.',
@@ -1034,4 +1051,39 @@ export const en: Record<string, Phrase> = {
     'In Windows Security → Firewall & network protection → Allow an app through firewall, check Private for HiveWard, then restart HiveWard.',
   '检查防火墙是否放行 HiveWard，再重开 HiveWard。':
     'Check that the firewall allows HiveWard, then restart HiveWard.',
+  巡检终端空闲自动关: 'Auto-close idle patrol terminals',
+  '定时巡检每轮新开一个 Agent。这一轮做完后空闲满这么久，就关掉它的终端，报告留在运行记录里；中途你跟它说话、它又干活了，就从下次做完重新算。':
+    'Each scheduled patrol starts a fresh agent. Once a round is done and the agent stays idle this long, its terminal is closed; the report stays in the run history. If you talk to it and it works again, the timer restarts when it next finishes.',
+  空闲多少分钟后关: 'Minutes idle before closing',
+  分钟: 'minutes',
+  '填 10 到 1440 之间的整数分钟':
+    'Enter a whole number of minutes between 10 and 1440',
+  '已改成空闲 {0} 分钟自动关':
+    'Idle patrol terminals now close after {0} minutes',
+  'GitHub 巡检': 'GitHub patrol',
+  '定时巡检：按章程巡一下 GitHub（新 issue、新 PR、新评论），把结果汇报出来；没有新动静就说没有新动静。':
+    'Scheduled patrol: check GitHub per the charter (new issues, PRs, comments) and report; if nothing is new, say so.',
+  巡检没开: 'Patrol off',
+  '每 {0} 分钟巡检': 'Patrol every {0} min',
+  定时巡检: 'Scheduled patrol',
+  预设: 'Preset',
+  巡检设置已保存: 'Patrol settings saved',
+  '巡检已关，设置留着': 'Patrol turned off; settings kept',
+  '「{0}」的巡检设置': 'Patrol settings for “{0}”',
+  '到点新开一个 Agent，在项目目录里按下面的话巡一遍。每轮都是新的 Agent，做完空闲着，满设置里的时间就关掉。':
+    'On schedule, a fresh agent patrols the project folder with the instructions below. Each round gets a new agent; once idle for the time set in Settings, it is closed.',
+  开启定时巡检: 'Enable scheduled patrol',
+  不用预设: 'No preset',
+  多久巡一次: 'How often',
+  '分钟（现在是自定义规则，不改就保留）':
+    'minutes (currently a custom rule, kept unless changed)',
+  '用哪个 Agent': 'Agent',
+  巡检时说的话: 'Patrol instructions',
+  '比如：巡一下有没有新问题，有就汇报':
+    'e.g. Check for new problems and report any',
+  上一轮没做完就跳过: 'Skip while the previous round is unfinished',
+  '上一轮的 Agent 还在干活（或在等你批权限）就不开新的，这一轮记成「已跳过」。做完了、空闲着、在对话里问你要不要做，都算做完。':
+    'If the previous agent is still working (or waiting for your permission), no new round starts and this one is recorded as skipped. Finished, idle, or asking you in chat all count as done.',
+  巡检设置: 'Patrol settings',
+  改巡检设置: 'change patrol settings',
 }

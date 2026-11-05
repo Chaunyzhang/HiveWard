@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import type { AgentKind, BusinessSummary, Project } from '@shared/api'
-import { Ellipsis, LoaderCircle, Pencil, Trash2 } from 'lucide-react'
+import { Ellipsis, LoaderCircle, Pencil, Timer, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { exitBlockReason } from '@/lib/exit-region'
 import { useCreateProject, useUpdateProject } from '@/lib/hiveward-api'
@@ -38,14 +38,16 @@ import {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { AgentLogo } from '@/components/hiveward/agent-logo'
+import { PatrolDialog } from './patrol-dialog'
 
 /**
- * 项目页标题右边的「…」：改名、删除项目。
+ * 项目页标题右边的「…」：改名、巡检设置、删除项目。
  * 删除 = 从 HiveWard 里拿掉（后台归档）：目录和文件都不动，Leader 终端也不关；
  * 项目里还有在干的活或待复核的单时后台会拒绝，原因照实说。删错了在业务的「…」里恢复。
  */
 export function ProjectActions({ project }: { project: Project }) {
   const [renaming, setRenaming] = useState(false)
+  const [patrolling, setPatrolling] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const update = useUpdateProject()
   const navigate = useNavigate()
@@ -63,6 +65,10 @@ export function ProjectActions({ project }: { project: Project }) {
             <Pencil />
             {tr('改名')}
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setPatrolling(true)}>
+            <Timer />
+            {tr('巡检设置')}
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             variant='destructive'
@@ -78,6 +84,12 @@ export function ProjectActions({ project }: { project: Project }) {
         open={renaming}
         project={project}
         onClose={() => setRenaming(false)}
+      />
+      <PatrolDialog
+        key={`patrol-${patrolling}`}
+        open={patrolling}
+        project={project}
+        onClose={() => setPatrolling(false)}
       />
       <AlertDialog open={deleting} onOpenChange={setDeleting}>
         <AlertDialogContent>
